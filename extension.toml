@@ -1,0 +1,53 @@
+# Zelos Extension Manifest
+# See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
+
+# --- Required Fields ---
+name = "Zelos Extension Can"
+version = "0.1.0"
+
+# --- Metadata (Optional) ---
+description = "Zelos App extension for CAN"
+author = "tkeairns"
+
+# --- Repository ---
+repository = "https://github.com/tkeairns/zelos-extension-can"
+# homepage = "https://your-extension-website.com"
+
+# --- Asset Paths ---
+icon = "assets/icon.svg"   # Extension icon
+readme = "README.md"       # README markdown
+changelog = "CHANGELOG.md" # CHANGELOG markdown
+
+# --- Marketplace Metadata ---
+keywords = []    # Keywords for search (max 20)
+categories = []  # Categories like "IoT", "Automotive", "Networking" (max 10)
+
+# --- Runtime Configuration ---
+[runtime]
+type = "python"
+entry = "main.py"                                     # Entry point script
+requirements = "requirements.txt"                     # Dependency file
+python_version = "3.11"  # Python version: "3.8" through "3.14+"
+# workdir = "."  # Working directory (default: ".")
+
+# --- Zelos Compatibility ---
+[zelos]
+version = "^25.0.20"  # Semver: ^25.0.20, >=25.0.21, ~25.0.22, etc.
+
+# --- Configuration Schema ---
+[config]
+schema = "config.schema.json"  # JSON Schema for configuration UI
+
+# --- Shutdown Configuration ---
+[stop]
+grace_seconds = 10  # Graceful shutdown timeout (1-300 seconds)
+
+# --- Optional: Platform Targets ---
+# Leave empty or omit for universal (all platforms)
+# targets = ["linux-x86_64", "linux-aarch64", "darwin-arm64", "darwin-x86_64", "windows-x86_64"]
+
+# --- Optional: Environment Variables ---
+# [env]
+# LOG_LEVEL = "info"
+# API_ENDPOINT = "https://api.example.com"
+# Note: Variables starting with ZELOS_ are reserved
