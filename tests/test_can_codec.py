@@ -1,5 +1,6 @@
 """Essential unit tests for CAN codec."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -11,7 +12,9 @@ from zelos_extension_can.schema_utils import cantools_signal_to_trace_type
 @pytest.fixture
 def test_dbc_path():
     """Path to test DBC file."""
-    return "/Users/tkeairns/zelos/src/api/py/test/data/test.dbc"
+    # Use demo.dbc from assets directory
+    project_root = Path(__file__).parent.parent
+    return str(project_root / "assets" / "demo.dbc")
 
 
 @pytest.fixture
@@ -38,7 +41,7 @@ class TestCanCodecInitialization:
     def test_loads_dbc(self, codec, test_dbc_path):
         """Test DBC file is loaded."""
         assert codec.db is not None
-        assert len(codec.db.messages) == 9  # test.dbc has 9 messages
+        assert len(codec.db.messages) == 13  # demo.dbc has 13 messages
 
     def test_creates_message_lookups(self, codec):
         """Test message lookup dictionaries are populated."""
@@ -47,7 +50,7 @@ class TestCanCodecInitialization:
 
     def test_handles_duplicate_message_names(self, codec):
         """Test duplicate message names are handled gracefully."""
-        # test.dbc has duplicate "Duplicate_Message" entries
+        # demo.dbc has duplicate "Duplicate_Message" entries
         # Should only keep first one in messages_by_name
         duplicate_count = sum(1 for msg in codec.db.messages if msg.name == "Duplicate_Message")
         assert duplicate_count == 2
@@ -101,12 +104,13 @@ class TestMessageDecoding:
     """Test CAN message decoding."""
 
     def test_get_event_name_format(self, codec):
-        """Test event names follow {id:04x}_{name} format."""
+        """Test event names follow {id:04x}_{name} or {id:08x}_{name} format for extended IDs."""
         for msg in codec.db.messages:
             event_name = codec._get_event_name(msg)
             assert "_" in event_name
             msg_id_hex, msg_name = event_name.split("_", 1)
-            assert len(msg_id_hex) == 4
+            # Standard IDs (11-bit) use 4 hex chars, Extended IDs (29-bit) use 8 hex chars
+            assert len(msg_id_hex) in [4, 8]
             assert int(msg_id_hex, 16) == msg.frame_id
 
 
@@ -145,7 +149,7 @@ class TestActions:
         assert "interface" in status
         assert "channel" in status
         assert "messages_in_dbc" in status
-        assert status["messages_in_dbc"] == 9
+        assert status["messages_in_dbc"] == 13
         assert "fd_mode" in status
 
     def test_get_bus_health(self, codec):
@@ -176,8 +180,8 @@ class TestActions:
         result = codec.list_messages()
         assert "count" in result
         assert "messages" in result
-        assert result["count"] == 9
-        assert len(result["messages"]) == 9
+        assert result["count"] == 13
+        assert len(result["messages"]) == 13
 
         # Check message format
         first_msg = result["messages"][0]
@@ -244,27 +248,27 @@ class TestConfigValidation:
         errors = validate_config(config)
         assert any("DBC file not found" in e for e in errors)
 
-    def test_validate_invalid_bitrate(self):
+    def test_validate_invalid_bitrate(self, test_dbc_path):
         """Test validation catches invalid bitrate."""
         from zelos_extension_can.utils.config import validate_config
 
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "dbc_file": "/Users/tkeairns/zelos/src/api/py/test/data/test.dbc",
+            "dbc_file": test_dbc_path,
             "bitrate": 999999,
         }
         errors = validate_config(config)
         assert any("Invalid bitrate" in e for e in errors)
 
-    def test_validate_socketcan_channel(self):
+    def test_validate_socketcan_channel(self, test_dbc_path):
         """Test validation of socketcan channel naming."""
         from zelos_extension_can.utils.config import validate_config
 
         config = {
             "interface": "socketcan",
             "channel": "invalid_name",
-            "dbc_file": "/Users/tkeairns/zelos/src/api/py/test/data/test.dbc",
+            "dbc_file": test_dbc_path,
         }
         errors = validate_config(config)
         assert any("socketcan interface requires" in e for e in errors)
