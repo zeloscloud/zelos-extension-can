@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "{{ cookiecutter.python_version }}"
+          python-version: "3.11"
 
       - uses: extractions/setup-just@v2
 
@@ -30,7 +30,7 @@ jobs:
       - name: Verify version matches manifest
         run: |
           MANIFEST_VERSION=$(python -c "import tomllib;print(tomllib.load(open('extension.toml','rb'))['version'])")
-          TAG_VERSION="{% raw %}${{ steps.version.outputs.VERSION }}{% endraw %}"
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
           if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
             echo "Error: extension.toml version ($MANIFEST_VERSION) does not match tag ($TAG_VERSION)"
             exit 1
@@ -53,5 +53,5 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: "*-v{% raw %}${{ steps.version.outputs.VERSION }}{% endraw %}.tar.gz"
+          files: "*-v${{ steps.version.outputs.VERSION }}.tar.gz"
           generate_release_notes: true
