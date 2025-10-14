@@ -7,6 +7,7 @@ import logging
 
 import can
 import cantools
+import cantools.database.can.database
 import zelos_sdk
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
@@ -26,7 +27,7 @@ async def replay_can_traffic():
     await extension_ready.wait()
     await asyncio.sleep(0.5)
 
-    db = cantools.database.load_file("assets/demo.dbc")
+    db: cantools.database.can.database.Database = cantools.database.load_file("assets/demo.dbc")  # type: ignore[assignment]
     bus = can.Bus(interface="virtual", channel="vcan0", receive_own_messages=False)
 
     print("\n" + "=" * 70)
