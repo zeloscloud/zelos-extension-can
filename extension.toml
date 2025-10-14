@@ -2,11 +2,11 @@
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
 # --- Required Fields ---
-name = "Zelos Extension Can"
+name = "CAN Bus Monitor"
 version = "0.1.0"
 
 # --- Metadata (Optional) ---
-description = "Zelos App extension for CAN"
+description = "CAN bus monitoring with DBC decoding and periodic transmission"
 author = "tkeairns"
 
 # --- Repository ---
@@ -19,8 +19,8 @@ readme = "README.md"       # README markdown
 changelog = "CHANGELOG.md" # CHANGELOG markdown
 
 # --- Marketplace Metadata ---
-keywords = []    # Keywords for search (max 20)
-categories = []  # Categories like "IoT", "Automotive", "Networking" (max 10)
+keywords = ["can", "automotive", "dbc", "socketcan", "canbus"]
+categories = ["Automotive", "IoT"]
 
 # --- Runtime Configuration ---
 [runtime]

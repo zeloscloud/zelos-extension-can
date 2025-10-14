@@ -1,106 +1,124 @@
-# Zelos Extension Can
+# CAN Extension for Zelos App
 
-> Zelos App extension for CAN
+> Monitor and decode CAN bus messages with DBC support
 
-A Zelos extension that monitors sensor data and streams temperature and humidity readings in real-time.
+A production-ready Zelos extension for real-time CAN bus monitoring, decoding, and message transmission using python-can and cantools.
 
 ## Features
 
-- 📊 **Real-time sensor monitoring** - Continuous temperature and humidity data streaming
-- ⚙️ **Configurable sample rate** - Adjust collection interval from 1kHz to 1Hz (0.001s to 1s)
-- 🎯 **Interactive actions** - Query status and update settings on the fly
-- 🛡️ **Production ready** - Robust error handling and graceful shutdown
+- 🚗 **CAN bus monitoring** - Async reception with python-can (socketcan, PCAN, Kvaser, Vector)
+- 📋 **DBC decoding** - Automatic signal extraction and type mapping
+- 🔄 **Dynamic schema generation** - Trace events created from DBC at runtime
+- 📡 **Multiplexed messages** - Full support for muxed CAN signals
+- ⚡ **Periodic transmission** - Send messages at specified rates via actions
+- 🧪 **Virtual bus support** - Cross-platform development and testing
 
 ## Quick Start
 
-1. **Install** the extension from the Zelos App marketplace
-2. **Configure** your sensor name and sample interval
-3. **Start** the extension to begin streaming data
-4. **View** real-time sensor data in your Zelos dashboard
+### Production Use
+
+1. **Install** the extension in Zelos App
+2. **Configure** your CAN interface and DBC file:
+   ```json
+   {
+     "interface": "socketcan",
+     "channel": "can0",
+     "bitrate": 500000,
+     "dbc_file": "/path/to/your.dbc"
+   }
+   ```
+3. **Start** the extension to begin decoding messages
+4. **View** real-time CAN signals in your Zelos dashboard
+
+### Demo Mode (Development)
+
+Run continuous CAN traffic replay with test.dbc:
+
+```bash
+cd zelos-extension-can
+just install          # Install dependencies
+uv run python demo.py # Start demo with 10Hz replay
+```
+
+Press Ctrl+C to stop.
 
 ## Configuration
 
-| Setting | Type | Description | Range | Default |
-|---------|------|-------------|-------|---------|
-| **Sensor Name** | String | Unique identifier for this sensor | 3-50 chars | `sensor-01` |
-| **Interval** | Number | Sample interval in seconds | 0.001 - 1.0 | `0.1` |
-
-All configuration is managed through the Zelos App settings interface.
+| Setting | Type | Options | Description |
+|---------|------|---------|-------------|
+| **interface** | String | socketcan, virtual, pcan, kvaser, vector | CAN interface type |
+| **channel** | String | can0, vcan0, PCAN_USBBUS1, etc. | Channel identifier |
+| **bitrate** | Integer | 125000, 250000, 500000, 1000000 | Bus bitrate (bps) |
+| **dbc_file** | String | /path/to/file.dbc | DBC database file path |
 
 ## Actions
 
 ### Get Status
-Returns current monitoring status and uptime.
+View current bus status and message counts.
 
-**Response:**
-```json
-{
-  "state": "RUNNING",
-  "running": true,
-  "sensor_name": "sensor-01",
-  "interval": 0.1,
-  "uptime_s": 123.4
-}
+### Send Message
+Send a single CAN message:
+- **msg_id**: Message ID (0-0x7FF)
+- **data**: Hex data string (e.g., "01 02 03 04")
+
+### Start Periodic Message
+Begin periodic transmission:
+- **msg_id**: Message ID
+- **data**: Hex data
+- **period**: Transmission period in seconds (0.001-10.0)
+
+### Stop Periodic Message
+Stop periodic transmission by message ID.
+
+### List Messages
+Show all messages defined in loaded DBC.
+
+## Development
+
+```bash
+# Install with dev dependencies
+just install
+
+# Run linting and type checks
+just check
+
+# Run tests
+just test
+
+# Create a release
+just release 0.1.0
 ```
 
-### Set Interval
-Updates the sample interval dynamically without restarting.
+## Project Structure
 
-**Parameter:**
-- `seconds` (number, 0.001 to 1.0) - New sample interval
-
-**Response:**
-```json
-{
-  "message": "Interval set to 0.05s",
-  "interval": 0.05
-}
 ```
-
-## Data Streams
-
-The extension streams two events:
-
-### Status Event
-```json
-{
-  "state": "RUNNING",
-  "uptime_s": 123.4
-}
+zelos-extension-can/
+├── main.py                    # Production entry point
+├── demo.py                    # Interactive demo (continuous replay)
+├── config.json                # Example configuration
+├── extension.toml             # Extension manifest
+├── config.schema.json         # Configuration UI schema
+├── zelos_extension_can/
+│   ├── can_codec.py          # Core CAN codec with async reception
+│   ├── schema_utils.py       # DBC→SDK type mapping utilities
+│   └── utils/
+│       └── config.py         # Configuration loading
+└── tests/
+    └── test_can_codec.py     # Unit tests
 ```
-
-### Sensor Event
-```json
-{
-  "temperature": 22.5,
-  "humidity": 55.0
-}
-```
-
-All values include proper units (°C for temperature, % for humidity) and are typed for optimal performance.
 
 ## Requirements
 
-- **Zelos** v25.0.20 or higher
-- **Python** 3.11+ (managed automatically by Zelos)
+- **Zelos** v25.0.20+
+- **Python** 3.11+ (managed by Zelos/UV)
+- **python-can** 4.4.0+
+- **cantools** 39.0.0+
 
 ## Links
 
 - **Repository**: [github.com/tkeairns/zelos-extension-can](https://github.com/tkeairns/zelos-extension-can)
-- **Issues**: [Report bugs or request features](https://github.com/tkeairns/zelos-extension-can/issues)
-- **Documentation**: [Zelos Extension Guide](https://docs.zeloscloud.io/extensions)
-
-## Support
-
-For help and support:
-- 📖 [Zelos Documentation](https://docs.zeloscloud.io)
-- 🐛 [GitHub Issues](https://github.com/tkeairns/zelos-extension-can/issues)
-- 📧 taylor@zeloscloud.io
+- **Zelos Docs**: [docs.zeloscloud.io](https://docs.zeloscloud.io)
 
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-**Built with [Zelos](https://zeloscloud.io)**

@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "{{ cookiecutter.python_version }}"
+
+      - uses: extractions/setup-just@v2
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Verify version matches manifest
+        run: |
+          MANIFEST_VERSION=$(python -c "import tomllib;print(tomllib.load(open('extension.toml','rb'))['version'])")
+          TAG_VERSION="{% raw %}${{ steps.version.outputs.VERSION }}{% endraw %}"
+          if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: extension.toml version ($MANIFEST_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run checks
+        run: just check
+
+      - name: Run tests
+        run: just test
+
+      - name: Package extension
+        run: |
+          uv pip compile pyproject.toml -o requirements.txt
+          just package
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*-v{% raw %}${{ steps.version.outputs.VERSION }}{% endraw %}.tar.gz"
+          generate_release_notes: true

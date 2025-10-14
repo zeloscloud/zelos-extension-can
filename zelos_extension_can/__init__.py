@@ -1,8 +1,5 @@
-"""Zelos App extension for CAN
+"""Zelos CAN extension - CAN bus monitoring with DBC decoding."""
 
-A Zelos extension for sensor monitoring.
-"""
+from zelos_extension_can.can_codec import CanCodec
 
-from zelos_extension_can.extension import SensorMonitor
-
-__all__: list[str] = ["SensorMonitor"]
+__all__: list[str] = ["CanCodec"]

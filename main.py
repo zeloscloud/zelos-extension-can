@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Zelos App extension for CAN"""
+"""Zelos CAN extension - CAN bus monitoring and DBC decoding."""
 
 import logging
 import signal
@@ -9,11 +9,11 @@ from types import FrameType
 import zelos_sdk
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
-from zelos_extension_can.extension import SensorMonitor
-from zelos_extension_can.utils.config import load_config
+from zelos_extension_can.can_codec import CanCodec
+from zelos_extension_can.utils.config import load_config, validate_config
 
 # Configure logging before adding SDK handlers so DEBUG-level logs are emitted
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 # Initialize SDK
 zelos_sdk.init(name="zelos_extension_can", actions=True)
@@ -23,14 +23,19 @@ handler = TraceLoggingHandler("zelos_extension_can_logger")
 logging.getLogger().addHandler(handler)
 logger = logging.getLogger(__name__)
 
-# Load configuration
+# Load and validate configuration
 config = load_config()
+if errors := validate_config(config):
+    logger.error("Configuration validation failed:")
+    for error in errors:
+        logger.error(f"  - {error}")
+    sys.exit(1)
 
-# Create sensor monitor
-monitor = SensorMonitor(config)
+# Create CAN codec
+codec = CanCodec(config)
 
 # Register interactive actions
-zelos_sdk.actions_registry.register(monitor)
+zelos_sdk.actions_registry.register(codec)
 
 
 def shutdown_handler(signum: int, frame: FrameType | None) -> None:
@@ -39,8 +44,8 @@ def shutdown_handler(signum: int, frame: FrameType | None) -> None:
     :param signum: Signal number
     :param frame: Current stack frame
     """
-    logger.info("Shutting down...")
-    monitor.stop()
+    logger.info("Shutting down CAN extension...")
+    codec.stop()
     sys.exit(0)
 
 
@@ -49,6 +54,6 @@ signal.signal(signal.SIGINT, shutdown_handler)
 
 # Run
 if __name__ == "__main__":
-    logger.info("Starting zelos-extension-can")
-    monitor.start()
-    monitor.run()
+    logger.info("Starting CAN extension")
+    codec.start()
+    codec.run()

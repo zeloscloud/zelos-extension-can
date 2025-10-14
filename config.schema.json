@@ -1,78 +1,70 @@
 {
   "type": "object",
-  "title": "zelos-extension-can Configuration",
-  "description": "Configure your zelos-extension-can extension settings",
+  "title": "CAN Bus Configuration",
+  "description": "Configure CAN interface and DBC file",
   "properties": {
-    "sensor_name": {
+    "interface": {
       "type": "string",
-      "title": "Sensor Name",
-      "description": "Unique identifier for this sensor",
-      "default": "sensor-01",
-      "minLength": 3,
-      "maxLength": 50,
-      "ui:placeholder": "Enter sensor name..."
+      "title": "CAN Interface",
+      "description": "CAN interface type",
+      "enum": [
+        "socketcan",
+        "virtual",
+        "pcan",
+        "kvaser",
+        "vector"
+      ],
+      "default": "virtual"
     },
-    "interval": {
-      "type": "number",
-      "title": "Sample Interval (seconds)",
-      "description": "Collection interval in seconds (1kHz to 1Hz)",
-      "minimum": 0.001,
-      "maximum": 1.0,
-      "multipleOf": 0.001,
-      "default": 0.1,
-      "ui:widget": "RangeWidget",
-      "ui:help": "Drag the slider to adjust collection frequency. Lower values = higher frequency."
+    "channel": {
+      "type": "string",
+      "title": "Channel",
+      "description": "CAN channel identifier",
+      "default": "vcan0",
+      "ui:placeholder": "e.g., vcan0, can0, PCAN_USBBUS1"
     },
-    "enabled": {
+    "bitrate": {
+      "type": "integer",
+      "title": "Bitrate (bps)",
+      "description": "CAN bus bitrate (classical CAN)",
+      "enum": [
+        125000,
+        250000,
+        500000,
+        1000000
+      ],
+      "default": 500000
+    },
+    "fd_mode": {
       "type": "boolean",
-      "title": "Enable Sensor",
-      "description": "Turn sensor data collection on or off",
-      "default": true,
-      "ui:widget": "ToggleWidget"
+      "title": "CAN-FD Mode",
+      "description": "Enable CAN-FD for higher data rates and larger payloads",
+      "default": false
     },
-    "mode": {
+    "data_bitrate": {
+      "type": "integer",
+      "title": "Data Bitrate (bps)",
+      "description": "CAN-FD data phase bitrate (only used if FD mode enabled)",
+      "enum": [
+        500000,
+        1000000,
+        2000000,
+        4000000,
+        8000000
+      ],
+      "default": 2000000
+    },
+    "dbc_file": {
       "type": "string",
-      "title": "Collection Mode",
-      "description": "How the sensor collects data",
-      "enum": ["continuous", "triggered", "scheduled"],
-      "default": "continuous",
-      "ui:widget": "RadioWidget",
-      "ui:help": "continuous: Always collecting, triggered: On-demand, scheduled: Time-based"
-    },
-    "description": {
-      "type": "string",
-      "title": "Description",
-      "description": "Detailed description of this sensor's purpose",
-      "ui:widget": "TextareaWidget",
-      "ui:rows": 3,
-      "ui:placeholder": "Describe what this sensor monitors..."
-    },
-    "api_key": {
-      "type": "string",
-      "title": "API Key",
-      "description": "API key for external service integration",
-      "minLength": 32,
-      "ui:widget": "PasswordWidget",
-      "ui:help": "Required for external API access"
-    },
-    "log_level": {
-      "type": "string",
-      "title": "Log Level",
-      "description": "Verbosity of logging output",
-      "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
-      "default": "INFO"
-    },
-    "features": {
-      "type": "array",
-      "title": "Enabled Features",
-      "description": "Select which features to enable",
-      "items": {
-        "type": "string",
-        "enum": ["data_export", "real_time_monitoring", "alerts", "analytics"]
-      },
-      "uniqueItems": true,
-      "default": ["real_time_monitoring"]
+      "title": "DBC File Path",
+      "description": "Path to CAN database file",
+      "ui:widget": "file-picker",
+      "ui:placeholder": "/path/to/database.dbc"
     }
   },
-  "required": ["sensor_name", "mode"]
+  "required": [
+    "interface",
+    "channel",
+    "dbc_file"
+  ]
 }
