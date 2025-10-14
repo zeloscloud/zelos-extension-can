@@ -3,7 +3,7 @@
 
 # --- Required Fields ---
 name = "CAN Bus Monitor"
-version = "0.1.0"
+version = "0.0.1"
 
 # --- Metadata (Optional) ---
 description = "CAN bus monitoring with DBC decoding and periodic transmission"
