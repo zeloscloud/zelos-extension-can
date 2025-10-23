@@ -40,7 +40,7 @@ textparser==0.24.0
     # via cantools
 typing-extensions==4.15.0
     # via python-can
-wrapt==1.17.3
+wrapt==2.0.0
     # via python-can
 zelos-sdk==0.0.6
     # via zelos-extension-can (pyproject.toml)
