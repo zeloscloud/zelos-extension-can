@@ -81,7 +81,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
                 errors.append(f"Invalid DBC file upload: {e}")
         else:
             # It's a plain file path - validate it exists
-            if not Path.exists(dbc_value):
+            if not Path(dbc_value).exists():
                 errors.append(f"DBC file not found: {dbc_value}")
             elif not dbc_value.endswith((".dbc", ".DBC")):
                 errors.append(f"DBC file must have .dbc extension: {dbc_value}")

@@ -611,14 +611,5 @@ class TestConfigUtils:
 
         defaults = get_platform_defaults()
         assert "interface" in defaults
-        assert "channel" in defaults
-        # Platform-specific assertions
-        import platform
-
-        system = platform.system().lower()
-        if system == "linux":
-            assert defaults["interface"] == "socketcan"
-            assert defaults["channel"] == "can0"
-        elif system == "darwin":
-            assert defaults["interface"] == "pcan"
-            assert defaults["channel"] == "PCAN_USBBUS1"
+        # Now defaults to demo mode, no channel needed
+        assert defaults["interface"] == "demo"

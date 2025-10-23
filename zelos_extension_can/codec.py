@@ -60,7 +60,7 @@ class CanCodec:
             # It's a plain file path
             dbc_path = dbc_value
 
-        if not Path.exists(dbc_path):
+        if not Path(dbc_path).exists():
             raise FileNotFoundError(f"DBC file not found: {dbc_path}")
 
         logger.info(f"Loading DBC file: {dbc_path}")
