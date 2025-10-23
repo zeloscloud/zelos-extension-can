@@ -1,53 +1,34 @@
 # Zelos Extension Manifest
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
-# --- Required Fields ---
-name = "CAN"
-version = "0.0.1"
-
-# --- Metadata (Optional) ---
-description = "Controller Area Network (CAN) extension for Zelos"
-author = "tkeairns"
-
-# --- Repository ---
+name = "Zelos Extension Can"
+version = "0.1.0"
+description = "Zelos CAN"
+author = "taylor keairns"
 repository = "https://github.com/tkeairns/zelos-extension-can"
-# homepage = "https://your-extension-website.com"
+homepage = "https://github.com/tkeairns/zelos-extension-can"
+keywords = ["sensor", "monitoring", "data-streaming"]
+categories = ["IoT", "Monitoring"]
 
-# --- Asset Paths ---
-icon = "assets/icon.png"   # Extension icon
-readme = "README.md"       # README markdown
-changelog = "CHANGELOG.md" # CHANGELOG markdown
+# File references (relative paths in archive)
+icon = "assets/icon.svg"
+readme = "README.md"
+changelog = "CHANGELOG.md"
 
-# --- Marketplace Metadata ---
-keywords = ["can", "automotive", "dbc", "socketcan", "canbus"]
-categories = ["Automotive", "IoT"]
+# Compatibility (optional, defaults to ^25.0.20)
+[zelos]
+version = "^25.0.20"
 
-# --- Runtime Configuration ---
+# Configuration schema (enables UI in Zelos App)
+[config]
+schema = "config.schema.json"
+
+# Runtime configuration
 [runtime]
 type = "python"
-entry = "main.py"                                     # Entry point script
-requirements = "requirements.txt"                     # Dependency file
-python_version = "3.11"  # Python version: "3.8" through "3.14+"
-# workdir = "."  # Working directory (default: ".")
+entry = "main.py"
+python_version = "3.11"
 
-# --- Zelos Compatibility ---
-[zelos]
-version = "^25.0.20"  # Semver: ^25.0.20, >=25.0.21, ~25.0.22, etc.
-
-# --- Configuration Schema ---
-[config]
-schema = "config.schema.json"  # JSON Schema for configuration UI
-
-# --- Shutdown Configuration ---
+# Graceful shutdown configuration (optional, defaults to 10)
 [stop]
-grace_seconds = 10  # Graceful shutdown timeout (1-300 seconds)
-
-# --- Optional: Platform Targets ---
-# Leave empty or omit for universal (all platforms)
-# targets = ["linux-x86_64", "linux-aarch64", "darwin-arm64", "darwin-x86_64", "windows-x86_64"]
-
-# --- Optional: Environment Variables ---
-# [env]
-# LOG_LEVEL = "info"
-# API_ENDPOINT = "https://api.example.com"
-# Note: Variables starting with ZELOS_ are reserved
+grace_seconds = 10

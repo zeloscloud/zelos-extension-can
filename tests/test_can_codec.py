@@ -4,8 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from zelos_extension_can.can_codec import CanCodec
 
+from zelos_extension_can.codec import CanCodec
 from zelos_extension_can.schema_utils import cantools_signal_to_trace_type
 
 

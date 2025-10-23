@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Package the Zelos extension into a tar.gz archive."""
 
-import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -12,22 +11,37 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
 
 
-def filter_pycache(tarinfo):
-    """Filter out Python cache files.
+def filter_archive_files(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """Filter out unwanted files from archive per Zelos security requirements.
 
     :param tarinfo: Tar member info
     :return: None if should be excluded, tarinfo otherwise
     """
+    # Skip Python cache files
     if "__pycache__" in tarinfo.name or tarinfo.name.endswith((".pyc", ".pyo")):
         return None
+
+    # Skip hidden files/directories (security requirement)
+    parts = Path(tarinfo.name).parts
+    if any(part.startswith(".") for part in parts):
+        return None
+
+    # Ensure no symlinks or special files (security requirement)
+    if tarinfo.issym() or tarinfo.islnk():
+        print(f"WARNING: Skipping symlink: {tarinfo.name}")
+        return None
+    if not (tarinfo.isfile() or tarinfo.isdir()):
+        print(f"WARNING: Skipping special file: {tarinfo.name}")
+        return None
+
     return tarinfo
 
 
-def main():
+def main() -> None:
     """Package the extension."""
     # Load manifest
     try:
-        with open("extension.toml", "rb") as f:
+        with Path("extension.toml").open("rb") as f:
             manifest = tomllib.load(f)
     except FileNotFoundError:
         print("ERROR: extension.toml not found")
@@ -41,28 +55,21 @@ def main():
         print("ERROR: No version in extension.toml")
         sys.exit(1)
 
-    # Ensure requirements.txt exists
-    if not Path("requirements.txt").exists():
-        print("Compiling requirements.txt...")
-        result = subprocess.run(
-            ["uv", "pip", "compile", "pyproject.toml", "-o", "requirements.txt"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print("ERROR: Failed to compile requirements.txt")
-            print(result.stderr)
-            sys.exit(1)
-
     # Collect files to package
     files = ["extension.toml"]  # Always required
 
-    # Add runtime files from manifest
     runtime = manifest.get("runtime", {})
     if "entry" in runtime:
         files.append(runtime["entry"])
     if "requirements" in runtime:
-        files.append(runtime["requirements"])
+        req_file = runtime["requirements"]
+        if Path(req_file).exists():
+            files.append(req_file)
+
+    if Path("pyproject.toml").exists():
+        files.append("pyproject.toml")
+    if Path("uv.lock").exists():
+        files.append("uv.lock")
 
     # Add optional files referenced in manifest
     for key in ["icon", "readme", "changelog"]:
@@ -74,13 +81,20 @@ def main():
     if "schema" in config:
         files.append(config["schema"])
 
-    # Add Python packages (directories with __init__.py)
-    for path in Path(".").iterdir():
-        if (
-            path.is_dir()
-            and (path / "__init__.py").exists()
-            and path.name not in ["tests", "test", "__pycache__"]
-        ):
+    # Add Python packages from root directory
+    exclude_dirs = {
+        "tests",
+        "test",
+        "__pycache__",
+        ".venv",
+        ".git",
+        ".vscode",
+        ".github",
+        "scripts",
+        "assets",
+    }
+    for path in Path().iterdir():
+        if path.is_dir() and path.name not in exclude_dirs and (path / "__init__.py").exists():
             files.append(path.name)
 
     # Create archive
@@ -88,6 +102,8 @@ def main():
     archive_name = f"{project_name}-v{version}.tar.gz"
 
     print(f"Creating {archive_name}...")
+    print("Packaging files for Zelos marketplace...")
+
     with tarfile.open(archive_name, "w:gz") as tar:
         for file_path in sorted(set(files)):
             path = Path(file_path)
@@ -95,11 +111,24 @@ def main():
                 print(f"ERROR: Required file missing: {file_path}")
                 sys.exit(1)
 
-            tar.add(file_path, arcname=file_path, filter=filter_pycache)
+            tar.add(file_path, arcname=file_path, filter=filter_archive_files)
             print(f"  + {file_path}")
 
-    size_kb = Path(archive_name).stat().st_size / 1024
-    print(f"\n✓ Package created: {archive_name} ({size_kb:.1f} KB)")
+    # Verify archive size constraints
+    archive_path = Path(archive_name)
+    size_bytes = archive_path.stat().st_size
+    size_kb = size_bytes / 1024
+    size_mb = size_kb / 1024
+
+    # Check against Zelos marketplace limits
+    MAX_SIZE_MB = 500
+    if size_mb > MAX_SIZE_MB:
+        print(f"\n❌ ERROR: Archive too large ({size_mb:.1f} MB > {MAX_SIZE_MB} MB limit)")
+        sys.exit(1)
+
+    print(f"\n✓ Package created: {archive_name}")
+    print(f"  Size: {size_kb:.1f} KB ({size_mb:.2f} MB)")
+    print("  Ready for marketplace submission!")
 
 
 if __name__ == "__main__":
