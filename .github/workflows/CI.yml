@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v3
 
       - run: uv sync --extra dev
       - run: just check
