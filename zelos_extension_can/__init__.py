@@ -1,5 +1,10 @@
-"""Zelos CAN extension - CAN bus monitoring with DBC decoding."""
+"""Zelos CAN
+
+A Zelos extension for CAN monitoring.
+"""
 
 from zelos_extension_can.codec import CanCodec
 
-__all__: list[str] = ["CanCodec"]
+__all__: list[str] = [
+    "CanCodec",
+]

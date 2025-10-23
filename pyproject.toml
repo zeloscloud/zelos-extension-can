@@ -1,23 +1,40 @@
 [project]
 name = "zelos-extension-can"
-version = "0.0.1"
-description = "Zelos App extension for CAN"
-authors = [{ name = "tkeairns", email = "taylor@zeloscloud.io" }]
+version = "0.1.0"
+description = "Zelos CAN"
+authors = [{ name = "taylor keairns", email = "taylor@zeloscloud.io" }]
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
-dependencies = [
-    "zelos-sdk>=0.0.6",
-    "python-can>=4.4.0",
-    "cantools>=39.0.0",
+keywords = ["zelos", "extension"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
+dependencies = [
+    "zelos-sdk",
+    "python-can",
+    "cantools",
+]
+
+[project.urls]
+Homepage = "https://github.com/tkeairns/zelos-extension-can"
+Repository = "https://github.com/tkeairns/zelos-extension-can"
+Issues = "https://github.com/tkeairns/zelos-extension-can/issues"
+Documentation = "https://docs.zeloscloud.io/extensions"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4.2",
-    "pytest-asyncio>=1.2.0",
     "pre-commit>=4.3.0",
-    "ty>=0.0.1a0",
     "ruff>=0.13.3",
+    "tomli>=2.0.0; python_version < '3.11'",
 ]
 
 [build-system]
@@ -29,16 +46,29 @@ packages = ["zelos_extension_can"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
 addopts = "--log-cli-level=INFO"
-
-[tool.ty.rules]
-unresolved-attribute = "ignore"
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
-ignore = ["B008"]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "PTH",  # flake8-use-pathlib
+]
+ignore = [
+    "B008",   # function call in defaults (common in decorators)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["PTH123"]  # Allow open() in scripts
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

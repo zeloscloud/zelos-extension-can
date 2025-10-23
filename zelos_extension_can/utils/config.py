@@ -2,7 +2,6 @@
 
 import base64
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +41,7 @@ def data_url_to_file(data_url: str, output_path: str) -> str:
     output_path_obj = Path(output_path)
     output_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path_obj, "wb") as f:
+    with Path.open(output_path_obj, "wb") as f:
         f.write(file_bytes)
 
     return str(output_path_obj)
@@ -82,7 +81,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
                 errors.append(f"Invalid DBC file upload: {e}")
         else:
             # It's a plain file path - validate it exists
-            if not os.path.exists(dbc_value):
+            if not Path.exists(dbc_value):
                 errors.append(f"DBC file not found: {dbc_value}")
             elif not dbc_value.endswith((".dbc", ".DBC")):
                 errors.append(f"DBC file must have .dbc extension: {dbc_value}")
@@ -138,44 +137,3 @@ def validate_config(config: dict[str, Any]) -> list[str]:
             errors.append(f"Invalid JSON in config_json: {e}")
 
     return errors
-
-
-def load_config() -> dict[str, Any]:
-    """Load configuration from file or schema defaults.
-
-    Priority:
-    1. config.json (written by Zelos from user settings)
-    2. Defaults from config.schema.json with platform-specific autofill
-    3. Platform-specific defaults
-    4. Fallback to empty dict
-
-    :return: Configuration dictionary
-    """
-    # First try config.json
-    config_file = Path("config.json")
-    if config_file.exists():
-        with open(config_file) as f:
-            return json.load(f)
-
-    # Fall back to defaults from schema
-    schema_file = Path("config.schema.json")
-    if schema_file.exists():
-        with open(schema_file) as f:
-            schema = json.load(f)
-            # Extract defaults from schema properties
-            config: dict[str, Any] = {}
-            for key, prop in schema.get("properties", {}).items():
-                if "default" in prop:
-                    config[key] = prop["default"]
-
-            # Apply platform-specific autofill if available
-            platform_defaults = get_platform_defaults()
-            for key, value in platform_defaults.items():
-                if key not in config or config[key] == "virtual":
-                    # Only apply platform defaults if not already set or if set to 'virtual'
-                    config[key] = value
-
-            return config
-
-    # Apply platform defaults if schema not found
-    return get_platform_defaults()

@@ -9,10 +9,11 @@ from pathlib import Path
 from types import FrameType
 
 import zelos_sdk
+from zelos_sdk.extensions import load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from zelos_extension_can.codec import CanCodec
-from zelos_extension_can.utils.config import load_config, validate_config
+from zelos_extension_can.utils.config import validate_config
 
 DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.dbc"
 

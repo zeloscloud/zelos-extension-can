@@ -46,9 +46,7 @@ jobs:
         run: just test
 
       - name: Package extension
-        run: |
-          uv pip compile pyproject.toml -o requirements.txt
-          just package
+        run: just package
 
       - name: Create release
         uses: softprops/action-gh-release@v2
