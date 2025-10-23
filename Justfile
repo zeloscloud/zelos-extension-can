@@ -27,6 +27,18 @@ test:
 dev:
     uv run python main.py
 
+# Run the extension in demo mode with built-in EV simulator
+demo:
+    @echo "Starting CAN extension in demo mode..."
+    @echo "Demo features:"
+    @echo "  - Physics-based EV simulator"
+    @echo "  - Realistic CAN message traffic"
+    @echo "  - Uses bundled demo.dbc"
+    @echo ""
+    @echo "Press Ctrl+C to stop"
+    @echo ""
+    uv run python main.py --demo
+
 # Package the extension for distribution
 package:
     uv pip compile pyproject.toml -o requirements.txt

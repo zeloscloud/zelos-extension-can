@@ -32,12 +32,16 @@ A production-ready Zelos extension for real-time CAN bus monitoring, decoding, a
 
 ### Demo Mode (Development)
 
-Run continuous CAN traffic replay with test.dbc:
+Run the extension with built-in EV simulator:
 
 ```bash
-cd zelos-extension-can
-just install          # Install dependencies
-uv run python demo.py # Start demo with 10Hz replay
+just install  # Install dependencies
+just demo     # Start demo mode with realistic EV traffic
+```
+
+Or use the CLI directly:
+```bash
+python main.py --demo
 ```
 
 Press Ctrl+C to stop.
@@ -50,6 +54,28 @@ Press Ctrl+C to stop.
 | **channel** | String | can0, vcan0, PCAN_USBBUS1, etc. | Channel identifier |
 | **bitrate** | Integer | 125000, 250000, 500000, 1000000 | Bus bitrate (bps) |
 | **dbc_file** | String | /path/to/file.dbc | DBC database file path |
+| **timestamp_mode** | String | auto, absolute, ignore | Timestamp handling mode (auto-detects boot-relative) |
+| **demo_mode** | Boolean | true, false | Enable demo mode with EV simulator |
+| **config_json** | String (JSON) | {"app_name": "MyApp"} | Advanced python-can Bus() kwargs (merged with config) |
+
+### Advanced Configuration
+
+For interface-specific options not covered by the form fields, use **config_json** to pass additional kwargs to python-can's `Bus()` constructor:
+
+```json
+{
+  "interface": "pcan",
+  "channel": "PCAN_USBBUS1",
+  "bitrate": 500000,
+  "config_json": "{\"app_name\": \"ZelosMonitor\", \"state\": 5}"
+}
+```
+
+Common use cases:
+- **PCAN**: `app_name`, `state`, `timing`, `clock_frequency`
+- **Kvaser**: `sjw`, `tseg1`, `tseg2`, `no_samp`
+- **Vector**: `serial`, `rx_queue_size`, `tx_queue_size`
+- **SocketCAN**: `can_filters`, `err_mask`
 
 ## Actions
 
@@ -93,18 +119,20 @@ just release 0.1.0
 
 ```
 zelos-extension-can/
-├── main.py                    # Production entry point
-├── demo.py                    # Interactive demo (continuous replay)
-├── config.json                # Example configuration
+├── main.py                    # Entry point (supports --demo flag)
+├── config.json                # Configuration file
 ├── extension.toml             # Extension manifest
 ├── config.schema.json         # Configuration UI schema
 ├── zelos_extension_can/
 │   ├── can_codec.py          # Core CAN codec with async reception
 │   ├── schema_utils.py       # DBC→SDK type mapping utilities
+│   ├── demo/
+│   │   ├── demo.py           # EV simulator for demo mode
+│   │   └── demo.dbc          # Demo CAN database
 │   └── utils/
-│       └── config.py         # Configuration loading
+│       └── config.py         # Configuration loading & validation
 └── tests/
-    └── test_can_codec.py     # Unit tests
+    └── test_can_codec.py     # Comprehensive unit tests
 ```
 
 ## Requirements

@@ -11,7 +11,9 @@ import cantools
 import zelos_sdk
 from zelos_sdk.actions import action
 
+from .demo.demo import run_demo_ev_simulation
 from .schema_utils import cantools_signal_to_trace_metadata
+from .utils.config import data_url_to_file
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,11 @@ class CanCodec:
         self.last_message_time = time.time()
         self.start_time = time.time()
 
+        # Timestamp handling
+        self.timestamp_mode = config.get("timestamp_mode", "auto")
+        self.hw_timestamp_offset: float | None = None  # Offset to convert HW time to wall-clock
+        self.first_hw_timestamp: float | None = None  # First HW timestamp seen
+
         # Metrics tracking
         self.metrics = {
             "messages_received": 0,
@@ -38,8 +45,21 @@ class CanCodec:
             "bytes_received": 0,
         }
 
-        # Load and validate DBC file
-        dbc_path = config["dbc_file"]
+        # Demo mode simulation
+        self.demo_mode = config.get("demo_mode", False)
+        self.demo_task: asyncio.Task | None = None
+
+        # Load and validate DBC file (handle data-url or plain file path)
+        dbc_value = config["dbc_file"]
+
+        # If it's a data-url (uploaded file), extract it to a temp file
+        if dbc_value.startswith("data:"):
+            logger.info("Extracting uploaded DBC file from data-url")
+            dbc_path = data_url_to_file(dbc_value, ".uploaded.dbc")
+        else:
+            # It's a plain file path
+            dbc_path = dbc_value
+
         if not os.path.exists(dbc_path):
             raise FileNotFoundError(f"DBC file not found: {dbc_path}")
 
@@ -90,6 +110,17 @@ class CanCodec:
                 self.source.add_event(event_name, fields)
                 logger.debug(f"Added event '{event_name}' with {len(fields)} signals")
 
+                # Add value tables for signals with enum choices
+                for sig in msg.signals:
+                    if sig.choices:
+                        # Convert choices to int->str mapping for value table
+                        value_table = {int(k): str(v) for k, v in sig.choices.items()}
+                        self.source.add_value_table(event_name, sig.name, value_table)
+                        logger.debug(
+                            f"Added value table for {event_name}.{sig.name} "
+                            f"with {len(value_table)} entries"
+                        )
+
     def _get_event_name(self, msg: cantools.database.can.Message) -> str:
         """Get event name for message (format: {frame_id:04x}_{name}).
 
@@ -97,6 +128,54 @@ class CanCodec:
         :return: Event name string
         """
         return f"{msg.frame_id:04x}_{msg.name}"
+
+    def get_timestamp(self, hw_timestamp: float | None) -> int | None:
+        """Get timestamp in nanoseconds for logging, handling boot-relative timestamps.
+
+        This method handles different timestamp modes:
+        - 'auto': Detects boot-relative timestamps (starting near zero) and converts
+                  them to wall-clock time by tracking the offset between hardware
+                  time and system time at first message.
+        - 'absolute': Uses hardware timestamp as-is (assumes it's already wall-clock time)
+        - 'ignore': Returns None to use system time
+
+        :param hw_timestamp: Hardware timestamp in seconds (can be None)
+        :return: Timestamp in nanoseconds, or None to use system time
+        """
+        if hw_timestamp is None or self.timestamp_mode == "ignore":
+            return None
+
+        if self.timestamp_mode == "absolute":
+            # Trust the hardware timestamp as-is
+            return int(hw_timestamp * 1e9)
+
+        # Auto mode: detect boot-relative timestamps
+        if self.hw_timestamp_offset is None:
+            # First timestamp - detect if it's boot-relative
+            self.first_hw_timestamp = hw_timestamp
+
+            # If timestamp is suspiciously small (< 1 hour), assume it's boot-relative
+            # and calculate offset to convert to wall-clock time
+            ONE_HOUR = 3600.0
+            if hw_timestamp < ONE_HOUR:
+                # Boot-relative: calculate offset
+                wall_clock_time = time.time()
+                self.hw_timestamp_offset = wall_clock_time - hw_timestamp
+                logger.info(
+                    f"Detected boot-relative timestamps (first={hw_timestamp:.3f}s). "
+                    f"Using offset={self.hw_timestamp_offset:.3f}s to convert to wall-clock time."
+                )
+            else:
+                # Assume it's already wall-clock time
+                self.hw_timestamp_offset = 0.0
+                logger.info(
+                    f"Detected absolute timestamps (first={hw_timestamp:.3f}s). "
+                    "Using hardware timestamps as-is."
+                )
+
+        # Apply offset to convert boot-relative time to wall-clock time
+        wall_clock_timestamp = hw_timestamp + self.hw_timestamp_offset
+        return int(wall_clock_timestamp * 1e9)
 
     def start(self) -> None:
         """Initialize CAN bus connection with retry logic."""
@@ -121,6 +200,18 @@ class CanCodec:
             bus_config["fd"] = True
             bus_config["data_bitrate"] = self.config.get("data_bitrate", 2000000)
 
+        # Merge additional config_json (advanced interface-specific options)
+        if "config_json" in self.config and self.config["config_json"]:
+            try:
+                import json
+
+                additional_config = json.loads(self.config["config_json"])
+                logger.info(f"Merging additional config: {list(additional_config.keys())}")
+                bus_config.update(additional_config)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse config_json: {e}")
+                raise ValueError(f"Invalid config_json: {e}") from e
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -139,6 +230,12 @@ class CanCodec:
         """Stop CAN bus and periodic tasks."""
         logger.info("Stopping CAN codec")
         self.running = False
+
+        # Cancel demo simulation task if running
+        if self.demo_task:
+            logger.info("Cancelling demo simulation task")
+            self.demo_task.cancel()
+            self.demo_task = None
 
         # Cancel all periodic tasks
         for task_name, task in self.periodic_tasks.items():
@@ -163,12 +260,17 @@ class CanCodec:
         if not self.bus:
             return False
 
+        # Virtual/demo interfaces don't support state checks - assume healthy
+        if self.config.get("interface") == "virtual" or self.demo_mode:
+            return True
+
         try:
             state = self.bus.state
             return state in (can.BusState.ACTIVE, can.BusState.PASSIVE)
         except Exception as e:
             logger.debug(f"Bus health check failed: {e}")
-            return False
+            # If state check not supported, assume healthy
+            return True
 
     async def _reconnect_bus(self) -> bool:
         """Attempt to reconnect to CAN bus.
@@ -197,6 +299,11 @@ class CanCodec:
 
         reader = can.AsyncBufferedReader()
         notifier = can.Notifier(self.bus, [reader])
+
+        # Start demo mode simulation if enabled
+        if self.demo_mode:
+            self.demo_task = asyncio.create_task(run_demo_ev_simulation(self.bus, self.db, self))
+            logger.info("Started EV simulation task for demo mode")
 
         try:
             logger.info("Starting async CAN message reception")
@@ -268,16 +375,28 @@ class CanCodec:
                 if isinstance(value, (int, float)):
                     signals[signal_name] = value
                 else:
-                    # Convert NamedSignalValue to numeric
+                    # NamedSignalValue - convert to integer enum value
+                    # The value table will provide the string representation
                     signal_def = dbc_msg.get_signal_by_name(signal_name)
-                    signals[signal_name] = signal_def.conversion.choice_to_number(value)
+                    signals[signal_name] = int(signal_def.conversion.choice_to_number(value))
 
-            # Emit trace event
+            # Emit trace event with smart timestamp handling
             event_name = self._get_event_name(dbc_msg)
-            getattr(self.source, event_name).log(**signals)
-            logger.info(f"Decoded {event_name}: {signals}")
-
-            self.metrics["messages_decoded"] += 1
+            try:
+                # Use get_timestamp() helper to handle boot-relative timestamps
+                timestamp_ns = self.get_timestamp(msg.timestamp)
+                if timestamp_ns is not None:
+                    getattr(self.source, event_name).log_at(timestamp_ns, **signals)
+                else:
+                    getattr(self.source, event_name).log(**signals)
+                logger.debug(f"Decoded {event_name}: {signals}")
+                self.metrics["messages_decoded"] += 1
+            except (OverflowError, ValueError) as emit_error:
+                # Signal value out of range for trace event field type - skip emission
+                logger.debug(
+                    f"Skipping trace emission for {event_name} due to value overflow: {emit_error}"
+                )
+                self.metrics["decode_errors"] += 1
 
         except KeyError:
             logger.debug(f"Message ID {msg.arbitration_id:04x} not in DBC")
@@ -286,7 +405,7 @@ class CanCodec:
             logger.debug(f"Decode error for {msg.arbitration_id:04x}: {e}")
             self.metrics["decode_errors"] += 1
         except Exception as e:
-            logger.error(f"Error decoding message {msg.arbitration_id:04x}: {e}")
+            logger.debug(f"Error decoding message {msg.arbitration_id:04x}: {e}")
             self.metrics["decode_errors"] += 1
 
     async def _periodic_send_task(

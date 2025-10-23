@@ -2,11 +2,11 @@
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
 # --- Required Fields ---
-name = "CAN Bus Monitor"
+name = "CAN"
 version = "0.0.1"
 
 # --- Metadata (Optional) ---
-description = "CAN bus monitoring with DBC decoding and periodic transmission"
+description = "Controller Area Network (CAN) extension for Zelos"
 author = "tkeairns"
 
 # --- Repository ---
@@ -14,7 +14,7 @@ repository = "https://github.com/tkeairns/zelos-extension-can"
 # homepage = "https://your-extension-website.com"
 
 # --- Asset Paths ---
-icon = "assets/icon.svg"   # Extension icon
+icon = "assets/icon.png"   # Extension icon
 readme = "README.md"       # README markdown
 changelog = "CHANGELOG.md" # CHANGELOG markdown
 

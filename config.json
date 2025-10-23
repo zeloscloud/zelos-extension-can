@@ -1,6 +1,0 @@
-{
-  "interface": "virtual",
-  "channel": "vcan0",
-  "bitrate": 500000,
-  "dbc_file": "/Users/tkeairns/zelos/src/api/py/test/data/test.dbc"
-}
