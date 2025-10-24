@@ -2,7 +2,7 @@
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
 name = "Zelos Extension Can"
-version = "0.0.1"
+version = "0.1.0"
 description = "Zelos CAN"
 author = "taylor keairns"
 repository = "https://github.com/tkeairns/zelos-extension-can"
