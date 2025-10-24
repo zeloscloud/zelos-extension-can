@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,15 @@ from .utils.config import data_url_to_file
 logger = logging.getLogger(__name__)
 
 
-class CanCodec:
+class TimestampMode(IntEnum):
+    """Timestamp handling modes for efficient comparison."""
+
+    IGNORE = 0
+    ABSOLUTE = 1
+    AUTO = 2
+
+
+class CanCodec(can.Listener):
     """CAN bus monitor with DBC decoding and periodic transmission support."""
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -31,8 +40,9 @@ class CanCodec:
         self.last_message_time = time.time()
         self.start_time = time.time()
 
-        # Timestamp handling
-        self.timestamp_mode = config.get("timestamp_mode", "auto")
+        # Timestamp handling - use enum for fast comparison
+        timestamp_mode_str = config.get("timestamp_mode", "auto").upper()
+        self.timestamp_mode = TimestampMode[timestamp_mode_str]
         self.hw_timestamp_offset: float | None = None  # Offset to convert HW time to wall-clock
         self.first_hw_timestamp: float | None = None  # First HW timestamp seen
 
@@ -77,6 +87,9 @@ class CanCodec:
         self.messages_by_id: dict[int, cantools.db.can.Message] = {}
         self.messages_by_name: dict[str, cantools.db.can.Message] = {}
 
+        # Cache event loggers to avoid getattr() on every message (performance optimization)
+        self._event_loggers: dict[int, Any] = {}
+
         for msg in self.db.messages:
             self.messages_by_id[msg.frame_id] = msg
             # Only store first occurrence of duplicate names
@@ -110,6 +123,9 @@ class CanCodec:
                 self.source.add_event(event_name, fields)
                 logger.debug(f"Added event '{event_name}' with {len(fields)} signals")
 
+                # Cache event logger to avoid getattr() on every message (performance critical)
+                self._event_loggers[msg.frame_id] = getattr(self.source, event_name)
+
                 # Add value tables for signals with enum choices
                 for sig in msg.signals:
                     if sig.choices:
@@ -133,19 +149,19 @@ class CanCodec:
         """Get timestamp in nanoseconds for logging, handling boot-relative timestamps.
 
         This method handles different timestamp modes:
-        - 'auto': Detects boot-relative timestamps (starting near zero) and converts
-                  them to wall-clock time by tracking the offset between hardware
-                  time and system time at first message.
-        - 'absolute': Uses hardware timestamp as-is (assumes it's already wall-clock time)
-        - 'ignore': Returns None to use system time
+        - AUTO: Detects boot-relative timestamps (starting near zero) and converts
+                them to wall-clock time by tracking the offset between hardware
+                time and system time at first message.
+        - ABSOLUTE: Uses hardware timestamp as-is (assumes it's already wall-clock time)
+        - IGNORE: Returns None to use system time
 
         :param hw_timestamp: Hardware timestamp in seconds (can be None)
         :return: Timestamp in nanoseconds, or None to use system time
         """
-        if hw_timestamp is None or self.timestamp_mode == "ignore":
+        if hw_timestamp is None or self.timestamp_mode == TimestampMode.IGNORE:
             return None
 
-        if self.timestamp_mode == "absolute":
+        if self.timestamp_mode == TimestampMode.ABSOLUTE:
             # Trust the hardware timestamp as-is
             return int(hw_timestamp * 1e9)
 
@@ -291,14 +307,29 @@ class CanCodec:
             logger.error(f"Bus reconnection failed: {e}")
             return False
 
+    def on_message_received(self, message: can.Message) -> None:
+        """Handle CAN message directly from notifier (can.Listener interface).
+
+        This direct callback approach is more efficient than AsyncBufferedReader
+        as it eliminates buffering overhead and async context switching.
+
+        :param message: Received CAN message
+        """
+        self._handle_message(message)
+        self.last_message_time = time.time()
+
     async def _run_async(self) -> None:
-        """Main async loop - receive and decode CAN messages with reconnection."""
+        """Main async loop - health monitoring and reconnection handling.
+
+        Message reception happens via on_message_received() callback, not in this loop.
+        This approach is more efficient than AsyncBufferedReader + asyncio.wait_for().
+        """
         if not self.bus:
             logger.error("Bus not initialized, call start() first")
             return
 
-        reader = can.AsyncBufferedReader()
-        notifier = can.Notifier(self.bus, [reader])
+        # Register self as listener for direct message callbacks
+        notifier = can.Notifier(self.bus, [self])
 
         # Start demo mode simulation if enabled
         if self.demo_mode:
@@ -306,32 +337,19 @@ class CanCodec:
             logger.info("Started EV simulation task for demo mode")
 
         try:
-            logger.info("Starting async CAN message reception")
+            logger.info("Starting CAN message reception with direct listener pattern")
             while self.running:
-                try:
-                    # Wait for message with timeout to check bus health
-                    msg = await asyncio.wait_for(reader.get_message(), timeout=5.0)
-                    self._handle_message(msg)
-                    self.last_message_time = time.time()
-                except TimeoutError:
-                    # Check if bus is still healthy
-                    if not self._check_bus_health():
-                        logger.error("Bus health check failed")
-                        notifier.stop()
-                        if await self._reconnect_bus():
-                            # Recreate reader and notifier
-                            reader = can.AsyncBufferedReader()
-                            notifier = can.Notifier(self.bus, [reader])
-                        else:
-                            logger.error("Failed to reconnect, stopping")
-                            break
-                except can.CanError as e:
-                    logger.error(f"CAN bus error: {e}, attempting reconnection")
+                # Periodic health check (no longer blocking on message reception)
+                await asyncio.sleep(5.0)
+
+                if not self._check_bus_health():
+                    logger.error("Bus health check failed")
                     notifier.stop()
                     if await self._reconnect_bus():
-                        reader = can.AsyncBufferedReader()
-                        notifier = can.Notifier(self.bus, [reader])
+                        # Recreate notifier with self as listener
+                        notifier = can.Notifier(self.bus, [self])
                     else:
+                        logger.error("Failed to reconnect, stopping")
                         break
         except asyncio.CancelledError:
             logger.info("CAN reader cancelled")
@@ -381,22 +399,26 @@ class CanCodec:
                     signals[signal_name] = int(signal_def.conversion.choice_to_number(value))
 
             # Emit trace event with smart timestamp handling
-            event_name = self._get_event_name(dbc_msg)
-            try:
-                # Use get_timestamp() helper to handle boot-relative timestamps
-                timestamp_ns = self.get_timestamp(msg.timestamp)
-                if timestamp_ns is not None:
-                    getattr(self.source, event_name).log_at(timestamp_ns, **signals)
-                else:
-                    getattr(self.source, event_name).log(**signals)
-                logger.debug(f"Decoded {event_name}: {signals}")
-                self.metrics["messages_decoded"] += 1
-            except (OverflowError, ValueError) as emit_error:
-                # Signal value out of range for trace event field type - skip emission
-                logger.debug(
-                    f"Skipping trace emission for {event_name} due to value overflow: {emit_error}"
-                )
-                self.metrics["decode_errors"] += 1
+            # Use cached event logger to avoid getattr() overhead (performance critical)
+            event_logger = self._event_loggers.get(msg.arbitration_id)
+            if event_logger:
+                try:
+                    # Use get_timestamp() helper to handle boot-relative timestamps
+                    timestamp_ns = self.get_timestamp(msg.timestamp)
+                    if timestamp_ns is not None:
+                        event_logger.log_at(timestamp_ns, **signals)
+                    else:
+                        event_logger.log(**signals)
+                    logger.debug(f"Decoded {dbc_msg.name}: {signals}")
+                    self.metrics["messages_decoded"] += 1
+                except (OverflowError, ValueError) as emit_error:
+                    # Signal value out of range for trace event field type - skip emission
+                    logger.debug(
+                        "Skipping trace emission for %s due to value overflow: %s",
+                        dbc_msg.name,
+                        emit_error,
+                    )
+                    self.metrics["decode_errors"] += 1
 
         except KeyError:
             logger.debug(f"Message ID {msg.arbitration_id:04x} not in DBC")

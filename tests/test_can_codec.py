@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from zelos_extension_can.codec import CanCodec
+from zelos_extension_can.codec import CanCodec, TimestampMode
 from zelos_extension_can.schema_utils import cantools_signal_to_trace_type
 
 
@@ -61,6 +61,40 @@ class TestCanCodecInitialization:
         msg = codec.db.get_message_by_name("DUT_Status")
         event_name = codec._get_event_name(msg)
         assert event_name == "0064_DUT_Status"  # 0x64 = 100
+
+    def test_caches_event_loggers(self, codec):
+        """Test that event loggers are cached for performance."""
+        # Verify event loggers are cached during initialization
+        assert len(codec._event_loggers) > 0
+        # Verify we have a cached logger for DUT_Status message (0x64)
+        assert 0x64 in codec._event_loggers
+        assert codec._event_loggers[0x64] is not None
+
+    def test_timestamp_mode_enum_conversion(self, mock_config):
+        """Test timestamp_mode string is converted to enum."""
+        mock_config["timestamp_mode"] = "auto"
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            assert codec.timestamp_mode == TimestampMode.AUTO
+            assert isinstance(codec.timestamp_mode, TimestampMode)
+
+        mock_config["timestamp_mode"] = "absolute"
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            assert codec.timestamp_mode == TimestampMode.ABSOLUTE
+
+        mock_config["timestamp_mode"] = "ignore"
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            assert codec.timestamp_mode == TimestampMode.IGNORE
+
+    def test_inherits_can_listener(self, codec):
+        """Test codec inherits from can.Listener for direct callbacks."""
+        import can
+
+        assert isinstance(codec, can.Listener)
+        assert hasattr(codec, "on_message_received")
+        assert callable(codec.on_message_received)
 
 
 class TestSchemaUtils:
