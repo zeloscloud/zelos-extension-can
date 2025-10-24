@@ -62,13 +62,29 @@ class TestCanCodecInitialization:
         event_name = codec._get_event_name(msg)
         assert event_name == "0064_DUT_Status"  # 0x64 = 100
 
-    def test_caches_event_loggers(self, codec):
-        """Test that event loggers are cached for performance."""
-        # Verify event loggers are cached during initialization
-        assert len(codec._event_loggers) > 0
-        # Verify we have a cached logger for DUT_Status message (0x64)
+    def test_caches_event_loggers_on_first_message(self, codec):
+        """Test that event loggers are cached lazily on first message encounter."""
+        import can
+
+        # Verify event loggers are initially empty (lazy initialization)
+        assert len(codec._event_loggers) == 0
+
+        # Simulate receiving a message for DUT_Status (0x64)
+        msg = can.Message(
+            arbitration_id=0x64,
+            data=bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            timestamp=15.5,
+        )
+        codec._handle_message(msg)
+
+        # Now the logger should be cached
         assert 0x64 in codec._event_loggers
         assert codec._event_loggers[0x64] is not None
+
+        # Subsequent messages should use the cached logger
+        initial_cache_size = len(codec._event_loggers)
+        codec._handle_message(msg)
+        assert len(codec._event_loggers) == initial_cache_size  # No new entries
 
     def test_timestamp_mode_enum_conversion(self, mock_config):
         """Test timestamp_mode string is converted to enum."""

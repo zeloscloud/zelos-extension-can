@@ -17,14 +17,16 @@ from zelos_extension_can.utils.config import validate_config
 
 DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.dbc"
 
-# Configure logging before adding SDK handlers so DEBUG-level logs are emitted
+# Configure logging - INFO level prevents debug logs from being sent to backend
 logging.basicConfig(level=logging.INFO)
 
 # Initialize SDK
 zelos_sdk.init(name="can", actions=True)
 
-# Add the built-in handler to capture all logs
+# Add the built-in handler to capture logs at INFO level and above
+# (DEBUG logs won't be sent to backend to avoid duplicate trace data)
 handler = TraceLoggingHandler("can_log")
+handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(handler)
 logger = logging.getLogger(__name__)
 

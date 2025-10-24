@@ -101,8 +101,8 @@ class CanCodec(can.Listener):
                     "access via message ID instead"
                 )
 
-        # Generate trace schema from DBC
-        self._generate_schema()
+        # Note: Schemas are now generated on-the-fly when messages are first encountered
+        # This improves startup time and memory usage for large DBCs
 
         # CAN bus (initialized in start())
         self.bus: Any = None
@@ -110,32 +110,39 @@ class CanCodec(can.Listener):
         # Periodic message tasks
         self.periodic_tasks: dict[str, asyncio.Task] = {}
 
-    def _generate_schema(self) -> None:
-        """Generate trace event schemas from DBC messages."""
-        for msg in self.db.messages:
-            # Create event for each message
-            # For multiplexed messages, we emit all signals in one event
-            # The actual mux logic happens during decode
-            event_name = self._get_event_name(msg)
-            fields = [cantools_signal_to_trace_metadata(sig) for sig in msg.signals]
+    def _generate_schema_for_message(self, msg: cantools.database.can.Message) -> Any | None:
+        """Generate trace event schema for a single message on first encounter.
 
-            if fields:
-                self.source.add_event(event_name, fields)
-                logger.debug(f"Added event '{event_name}' with {len(fields)} signals")
+        This lazy initialization approach improves startup time and memory usage
+        by only creating schemas for messages that are actually seen on the bus.
 
-                # Cache event logger to avoid getattr() on every message (performance critical)
-                self._event_loggers[msg.frame_id] = getattr(self.source, event_name)
+        :param msg: cantools message definition
+        :return: Cached event logger, or None if message has no signals
+        """
+        event_name = self._get_event_name(msg)
+        fields = [cantools_signal_to_trace_metadata(sig) for sig in msg.signals]
 
-                # Add value tables for signals with enum choices
-                for sig in msg.signals:
-                    if sig.choices:
-                        # Convert choices to int->str mapping for value table
-                        value_table = {int(k): str(v) for k, v in sig.choices.items()}
-                        self.source.add_value_table(event_name, sig.name, value_table)
-                        logger.debug(
-                            f"Added value table for {event_name}.{sig.name} "
-                            f"with {len(value_table)} entries"
-                        )
+        if fields:
+            self.source.add_event(event_name, fields)
+            logger.debug(f"Generated schema for '{event_name}' with {len(fields)} signals")
+
+            # Cache event logger to avoid getattr() on subsequent messages (performance critical)
+            event_logger = getattr(self.source, event_name)
+
+            # Add value tables for signals with enum choices
+            for sig in msg.signals:
+                if sig.choices:
+                    # Convert choices to int->str mapping for value table
+                    value_table = {int(k): str(v) for k, v in sig.choices.items()}
+                    self.source.add_value_table(event_name, sig.name, value_table)
+                    logger.debug(
+                        f"Added value table for {event_name}.{sig.name} "
+                        f"with {len(value_table)} entries"
+                    )
+
+            return event_logger
+
+        return None
 
     def _get_event_name(self, msg: cantools.database.can.Message) -> str:
         """Get event name for message (format: {frame_id:04x}_{name}).
@@ -399,8 +406,14 @@ class CanCodec(can.Listener):
                     signals[signal_name] = int(signal_def.conversion.choice_to_number(value))
 
             # Emit trace event with smart timestamp handling
-            # Use cached event logger to avoid getattr() overhead (performance critical)
+            # Check if we have a cached event logger, generate schema on first encounter
             event_logger = self._event_loggers.get(msg.arbitration_id)
+            if event_logger is None:
+                # First time seeing this message - generate schema and cache logger
+                event_logger = self._generate_schema_for_message(dbc_msg)
+                if event_logger:
+                    self._event_loggers[msg.arbitration_id] = event_logger
+
             if event_logger:
                 try:
                     # Use get_timestamp() helper to handle boot-relative timestamps
