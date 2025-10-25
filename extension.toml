@@ -1,0 +1,34 @@
+# Zelos Extension Manifest
+# See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
+
+name = "Zelos Extension Can"
+version = "0.1.0"
+description = "Implements a CAN extension for the Zelos App"
+author = "zeloscloud"
+repository = "https://github.com/zeloscloud/zelos-extension-can"
+homepage = "https://github.com/zeloscloud/zelos-extension-can"
+keywords = ["sensor", "monitoring", "data-streaming"]
+categories = ["IoT", "Monitoring"]
+
+# File references (relative paths in archive)
+icon = "assets/icon.svg"
+readme = "README.md"
+changelog = "CHANGELOG.md"
+
+# Compatibility (optional, defaults to ^25.0.20)
+[zelos]
+version = "^25.0.20"
+
+# Configuration schema (enables UI in Zelos App)
+[config]
+schema = "config.schema.json"
+
+# Runtime configuration
+[runtime]
+type = "python"
+entry = "main.py"
+python_version = "3.11"
+
+# Graceful shutdown configuration (optional, defaults to 10)
+[stop]
+grace_seconds = 10
