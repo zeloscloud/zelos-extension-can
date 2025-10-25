@@ -62,12 +62,10 @@ class CanCodec(can.Listener):
         # Load and validate DBC file (handle data-url or plain file path)
         dbc_value = config["dbc_file"]
 
-        # If it's a data-url (uploaded file), extract it to a temp file
         if dbc_value.startswith("data:"):
             logger.info("Extracting uploaded DBC file from data-url")
             dbc_path = data_url_to_file(dbc_value, ".uploaded.dbc")
         else:
-            # It's a plain file path
             dbc_path = dbc_value
 
         if not Path(dbc_path).exists():
@@ -87,8 +85,7 @@ class CanCodec(can.Listener):
         self.messages_by_id: dict[int, cantools.db.can.Message] = {}
         self.messages_by_name: dict[str, cantools.db.can.Message] = {}
 
-        # Cache event loggers to avoid getattr() on every message (performance optimization)
-        self._event_loggers: dict[int, Any] = {}
+        self._events: dict[int, Any] = {}
 
         for msg in self.db.messages:
             self.messages_by_id[msg.frame_id] = msg
@@ -101,48 +98,11 @@ class CanCodec(can.Listener):
                     "access via message ID instead"
                 )
 
-        # Note: Schemas are now generated on-the-fly when messages are first encountered
-        # This improves startup time and memory usage for large DBCs
+        self._generate_all_schemas()
+        logger.info(f"Generated {len(self._events)} event schemas from DBC")
 
-        # CAN bus (initialized in start())
         self.bus: Any = None
-
-        # Periodic message tasks
         self.periodic_tasks: dict[str, asyncio.Task] = {}
-
-    def _generate_schema_for_message(self, msg: cantools.database.can.Message) -> Any | None:
-        """Generate trace event schema for a single message on first encounter.
-
-        This lazy initialization approach improves startup time and memory usage
-        by only creating schemas for messages that are actually seen on the bus.
-
-        :param msg: cantools message definition
-        :return: Cached event logger, or None if message has no signals
-        """
-        event_name = self._get_event_name(msg)
-        fields = [cantools_signal_to_trace_metadata(sig) for sig in msg.signals]
-
-        if fields:
-            self.source.add_event(event_name, fields)
-            logger.debug(f"Generated schema for '{event_name}' with {len(fields)} signals")
-
-            # Cache event logger to avoid getattr() on subsequent messages (performance critical)
-            event_logger = getattr(self.source, event_name)
-
-            # Add value tables for signals with enum choices
-            for sig in msg.signals:
-                if sig.choices:
-                    # Convert choices to int->str mapping for value table
-                    value_table = {int(k): str(v) for k, v in sig.choices.items()}
-                    self.source.add_value_table(event_name, sig.name, value_table)
-                    logger.debug(
-                        f"Added value table for {event_name}.{sig.name} "
-                        f"with {len(value_table)} entries"
-                    )
-
-            return event_logger
-
-        return None
 
     def _get_event_name(self, msg: cantools.database.can.Message) -> str:
         """Get event name for message (format: {frame_id:04x}_{name}).
@@ -169,19 +129,15 @@ class CanCodec(can.Listener):
             return None
 
         if self.timestamp_mode == TimestampMode.ABSOLUTE:
-            # Trust the hardware timestamp as-is
             return int(hw_timestamp * 1e9)
 
-        # Auto mode: detect boot-relative timestamps
+        # Auto mode: detect boot-relative timestamps and calculate offset
         if self.hw_timestamp_offset is None:
-            # First timestamp - detect if it's boot-relative
             self.first_hw_timestamp = hw_timestamp
 
-            # If timestamp is suspiciously small (< 1 hour), assume it's boot-relative
-            # and calculate offset to convert to wall-clock time
+            # Timestamps < 1 hour are assumed to be boot-relative and need conversion
             ONE_HOUR = 3600.0
             if hw_timestamp < ONE_HOUR:
-                # Boot-relative: calculate offset
                 wall_clock_time = time.time()
                 self.hw_timestamp_offset = wall_clock_time - hw_timestamp
                 logger.info(
@@ -189,7 +145,6 @@ class CanCodec(can.Listener):
                     f"Using offset={self.hw_timestamp_offset:.3f}s to convert to wall-clock time."
                 )
             else:
-                # Assume it's already wall-clock time
                 self.hw_timestamp_offset = 0.0
                 logger.info(
                     f"Detected absolute timestamps (first={hw_timestamp:.3f}s). "
@@ -207,18 +162,15 @@ class CanCodec(can.Listener):
             f"channel={self.config['channel']}"
         )
 
-        # Create CAN bus with retry logic
         bus_config = {
             "interface": self.config["interface"],
             "channel": self.config["channel"],
             "receive_own_messages": True,  # Allow receiving own transmitted messages
         }
 
-        # Add bitrate for interfaces that support it (not virtual)
         if self.config["interface"] != "virtual":
             bus_config["bitrate"] = self.config.get("bitrate", 500000)
 
-        # Add CAN-FD support if configured
         if self.config.get("fd_mode", False):
             bus_config["fd"] = True
             bus_config["data_bitrate"] = self.config.get("data_bitrate", 2000000)
@@ -254,13 +206,11 @@ class CanCodec(can.Listener):
         logger.info("Stopping CAN codec")
         self.running = False
 
-        # Cancel demo simulation task if running
         if self.demo_task:
             logger.info("Cancelling demo simulation task")
             self.demo_task.cancel()
             self.demo_task = None
 
-        # Cancel all periodic tasks
         for task_name, task in self.periodic_tasks.items():
             logger.info(f"Cancelling periodic task: {task_name}")
             task.cancel()
@@ -335,10 +285,8 @@ class CanCodec(can.Listener):
             logger.error("Bus not initialized, call start() first")
             return
 
-        # Register self as listener for direct message callbacks
         notifier = can.Notifier(self.bus, [self])
 
-        # Start demo mode simulation if enabled
         if self.demo_mode:
             self.demo_task = asyncio.create_task(run_demo_ev_simulation(self.bus, self.db, self))
             logger.info("Started EV simulation task for demo mode")
@@ -346,14 +294,12 @@ class CanCodec(can.Listener):
         try:
             logger.info("Starting CAN message reception with direct listener pattern")
             while self.running:
-                # Periodic health check (no longer blocking on message reception)
                 await asyncio.sleep(5.0)
 
                 if not self._check_bus_health():
                     logger.error("Bus health check failed")
                     notifier.stop()
                     if await self._reconnect_bus():
-                        # Recreate notifier with self as listener
                         notifier = can.Notifier(self.bus, [self])
                     else:
                         logger.error("Failed to reconnect, stopping")
@@ -369,13 +315,15 @@ class CanCodec(can.Listener):
     def _handle_message(self, msg: can.Message) -> None:
         """Decode and emit CAN message to trace.
 
+        For multiplexed messages, emits TWO separate events to minimize memory footprint:
+        1. Base signals (including multiplexer): {id:04x}_{name}
+        2. Multiplexed signals: {id:04x}_{name}/{mux_value}
+
         :param msg: Received CAN message
         """
-        # Update metrics
         self.metrics["messages_received"] += 1
         self.metrics["bytes_received"] += len(msg.data)
 
-        # Validate message
         max_dlc = 64 if self.config.get("fd_mode", False) else 8
         if msg.dlc > max_dlc:
             logger.warning(
@@ -384,54 +332,24 @@ class CanCodec(can.Listener):
             return
 
         try:
-            # Decode message using DBC
             decoded = self.db.decode_message(msg.arbitration_id, msg.data)
 
-            # Get message definition
             dbc_msg = self.messages_by_id.get(msg.arbitration_id)
             if not dbc_msg:
                 logger.debug(f"Unknown message ID: {msg.arbitration_id:04x}")
                 self.metrics["unknown_messages"] += 1
                 return
 
-            # Convert values to native Python types (handle NamedSignalValue)
-            signals = {}
-            for signal_name, value in decoded.items():
-                if isinstance(value, (int, float)):
-                    signals[signal_name] = value
-                else:
-                    # NamedSignalValue - convert to integer enum value
-                    # The value table will provide the string representation
-                    signal_def = dbc_msg.get_signal_by_name(signal_name)
-                    signals[signal_name] = int(signal_def.conversion.choice_to_number(value))
+            # Get timestamp once for all emissions
+            timestamp_ns = self.get_timestamp(msg.timestamp)
 
-            # Emit trace event with smart timestamp handling
-            # Check if we have a cached event logger, generate schema on first encounter
-            event_logger = self._event_loggers.get(msg.arbitration_id)
-            if event_logger is None:
-                # First time seeing this message - generate schema and cache logger
-                event_logger = self._generate_schema_for_message(dbc_msg)
-                if event_logger:
-                    self._event_loggers[msg.arbitration_id] = event_logger
+            # Emit base signals (non-multiplexed signals + multiplexer signal if present)
+            self._emit_base_signals(dbc_msg, decoded, timestamp_ns)
 
-            if event_logger:
-                try:
-                    # Use get_timestamp() helper to handle boot-relative timestamps
-                    timestamp_ns = self.get_timestamp(msg.timestamp)
-                    if timestamp_ns is not None:
-                        event_logger.log_at(timestamp_ns, **signals)
-                    else:
-                        event_logger.log(**signals)
-                    logger.debug(f"Decoded {dbc_msg.name}: {signals}")
-                    self.metrics["messages_decoded"] += 1
-                except (OverflowError, ValueError) as emit_error:
-                    # Signal value out of range for trace event field type - skip emission
-                    logger.debug(
-                        "Skipping trace emission for %s due to value overflow: %s",
-                        dbc_msg.name,
-                        emit_error,
-                    )
-                    self.metrics["decode_errors"] += 1
+            if dbc_msg.is_multiplexed():
+                self._emit_multiplexed_signals(dbc_msg, decoded, timestamp_ns)
+
+            self.metrics["messages_decoded"] += 1
 
         except KeyError:
             logger.debug(f"Message ID {msg.arbitration_id:04x} not in DBC")
@@ -442,6 +360,194 @@ class CanCodec(can.Listener):
         except Exception as e:
             logger.debug(f"Error decoding message {msg.arbitration_id:04x}: {e}")
             self.metrics["decode_errors"] += 1
+
+    def _generate_all_schemas(self) -> None:
+        """Generate trace event schemas for all messages in DBC at init time.
+
+        This provides visibility into what messages are defined, even before they're received.
+        For multiplexed messages, generates schemas for all possible mux values.
+        """
+        for dbc_msg in self.db.messages:
+            self._generate_base_schema(dbc_msg)
+
+            if dbc_msg.is_multiplexed():
+                self._generate_mux_schemas(dbc_msg)
+
+    def _generate_base_schema(self, dbc_msg: cantools.database.can.Message) -> None:
+        """Generate schema for base (non-multiplexed) signals.
+
+        :param dbc_msg: DBC message definition
+        """
+        cache_key = dbc_msg.frame_id
+        event_name = self._get_event_name(dbc_msg)
+        base_signals = [sig for sig in dbc_msg.signals if not sig.multiplexer_ids]
+
+        if base_signals:
+            fields = [cantools_signal_to_trace_metadata(sig) for sig in base_signals]
+            event = self.source.add_event(event_name, fields)
+
+            for sig in base_signals:
+                if sig.choices:
+                    value_table = {int(k): str(v) for k, v in sig.choices.items()}
+                    self.source.add_value_table(event_name, sig.name, value_table)
+
+            self._events[cache_key] = event
+            logger.debug(f"Generated base schema: '{event_name}' ({len(fields)} signals)")
+
+    def _generate_mux_schemas(self, dbc_msg: cantools.database.can.Message) -> None:
+        """Generate schemas for all multiplexed signal variants.
+
+        :param dbc_msg: DBC message definition
+        """
+        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
+        if not mux_signal:
+            return
+
+        # Collect all unique mux values from the signals
+        mux_values: set[int] = set()
+        for sig in dbc_msg.signals:
+            if sig.multiplexer_ids:
+                mux_values.update(sig.multiplexer_ids)
+
+        for mux_value_int in sorted(mux_values):
+            # Use enum name if available, otherwise stringified integer
+            if mux_signal.choices and mux_value_int in mux_signal.choices:
+                mux_value_str = mux_signal.choices[mux_value_int]
+            else:
+                mux_value_str = str(mux_value_int)
+
+            cache_key = (dbc_msg.frame_id, mux_value_int)
+            event_name = f"{self._get_event_name(dbc_msg)}/{mux_value_str}"
+            mux_signals = [
+                sig for sig in dbc_msg.signals if mux_value_int in (sig.multiplexer_ids or [])
+            ]
+
+            if mux_signals:
+                fields = [cantools_signal_to_trace_metadata(sig) for sig in mux_signals]
+                event = self.source.add_event(event_name, fields)
+
+                for sig in mux_signals:
+                    if sig.choices:
+                        value_table = {int(k): str(v) for k, v in sig.choices.items()}
+                        self.source.add_value_table(event_name, sig.name, value_table)
+
+                self._events[cache_key] = event
+                logger.debug(f"Generated mux schema: '{event_name}' ({len(fields)} signals)")
+
+    def _emit_signals(
+        self,
+        event: Any,
+        signals: dict[str, int | float],
+        timestamp_ns: int | None,
+        context: str,
+    ) -> None:
+        """Emit trace event with error handling.
+
+        :param event: Event to emit
+        :param signals: Signal name->value mapping
+        :param timestamp_ns: Timestamp in nanoseconds, or None
+        :param context: Context string for logging (e.g., message name)
+        """
+        try:
+            if timestamp_ns is not None:
+                event.log_at(timestamp_ns, **signals)
+            else:
+                event.log(**signals)
+            logger.debug(f"Emitted {context}: {signals}")
+        except (OverflowError, ValueError) as e:
+            logger.debug(f"Skipping emission for {context}: {e}")
+            self.metrics["decode_errors"] += 1
+
+    def _emit_base_signals(
+        self, dbc_msg: cantools.database.can.Message, decoded: dict, timestamp_ns: int | None
+    ) -> None:
+        """Emit base (non-multiplexed) signals including multiplexer.
+
+        :param dbc_msg: DBC message definition
+        :param decoded: Decoded signal values
+        :param timestamp_ns: Timestamp in nanoseconds, or None
+        """
+        cache_key = dbc_msg.frame_id
+        event = self._events.get(cache_key)
+
+        if event:
+            signals = self._convert_signals(dbc_msg, decoded, base_only=True)
+            self._emit_signals(event, signals, timestamp_ns, f"base:{dbc_msg.name}")
+
+    def _emit_multiplexed_signals(
+        self,
+        dbc_msg: cantools.database.can.Message,
+        decoded: dict,
+        timestamp_ns: int | None,
+    ) -> None:
+        """Emit multiplexed signals for the active mux value.
+
+        :param dbc_msg: DBC message definition
+        :param decoded: Decoded signal values
+        :param timestamp_ns: Timestamp in nanoseconds, or None
+        """
+        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
+        if not mux_signal:
+            return
+
+        mux_value = decoded.get(mux_signal.name)
+        if mux_value is None:
+            return
+
+        if isinstance(mux_value, (int, float)):
+            mux_value_int = int(mux_value)
+        else:
+            # NamedSignalValue - get integer representation
+            mux_value_int = int(mux_signal.conversion.choice_to_number(mux_value))
+
+        cache_key = (dbc_msg.frame_id, mux_value_int)
+        event = self._events.get(cache_key)
+
+        if event:
+            # Get string representation for debug logging
+            if isinstance(mux_value, (int, float)):
+                mux_value_str = str(mux_value_int)
+            else:
+                mux_value_str = str(mux_value)
+
+            signals = self._convert_signals(dbc_msg, decoded, mux_value=mux_value_int)
+            self._emit_signals(event, signals, timestamp_ns, f"mux:{dbc_msg.name}/{mux_value_str}")
+        # Note: Silently skip undefined mux values - this is valid during testing/development
+
+    def _convert_signals(
+        self,
+        dbc_msg: cantools.database.can.Message,
+        decoded: dict,
+        base_only: bool = False,
+        mux_value: int | None = None,
+    ) -> dict:
+        """Convert decoded signals to native Python types, filtered by category.
+
+        :param dbc_msg: DBC message definition
+        :param decoded: Decoded signal values from cantools
+        :param base_only: If True, only include base (non-multiplexed) signals
+        :param mux_value: If set, only include signals for this mux value
+        :return: Dictionary of signal_name -> value
+        """
+        signals = {}
+        for signal_name, value in decoded.items():
+            signal_def = dbc_msg.get_signal_by_name(signal_name)
+
+            if base_only:
+                if signal_def.multiplexer_ids:
+                    continue
+            elif mux_value is not None and (
+                not signal_def.multiplexer_ids or mux_value not in signal_def.multiplexer_ids
+            ):
+                continue
+
+            if isinstance(value, (int, float)):
+                signals[signal_name] = value
+            else:
+                # NamedSignalValue - convert to integer
+                signals[signal_name] = int(signal_def.conversion.choice_to_number(value))
+
+        return signals
 
     async def _periodic_send_task(
         self, msg_id: int, data: bytes, period: float, task_name: str, extended_id: bool = False
