@@ -1,8 +1,8 @@
 [project]
 name = "zelos-extension-can"
 version = "0.1.0"
-description = "Zelos CAN"
-authors = [{ name = "taylor keairns", email = "taylor@zeloscloud.io" }]
+description = "Implements a CAN extension for the Zelos App"
+authors = [{ name = "zeloscloud", email = "help@zeloscloud.io" }]
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -18,23 +18,23 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+    "cantools>=40.7.1",
+    "python-can>=4.6.1",
     "zelos-sdk",
-    "python-can",
-    "cantools",
 ]
 
 [project.urls]
-Homepage = "https://github.com/tkeairns/zelos-extension-can"
-Repository = "https://github.com/tkeairns/zelos-extension-can"
-Issues = "https://github.com/tkeairns/zelos-extension-can/issues"
+Homepage = "https://github.com/zeloscloud/zelos-extension-can"
+Repository = "https://github.com/zeloscloud/zelos-extension-can"
+Issues = "https://github.com/zeloscloud/zelos-extension-can/issues"
 Documentation = "https://docs.zeloscloud.io/extensions"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4.2",
     "pre-commit>=4.3.0",
-    "ruff>=0.13.3",
-    "tomli>=2.0.0; python_version < '3.11'",
+    "ruff>=0.14.2",
+    "tomli>=2.3.0; python_version < '3.11'",
 ]
 
 [build-system]

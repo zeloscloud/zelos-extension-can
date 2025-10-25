@@ -13,8 +13,10 @@ import zelos_sdk
 from zelos_sdk.actions import action
 
 from .demo.demo import run_demo_ev_simulation
-from .schema_utils import cantools_signal_to_trace_metadata
-from .utils.config import data_url_to_file
+from .utils import (
+    cantools_signal_to_trace_metadata,
+    data_url_to_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -397,7 +399,7 @@ class CanCodec(can.Listener):
             # Convert values to native Python types (handle NamedSignalValue)
             signals = {}
             for signal_name, value in decoded.items():
-                if isinstance(value, (int, float)):
+                if isinstance(value, int | float):
                     signals[signal_name] = value
                 else:
                     # NamedSignalValue - convert to integer enum value

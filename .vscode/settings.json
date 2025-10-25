@@ -31,5 +31,6 @@
   },
   "editor.rulers": [
     100
-  ]
+  ],
+  "cursorpyright.analysis.typeCheckingMode": "basic"
 }
