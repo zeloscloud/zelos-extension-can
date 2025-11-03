@@ -1,4 +1,4 @@
-# Zelos Extension Can
+# Zelos Extension for Controller Area Network (CAN)
 
 > Zelos CAN
 

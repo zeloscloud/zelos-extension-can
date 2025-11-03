@@ -517,6 +517,18 @@ wheels = [
 ]
 
 [[package]]
+name = "tqdm"
+version = "4.67.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "platform_system == 'Windows'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/4b/29b4ef32e036bb34e4ab51796dd745cdba7ed47ad142a9f4a1eb8e0c744d/tqdm-4.67.1.tar.gz", hash = "sha256:f8aef9c52c08c13a65f30ea34f4e5aac3fd1a34959879d7e59e63027286627f2", size = 169737 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2", size = 78540 },
+]
+
+[[package]]
 name = "typing-extensions"
 version = "4.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -609,6 +621,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cli = [
+    { name = "tqdm" },
+]
 dev = [
     { name = "pre-commit" },
     { name = "pytest" },
@@ -623,22 +638,25 @@ requires-dist = [
     { name = "python-can" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.13.3" },
     { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "zelos-sdk" },
+    { name = "tqdm", marker = "extra == 'cli'", specifier = ">=4.0.0" },
+    { name = "zelos-sdk", directory = "../src/api/py/zelos-sdk" },
 ]
 
 [[package]]
 name = "zelos-sdk"
 version = "0.0.7"
-source = { registry = "https://pypi.org/simple" }
+source = { directory = "../src/api/py/zelos-sdk" }
 dependencies = [
     { name = "colorama" },
     { name = "jsonschema" },
     { name = "pytest" },
     { name = "rich" },
 ]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/f1/1ea819b51cf080b99fce78d274b8ce38bf1a445714850d841299dead337e/zelos_sdk-0.0.7-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:82b1ed8b3bdb7e0df9898e3b3c5b9b490867b2f21f9c5ff53afdbbffd65fbca0", size = 11328820 },
-    { url = "https://files.pythonhosted.org/packages/eb/65/feb32d72a84622aba663fadb7a94cea94681f7db685d6c9c801a5d16f32d/zelos_sdk-0.0.7-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:797ed51ec056a62d0a4c825e345ed48d9b78f70aa9cae049f9ff1c14977dc44a", size = 15577706 },
-    { url = "https://files.pythonhosted.org/packages/b1/1b/c2710182be4fc5314001fd6596010ff7274d82bfdf0506f051cbe8bc937c/zelos_sdk-0.0.7-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fb7b19272ffba54f2109ef36afa4bffb5e8d39e2fcf0117ece6765e8fb1f0b43", size = 15903551 },
-    { url = "https://files.pythonhosted.org/packages/9e/cb/2da27960bee53b3f43bd517d8daa5a724a1ec5f526b1f5e31059726876e8/zelos_sdk-0.0.7-cp310-abi3-win_amd64.whl", hash = "sha256:cb15103977d1e1befe341ee9631148b56dd77bb89ca648f7742b17ef8a7acb7b", size = 10647315 },
+
+[package.metadata]
+requires-dist = [
+    { name = "colorama" },
+    { name = "jsonschema", specifier = ">=4.21.1" },
+    { name = "pytest", specifier = ">=8.1.0" },
+    { name = "rich" },
 ]

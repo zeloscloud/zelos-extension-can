@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Zelos CAN extension - CAN bus monitoring and DBC decoding."""
+"""Zelos CAN extension - CAN bus monitoring and database decoding."""
 
 import argparse
 import logging
@@ -20,9 +20,6 @@ DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.d
 # Configure logging - INFO level prevents debug logs from being sent to backend
 logging.basicConfig(level=logging.INFO)
 
-# Initialize SDK
-zelos_sdk.init(name="can", actions=True)
-
 # Add the built-in handler to capture logs at INFO level and above
 # (DEBUG logs won't be sent to backend to avoid duplicate trace data)
 handler = TraceLoggingHandler("can_log")
@@ -42,6 +39,16 @@ args = parser.parse_args()
 # Load and validate configuration
 config = load_config()
 
+# Apply log level from config
+log_level_str = config.get("log_level", "INFO")
+try:
+    log_level = getattr(logging, log_level_str)
+    logging.getLogger().setLevel(log_level)
+    logger.info(f"Log level set to: {log_level_str}")
+except AttributeError:
+    logger.warning(f"Invalid log level '{log_level_str}', using INFO")
+    logging.getLogger().setLevel(logging.INFO)
+
 # Override with demo mode if requested via CLI flag
 if args.demo:
     logger.info("Demo mode enabled via --demo flag")
@@ -53,7 +60,8 @@ if config.get("interface") == "demo":
     config["demo_mode"] = True
     config["interface"] = "virtual"
     config["channel"] = "vcan0"
-    config["dbc_file"] = str(DEMO_DBC_PATH)
+    config["database_file"] = str(DEMO_DBC_PATH)
+    config["receive_own_messages"] = True  # Required for demo mode to receive simulated messages
 
 # Handle "other" interface - merge config_json into main config
 if config.get("interface") == "other":
@@ -91,7 +99,10 @@ if errors := validate_config(config):
 codec = CanCodec(config)
 
 # Register interactive actions
-zelos_sdk.actions_registry.register(codec)
+zelos_sdk.actions_registry.register(codec, "can")
+
+# Initialize SDK
+zelos_sdk.init(name="can", log_level="info", actions=True)
 
 
 def shutdown_handler(signum: int, frame: FrameType | None) -> None:

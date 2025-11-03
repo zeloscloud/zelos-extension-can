@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "zelos-sdk",
+    "zelos-sdk==0.0.8a0",
     "python-can",
     "cantools",
 ]
@@ -30,6 +30,9 @@ Issues = "https://github.com/tkeairns/zelos-extension-can/issues"
 Documentation = "https://docs.zeloscloud.io/extensions"
 
 [project.optional-dependencies]
+cli = [
+    "tqdm>=4.0.0",
+]
 dev = [
     "pytest>=8.4.2",
     "pre-commit>=4.3.0",

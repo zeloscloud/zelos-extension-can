@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "title": "CAN Bus Configuration",
-  "description": "Configure CAN interface and DBC file",
+  "description": "Configure CAN interface and database file",
   "properties": {
     "interface": {
       "type": "string",
@@ -10,6 +10,7 @@
       "description": "CAN interface type (e.g. Linux: socketcan, macOS/Windows: pcan)",
       "enum": [
         "demo",
+        "virtual",
         "socketcan",
         "pcan",
         "kvaser",
@@ -30,8 +31,71 @@
               "enum": [
                 "demo"
               ]
+            },
+            "log_level": {
+              "type": "string",
+              "title": "Log Level",
+              "description": "Set the logging verbosity level",
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+              ],
+              "default": "INFO"
             }
           }
+        },
+        {
+          "properties": {
+            "interface": {
+              "enum": [
+                "virtual"
+              ]
+            },
+            "channel": {
+              "type": "string",
+              "title": "Channel",
+              "description": "Virtual CAN channel identifier (e.g. vcan0)",
+              "default": "vcan0"
+            },
+            "database_file": {
+              "type": "string",
+              "format": "data-url",
+              "title": "CAN Database File (.dbc)",
+              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
+            },
+            "receive_own_messages": {
+              "type": "boolean",
+              "title": "Receive Own Messages",
+              "description": "Receive messages transmitted by this interface",
+              "default": true
+            },
+            "log_raw_frames": {
+              "type": "boolean",
+              "title": "Log Raw CAN Frames",
+              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+              "default": false
+            },
+            "log_level": {
+              "type": "string",
+              "title": "Log Level",
+              "description": "Set the logging verbosity level",
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+              ],
+              "default": "INFO"
+            }
+          },
+          "required": [
+            "channel",
+            "database_file"
+          ]
         },
         {
           "properties": {
@@ -46,11 +110,11 @@
               "description": "CAN channel identifier",
               "default": "can0"
             },
-            "dbc_file": {
+            "database_file": {
               "type": "string",
               "format": "data-url",
-              "title": "DBC File",
-              "description": "Upload CAN database file (.dbc)"
+              "title": "CAN Database File (.dbc)",
+              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
             },
             "fd_mode": {
               "type": "boolean",
@@ -69,15 +133,40 @@
               ],
               "default": "auto"
             },
+            "receive_own_messages": {
+              "type": "boolean",
+              "title": "Receive Own Messages",
+              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+              "default": true
+            },
+            "log_raw_frames": {
+              "type": "boolean",
+              "title": "Log Raw CAN Frames",
+              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+              "default": false
+            },
             "config_json": {
               "type": "string",
               "title": "Advanced Configuration (JSON)",
               "description": "Additional python-can Bus() kwargs as JSON object"
+            },
+            "log_level": {
+              "type": "string",
+              "title": "Log Level",
+              "description": "Set the logging verbosity level",
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+              ],
+              "default": "INFO"
             }
           },
           "required": [
             "channel",
-            "dbc_file"
+            "database_file"
           ],
           "dependencies": {
             "fd_mode": {
@@ -133,11 +222,11 @@
               "description": "CAN channel identifier",
               "default": "PCAN_USBBUS1"
             },
-            "dbc_file": {
+            "database_file": {
               "type": "string",
               "format": "data-url",
-              "title": "DBC File",
-              "description": "Upload CAN database file (.dbc)"
+              "title": "CAN Database File (.dbc)",
+              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
             },
             "bitrate": {
               "type": "integer",
@@ -168,15 +257,40 @@
               ],
               "default": "auto"
             },
+            "receive_own_messages": {
+              "type": "boolean",
+              "title": "Receive Own Messages",
+              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+              "default": true
+            },
+            "log_raw_frames": {
+              "type": "boolean",
+              "title": "Log Raw CAN Frames",
+              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+              "default": false
+            },
             "config_json": {
               "type": "string",
               "title": "Advanced Configuration (JSON)",
               "description": "Additional python-can Bus() kwargs as JSON object"
+            },
+            "log_level": {
+              "type": "string",
+              "title": "Log Level",
+              "description": "Set the logging verbosity level",
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+              ],
+              "default": "INFO"
             }
           },
           "required": [
             "channel",
-            "dbc_file",
+            "database_file",
             "bitrate"
           ],
           "dependencies": {
@@ -233,11 +347,11 @@
               "description": "CAN channel identifier",
               "default": "0"
             },
-            "dbc_file": {
+            "database_file": {
               "type": "string",
               "format": "data-url",
-              "title": "DBC File",
-              "description": "Upload CAN database file (.dbc)"
+              "title": "CAN Database File (.dbc)",
+              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
             },
             "bitrate": {
               "type": "integer",
@@ -268,15 +382,40 @@
               ],
               "default": "auto"
             },
+            "receive_own_messages": {
+              "type": "boolean",
+              "title": "Receive Own Messages",
+              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+              "default": true
+            },
+            "log_raw_frames": {
+              "type": "boolean",
+              "title": "Log Raw CAN Frames",
+              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+              "default": false
+            },
             "config_json": {
               "type": "string",
               "title": "Advanced Configuration (JSON)",
               "description": "Additional python-can Bus() kwargs as JSON object"
+            },
+            "log_level": {
+              "type": "string",
+              "title": "Log Level",
+              "description": "Set the logging verbosity level",
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+              ],
+              "default": "INFO"
             }
           },
           "required": [
             "channel",
-            "dbc_file",
+            "database_file",
             "bitrate"
           ],
           "dependencies": {
@@ -333,11 +472,11 @@
               "description": "CAN channel identifier",
               "default": "0"
             },
-            "dbc_file": {
+            "database_file": {
               "type": "string",
               "format": "data-url",
-              "title": "DBC File",
-              "description": "Upload CAN database file (.dbc)"
+              "title": "CAN Database File (.dbc)",
+              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
             },
             "bitrate": {
               "type": "integer",
@@ -368,15 +507,40 @@
               ],
               "default": "auto"
             },
+            "receive_own_messages": {
+              "type": "boolean",
+              "title": "Receive Own Messages",
+              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+              "default": true
+            },
+            "log_raw_frames": {
+              "type": "boolean",
+              "title": "Log Raw CAN Frames",
+              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+              "default": false
+            },
             "config_json": {
               "type": "string",
               "title": "Advanced Configuration (JSON)",
               "description": "Additional python-can Bus() kwargs as JSON object"
+            },
+            "log_level": {
+              "type": "string",
+              "title": "Log Level",
+              "description": "Set the logging verbosity level",
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+              ],
+              "default": "INFO"
             }
           },
           "required": [
             "channel",
-            "dbc_file",
+            "database_file",
             "bitrate"
           ],
           "dependencies": {
@@ -427,20 +591,33 @@
                 "other"
               ]
             },
-            "dbc_file": {
+            "database_file": {
               "type": "string",
               "format": "data-url",
-              "title": "DBC File",
-              "description": "Upload CAN database file (.dbc)"
+              "title": "CAN Database File (.dbc)",
+              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
             },
             "config_json": {
               "type": "string",
               "title": "Advanced Configuration (JSON)",
               "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"slcan\", \"channel\": \"/dev/ttyUSB0\", \"bitrate\": 500000}"
+            },
+            "log_level": {
+              "type": "string",
+              "title": "Log Level",
+              "description": "Set the logging verbosity level",
+              "enum": [
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+                "CRITICAL"
+              ],
+              "default": "INFO"
             }
           },
           "required": [
-            "dbc_file",
+            "database_file",
             "config_json"
           ]
         }

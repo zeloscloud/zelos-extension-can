@@ -24,7 +24,7 @@ def mock_config(test_dbc_path):
         "interface": "virtual",
         "channel": "vcan0",
         "bitrate": 500000,
-        "dbc_file": test_dbc_path,
+        "database_file": test_dbc_path,
     }
 
 
@@ -164,14 +164,14 @@ class TestConfiguration:
 
     def test_requires_interface(self, test_dbc_path):
         """Test interface is required."""
-        config = {"channel": "can0", "dbc_file": test_dbc_path}
+        config = {"channel": "can0", "database_file": test_dbc_path}
         with pytest.raises(KeyError), patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
             codec.start()
 
     def test_requires_channel(self, test_dbc_path):
         """Test channel is required."""
-        config = {"interface": "virtual", "dbc_file": test_dbc_path}
+        config = {"interface": "virtual", "database_file": test_dbc_path}
         with pytest.raises(KeyError), patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
             codec.start()
@@ -446,9 +446,13 @@ class TestErrorHandling:
 
     def test_handles_missing_dbc_file(self, test_dbc_path):
         """Test proper error when DBC file doesn't exist."""
-        config = {"interface": "virtual", "channel": "vcan0", "dbc_file": "/nonexistent/file.dbc"}
+        config = {
+            "interface": "virtual",
+            "channel": "vcan0",
+            "database_file": "/nonexistent/file.dbc",
+        }
         with (
-            pytest.raises(FileNotFoundError, match="DBC file not found"),
+            pytest.raises(FileNotFoundError, match="CAN database file not found"),
             patch("zelos_sdk.TraceSource"),
         ):
             CanCodec(config)
@@ -458,9 +462,9 @@ class TestErrorHandling:
         bad_dbc = tmp_path / "bad.dbc"
         bad_dbc.write_text("not a valid dbc file")
 
-        config = {"interface": "virtual", "channel": "vcan0", "dbc_file": str(bad_dbc)}
+        config = {"interface": "virtual", "channel": "vcan0", "database_file": str(bad_dbc)}
         with (
-            pytest.raises(ValueError, match="Failed to load DBC file"),
+            pytest.raises(ValueError, match="Failed to load database file"),
             patch("zelos_sdk.TraceSource"),
         ):
             CanCodec(config)
@@ -488,15 +492,15 @@ class TestConfigValidation:
         assert len(errors) == 3
         assert any("interface" in e for e in errors)
         assert any("channel" in e for e in errors)
-        assert any("dbc_file" in e for e in errors)
+        assert any("database_file" in e for e in errors)
 
     def test_validate_missing_dbc_file(self):
         """Test validation catches missing DBC file."""
         from zelos_extension_can.utils.config import validate_config
 
-        config = {"interface": "virtual", "channel": "vcan0", "dbc_file": "/nonexistent.dbc"}
+        config = {"interface": "virtual", "channel": "vcan0", "database_file": "/nonexistent.dbc"}
         errors = validate_config(config)
-        assert any("DBC file not found" in e for e in errors)
+        assert any("CAN database file not found" in e for e in errors)
 
     def test_validate_invalid_bitrate(self, test_dbc_path):
         """Test validation catches invalid bitrate."""
@@ -505,7 +509,7 @@ class TestConfigValidation:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "dbc_file": test_dbc_path,
+            "database_file": test_dbc_path,
             "bitrate": 999999,
         }
         errors = validate_config(config)
@@ -518,7 +522,7 @@ class TestConfigValidation:
         config = {
             "interface": "socketcan",
             "channel": "invalid_name",
-            "dbc_file": test_dbc_path,
+            "database_file": test_dbc_path,
         }
         errors = validate_config(config)
         assert any("socketcan interface requires" in e for e in errors)
@@ -530,7 +534,7 @@ class TestConfigValidation:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "dbc_file": test_dbc_path,
+            "database_file": test_dbc_path,
             # No bitrate
         }
         errors = validate_config(config)
@@ -543,7 +547,7 @@ class TestConfigValidation:
         config = {
             "interface": "socketcan",
             "channel": "can0",
-            "dbc_file": test_dbc_path,
+            "database_file": test_dbc_path,
             # No bitrate
         }
         errors = validate_config(config)
@@ -556,7 +560,7 @@ class TestConfigValidation:
         config = {
             "interface": "pcan",
             "channel": "PCAN_USBBUS1",
-            "dbc_file": test_dbc_path,
+            "database_file": test_dbc_path,
             # No bitrate
         }
         errors = validate_config(config)
@@ -570,7 +574,7 @@ class TestConfigValidation:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "dbc_file": "data:application/octet-stream;base64,VkVSU0lPTiA=",  # "VERSION "
+            "database_file": "data:application/octet-stream;base64,VkVSU0lPTiA=",  # "VERSION "
         }
         errors = validate_config(config)
         assert len(errors) == 0  # Should accept valid data-url
@@ -584,7 +588,7 @@ class TestConfigValidation:
             config = {
                 "interface": "virtual",
                 "channel": "vcan0",
-                "dbc_file": "/path/to/file.dbc",
+                "database_file": "/path/to/file.dbc",
                 "timestamp_mode": mode,
             }
             errors = validate_config(config)
@@ -595,7 +599,7 @@ class TestConfigValidation:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "dbc_file": "/path/to/file.dbc",
+            "database_file": "/path/to/file.dbc",
             "timestamp_mode": "invalid_mode",
         }
         errors = validate_config(config)
@@ -610,7 +614,7 @@ class TestConfigValidation:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "dbc_file": "/path/to/file.dbc",
+            "database_file": "/path/to/file.dbc",
             "config_json": '{"app_name": "MyApp", "rx_queue_size": 1000}',
         }
         errors = validate_config(config)
