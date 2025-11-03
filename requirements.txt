@@ -42,5 +42,5 @@ typing-extensions==4.15.0
     # via python-can
 wrapt==1.17.3
     # via python-can
-zelos-sdk==0.0.6
+zelos-sdk==0.0.7
     # via zelos-extension-can (pyproject.toml)
