@@ -15,11 +15,12 @@ def get_platform_defaults() -> dict[str, str]:
     return {"interface": "demo"}
 
 
-def data_url_to_file(data_url: str, output_path: str) -> str:
+def data_url_to_file(data_url: str, output_path: str, detect_extension: bool = False) -> str:
     """Convert data-url (base64 encoded file) to a file on disk.
 
     :param data_url: Data URL in format "data:mime/type;base64,<encoded_data>"
     :param output_path: Path where to save the decoded file
+    :param detect_extension: If True, try to detect file extension from content
     :return: Path to the saved file
     """
     if not data_url or not data_url.startswith("data:"):
@@ -37,8 +38,27 @@ def data_url_to_file(data_url: str, output_path: str) -> str:
     except Exception as e:
         raise ValueError(f"Failed to decode base64 data: {e}") from e
 
-    # Write to file
+    # If detect_extension is True, try to detect file format from content
     output_path_obj = Path(output_path)
+    if detect_extension:
+        # Detect CAN database file format from content
+        content_start = file_bytes[:100].decode("latin-1", errors="ignore")
+        if content_start.startswith("<?xml") or "<AUTOSAR" in content_start:
+            # ARXML file
+            output_path_obj = output_path_obj.with_suffix(".arxml")
+        elif content_start.startswith("VERSION"):
+            # DBC file
+            output_path_obj = output_path_obj.with_suffix(".dbc")
+        elif "<NetworkDefinition" in content_start or "<KCD" in content_start:
+            # KCD file
+            output_path_obj = output_path_obj.with_suffix(".kcd")
+        elif "FormatVersion" in content_start and "TitleBlock" in content_start:
+            # SYM file
+            output_path_obj = output_path_obj.with_suffix(".sym")
+        else:
+            # Default to .dbc if unknown
+            output_path_obj = output_path_obj.with_suffix(".dbc")
+
     output_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
     with Path.open(output_path_obj, "wb") as f:
@@ -58,19 +78,19 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     # Check demo mode first
     demo_mode = config.get("demo_mode", False)
 
-    # In demo mode, interface/channel/dbc_file are not required
+    # In demo mode, interface/channel/database_file are not required
     if not demo_mode:
         # Check required fields for normal mode
         if "interface" not in config:
             errors.append("Missing required field: interface")
         if "channel" not in config:
             errors.append("Missing required field: channel")
-        if "dbc_file" not in config:
-            errors.append("Missing required field: dbc_file")
+        if "database_file" not in config:
+            errors.append("Missing required field: database_file")
 
-    # Validate DBC file (can be data-url or plain file path)
-    if "dbc_file" in config:
-        dbc_value = config["dbc_file"]
+    # Validate CAN database file (can be data-url or plain file path)
+    if "database_file" in config:
+        dbc_value = config["database_file"]
 
         # If it's a data-url (uploaded file), validate it's decodable
         if dbc_value.startswith("data:"):
@@ -78,13 +98,13 @@ def validate_config(config: dict[str, Any]) -> list[str]:
                 header, encoded = dbc_value.split(",", 1)
                 base64.b64decode(encoded[:100])  # Just validate first 100 chars
             except Exception as e:
-                errors.append(f"Invalid DBC file upload: {e}")
+                errors.append(f"Invalid database file upload: {e}")
         else:
             # It's a plain file path - validate it exists
             if not Path(dbc_value).exists():
-                errors.append(f"DBC file not found: {dbc_value}")
-            elif not dbc_value.endswith((".dbc", ".DBC")):
-                errors.append(f"DBC file must have .dbc extension: {dbc_value}")
+                errors.append(f"CAN database file not found: {dbc_value}")
+            elif not dbc_value.endswith((".dbc", ".DBC", ".arxml", ".kcd", ".sym")):
+                errors.append(f"Database file should be .dbc, .arxml, .kcd, or .sym: {dbc_value}")
 
     # Validate interface-specific requirements (skip in demo mode)
     if not demo_mode:

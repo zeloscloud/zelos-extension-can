@@ -1,4 +1,4 @@
-"""CAN bus codec with DBC decoding and transmission."""
+"""CAN bus codec with database decoding and transmission."""
 
 import asyncio
 import logging
@@ -28,14 +28,18 @@ class TimestampMode(IntEnum):
 
 
 class CanCodec(can.Listener):
-    """CAN bus monitor with DBC decoding and periodic transmission support."""
+    """CAN bus monitor with database decoding and periodic transmission support."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self, config: dict[str, Any], namespace: zelos_sdk.TraceNamespace | None = None
+    ) -> None:
         """Initialize CAN codec.
 
-        :param config: Configuration dictionary with interface, channel, dbc_file
+        :param config: Configuration dictionary with interface, channel, database_file
+        :param namespace: Optional isolated TraceNamespace for the TraceSource
         """
         self.config = config
+        self.namespace = namespace
         self.running = False
         self.last_message_time = time.time()
         self.start_time = time.time()
@@ -59,27 +63,51 @@ class CanCodec(can.Listener):
         self.demo_mode = config.get("demo_mode", False)
         self.demo_task: asyncio.Task | None = None
 
-        # Load and validate DBC file (handle data-url or plain file path)
-        dbc_value = config["dbc_file"]
+        # Load and validate database file (handle data-url or plain file path)
+        database_value = config["database_file"]
 
-        if dbc_value.startswith("data:"):
-            logger.info("Extracting uploaded DBC file from data-url")
-            dbc_path = data_url_to_file(dbc_value, ".uploaded.dbc")
+        if database_value.startswith("data:"):
+            logger.info("Extracting uploaded database file from data-url")
+            database_path = data_url_to_file(database_value, ".uploaded", detect_extension=True)
         else:
-            dbc_path = dbc_value
+            database_path = database_value
 
-        if not Path(dbc_path).exists():
-            raise FileNotFoundError(f"DBC file not found: {dbc_path}")
+        if not Path(database_path).exists():
+            raise FileNotFoundError(f"CAN database file not found: {database_path}")
 
-        logger.info(f"Loading DBC file: {dbc_path}")
+        # Store the resolved database file path for reuse in actions
+        self.database_file_path = database_path
+
+        logger.info(f"Loading CAN database file: {database_path}")
         try:
-            self.db = cantools.database.load_file(dbc_path)
-            logger.info(f"Loaded {len(self.db.messages)} messages from DBC")
+            self.db = cantools.database.load_file(database_path)
+            logger.info(f"Loaded {len(self.db.messages)} messages from database")
         except Exception as e:
-            raise ValueError(f"Failed to load DBC file: {e}") from e
+            raise ValueError(f"Failed to load database file: {e}") from e
 
-        # Create trace source
-        self.source = zelos_sdk.TraceSource("can")
+        # Create trace source (in isolated namespace if provided)
+        if self.namespace:
+            self.source = zelos_sdk.TraceSource("can", namespace=self.namespace)
+            self.raw_source = zelos_sdk.TraceSource("can_raw", namespace=self.namespace)
+        else:
+            self.source = zelos_sdk.TraceSource("can")
+            self.raw_source = zelos_sdk.TraceSource("can_raw")
+
+        # Create raw CAN frame event schema (for log_raw_frames feature)
+        self.raw_event = self.raw_source.add_event(
+            "messages",
+            [
+                zelos_sdk.TraceEventFieldMetadata(
+                    name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
+                ),
+                zelos_sdk.TraceEventFieldMetadata(
+                    name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
+                ),
+                zelos_sdk.TraceEventFieldMetadata(
+                    name="data", data_type=zelos_sdk.DataType.Binary, unit=None
+                ),
+            ],
+        )
 
         # Build message lookup tables (handle duplicates permissively)
         self.messages_by_id: dict[int, cantools.db.can.Message] = {}
@@ -99,7 +127,15 @@ class CanCodec(can.Listener):
                 )
 
         self._generate_all_schemas()
-        logger.info(f"Generated {len(self._events)} event schemas from DBC")
+        logger.info(f"Generated {len(self._events)} event schemas from database")
+
+        # Log raw frame configuration
+        if self.config.get("log_raw_frames", False):
+            logger.info(
+                "Raw CAN frame logging is ENABLED - frames will be logged to 'can_raw' trace source"
+            )
+        else:
+            logger.info("Raw CAN frame logging is DISABLED")
 
         self.bus: Any = None
         self.periodic_tasks: dict[str, asyncio.Task] = {}
@@ -165,15 +201,19 @@ class CanCodec(can.Listener):
         bus_config = {
             "interface": self.config["interface"],
             "channel": self.config["channel"],
-            "receive_own_messages": True,  # Allow receiving own transmitted messages
         }
 
-        if self.config["interface"] != "virtual":
-            bus_config["bitrate"] = self.config.get("bitrate", 500000)
+        # Pass through optional bus config parameters if specified
+        if "receive_own_messages" in self.config:
+            bus_config["receive_own_messages"] = self.config["receive_own_messages"]
 
-        if self.config.get("fd_mode", False):
+        if "bitrate" in self.config:
+            bus_config["bitrate"] = self.config["bitrate"]
+
+        if "fd_mode" in self.config and self.config["fd_mode"]:
             bus_config["fd"] = True
-            bus_config["data_bitrate"] = self.config.get("data_bitrate", 2000000)
+            if "data_bitrate" in self.config:
+                bus_config["data_bitrate"] = self.config["data_bitrate"]
 
         # Merge additional config_json (advanced interface-specific options)
         if "config_json" in self.config and self.config["config_json"]:
@@ -207,7 +247,6 @@ class CanCodec(can.Listener):
         self.running = False
 
         if self.demo_task:
-            logger.info("Cancelling demo simulation task")
             self.demo_task.cancel()
             self.demo_task = None
 
@@ -324,6 +363,25 @@ class CanCodec(can.Listener):
         self.metrics["messages_received"] += 1
         self.metrics["bytes_received"] += len(msg.data)
 
+        # Emit raw CAN frame to separate trace source if enabled
+        if self.config.get("log_raw_frames", False):
+            timestamp_ns = self.get_timestamp(msg.timestamp)
+            if timestamp_ns is not None:
+                self.raw_event.log_at(
+                    timestamp_ns,
+                    arbitration_id=msg.arbitration_id,
+                    dlc=msg.dlc,
+                    data=bytes(msg.data),
+                )
+            else:
+                self.raw_event.log(
+                    arbitration_id=msg.arbitration_id, dlc=msg.dlc, data=bytes(msg.data)
+                )
+            logger.debug(
+                f"Emitted raw frame: ID=0x{msg.arbitration_id:04x}, DLC={msg.dlc}, "
+                f"data={msg.data.hex()}"
+            )
+
         max_dlc = 64 if self.config.get("fd_mode", False) else 8
         if msg.dlc > max_dlc:
             logger.warning(
@@ -346,13 +404,14 @@ class CanCodec(can.Listener):
             # Emit base signals (non-multiplexed signals + multiplexer signal if present)
             self._emit_base_signals(dbc_msg, decoded, timestamp_ns)
 
+            # Emit multiplexed signals if applicable
             if dbc_msg.is_multiplexed():
                 self._emit_multiplexed_signals(dbc_msg, decoded, timestamp_ns)
 
             self.metrics["messages_decoded"] += 1
 
         except KeyError:
-            logger.debug(f"Message ID {msg.arbitration_id:04x} not in DBC")
+            logger.debug(f"Message ID {msg.arbitration_id:04x} not in database")
             self.metrics["unknown_messages"] += 1
         except cantools.database.DecodeError as e:
             logger.debug(f"Decode error for {msg.arbitration_id:04x}: {e}")
@@ -362,7 +421,7 @@ class CanCodec(can.Listener):
             self.metrics["decode_errors"] += 1
 
     def _generate_all_schemas(self) -> None:
-        """Generate trace event schemas for all messages in DBC at init time.
+        """Generate trace event schemas for all messages in database at init time.
 
         This provides visibility into what messages are defined, even before they're received.
         For multiplexed messages, generates schemas for all possible mux values.
@@ -774,9 +833,9 @@ class CanCodec(can.Listener):
             "bytes_per_second": round(self.metrics["bytes_received"] / max(uptime, 1), 2),
         }
 
-    @action("List Messages", "List all messages in DBC")
+    @action("List Messages", "List all messages in database")
     def list_messages(self) -> dict[str, Any]:
-        """List all CAN messages in loaded DBC.
+        """List all CAN messages in loaded database file.
 
         :return: Dictionary of message information
         """
@@ -792,3 +851,132 @@ class CanCodec(can.Listener):
             )
 
         return {"count": len(messages), "messages": messages}
+
+    @action("Convert Trace File", "Convert CAN log to Zelos trace format")
+    @action.text(
+        "input_path",
+        title="Input File Path",
+        description="Path to CAN log file (.asc, .blf, .trc, etc.)",
+        widget="file_path_picker",
+    )
+    @action.text(
+        "output_path",
+        required=False,
+        default="",
+        title="Output File Path",
+        description="Output .trz file path (optional, defaults to input name with .trz)",
+        placeholder="e.g., /path/to/output.trz",
+    )
+    @action.text(
+        "database_path",
+        required=False,
+        default="",
+        title="CAN Database File (.dbc)",
+        description="Override database file (optional, defaults to extension's configured file)",
+        placeholder="Leave empty to use extension's database",
+        widget="file_path_picker",
+    )
+    @action.boolean("overwrite", required=False, default=False, title="Overwrite if exists")
+    def convert_trace_file(
+        self,
+        input_path: str,
+        output_path: str = "",
+        database_path: str = "",
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """Convert CAN trace file to Zelos format using CAN database file.
+
+        :param input_path: Path to CAN log file
+        :param output_path: Output .trz file path (optional)
+        :param database_path: Database file path (.dbc, .arxml, etc.) - defaults to extension's file
+        :param overwrite: Overwrite existing output file
+        :return: Conversion result with statistics
+        """
+        from pathlib import Path
+
+        from .converter import convert_can_trace
+
+        try:
+            # Validate input path
+            input_file = Path(input_path).expanduser().resolve()
+            if not input_file.exists():
+                return {
+                    "status": "error",
+                    "message": f"Input file not found: {input_file}",
+                }
+
+            # Determine database file to use (parameter override or extension's configured file)
+            if database_path:
+                # User provided a database file path or data URL - handle it
+                if database_path.startswith("data:"):
+                    from .utils.config import data_url_to_file
+
+                    database_file = Path(
+                        data_url_to_file(database_path, ".converter", detect_extension=True)
+                    )
+                else:
+                    database_file = Path(database_path).expanduser().resolve()
+                    if not database_file.exists():
+                        return {
+                            "status": "error",
+                            "message": f"CAN database file not found: {database_file}",
+                        }
+            else:
+                # Use extension's already-loaded database file path (already resolved/decoded)
+                if not hasattr(self, "database_file_path") or not self.database_file_path:
+                    return {
+                        "status": "error",
+                        "message": "No database file specified and extension has none configured",
+                    }
+                database_file = Path(self.database_file_path)
+
+            # Determine output path
+            if not output_path:
+                output_path = str(input_file.with_suffix(".trz"))
+
+            output_file = Path(output_path).expanduser().resolve()
+
+            # Ensure output always has .trz extension
+            if output_file.suffix.lower() != ".trz":
+                output_file = output_file.with_suffix(".trz")
+
+            # Safety check: prevent overwriting input file
+            if output_file == input_file:
+                return {
+                    "status": "error",
+                    "message": f"Output file cannot be the same as input file: {input_file}",
+                }
+
+            # Check if output exists
+            if output_file.exists():
+                if overwrite:
+                    logger.info(f"Removing existing file: {output_file}")
+                    output_file.unlink()
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Output file '{output_file}' already exists. "
+                        "Enable 'Overwrite if exists' to replace it.",
+                    }
+
+            # Perform conversion
+            logger.info(f"Converting {input_file} -> {output_file} using database: {database_file}")
+            stats = convert_can_trace(input_file, database_file, output_file)
+
+            return {
+                "status": "success",
+                "input_file": str(input_file),
+                "database_file": str(database_file),
+                "output_file": str(output_file),
+                **stats.to_dict(),
+            }
+
+        except FileNotFoundError as e:
+            return {"status": "error", "message": f"File not found: {e}"}
+        except ValueError as e:
+            return {"status": "error", "message": f"Invalid input: {e}"}
+        except ImportError as e:
+            return {"status": "error", "message": f"Missing dependency: {e}"}
+        except Exception as e:
+            logger.exception("Conversion failed")
+            return {"status": "error", "message": f"Conversion failed: {e}"}
