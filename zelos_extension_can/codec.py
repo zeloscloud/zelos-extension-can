@@ -183,27 +183,36 @@ class CanCodec(can.Listener):
         if self.timestamp_mode == TimestampMode.ABSOLUTE:
             return int(hw_timestamp * 1e9)
 
-        # Auto mode: detect boot-relative timestamps and calculate offset
+        # Auto mode: detect timestamp type and calculate offset if needed
         if self.hw_timestamp_offset is None:
             self.first_hw_timestamp = hw_timestamp
+            wall_clock_time = time.time()
 
-            # Timestamps < 1 hour are assumed to be boot-relative and need conversion
-            ONE_HOUR = 3600.0
-            if hw_timestamp < ONE_HOUR:
-                wall_clock_time = time.time()
-                self.hw_timestamp_offset = wall_clock_time - hw_timestamp
-                logger.info(
-                    f"Detected boot-relative timestamps (first={hw_timestamp:.3f}s). "
-                    f"Using offset={self.hw_timestamp_offset:.3f}s to convert to wall-clock time."
-                )
-            else:
+            # If timestamp is within 15 seconds of current time, treat as absolute wall-clock
+            # Otherwise treat as monotonic timestamp needing adjustment to current time
+            time_diff = abs(wall_clock_time - hw_timestamp)
+
+            if time_diff < 15.0:
                 self.hw_timestamp_offset = 0.0
                 logger.info(
-                    f"Detected absolute timestamps (first={hw_timestamp:.3f}s). "
-                    "Using hardware timestamps as-is."
+                    "Detected absolute timestamps (first=%.3f s). Using hardware timestamps as-is.",
+                    hw_timestamp,
+                )
+            else:
+                # Hardware timestamp is monotonic but not aligned with wall-clock time
+                # This could be: boot-relative (dongle timer starts at 0), or
+                # fixed-offset (PCAN-style timer started at arbitrary past time)
+                # Either way, apply constant offset to map to current wall-clock time
+                self.hw_timestamp_offset = wall_clock_time - hw_timestamp
+                logger.info(
+                    "Detected monotonic timestamps with offset (first=%.3f s, offset=%.3f s). "
+                    "Mapping to wall-clock time while preserving relative timing.",
+                    hw_timestamp,
+                    self.hw_timestamp_offset,
                 )
 
-        # Apply offset to convert boot-relative time to wall-clock time
+        # Apply offset to map monotonic timestamps to wall-clock time
+        # The offset is constant, so relative timing between messages is preserved
         wall_clock_timestamp = hw_timestamp + self.hw_timestamp_offset
         return int(wall_clock_timestamp * 1e9)
 
