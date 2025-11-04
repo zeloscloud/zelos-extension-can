@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,17 @@ from .utils.file_utils import data_url_to_file
 from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class Metrics:
+    """Performance metrics for CAN codec operations."""
+
+    messages_received: int = 0
+    messages_decoded: int = 0
+    decode_errors: int = 0
+    unknown_messages: int = 0
+    bytes_received: int = 0
 
 
 class TimestampMode(IntEnum):
@@ -50,14 +62,12 @@ class CanCodec(can.Listener):
         self.hw_timestamp_offset: float | None = None  # Offset to convert HW time to wall-clock
         self.first_hw_timestamp: float | None = None  # First HW timestamp seen
 
+        # Cache frequently accessed config values as booleans to avoid repeated string hashing
+        self.log_raw_frames = config.get("log_raw_frames", False)
+        self.fd_mode = config.get("fd_mode", False)
+
         # Metrics tracking
-        self.metrics = {
-            "messages_received": 0,
-            "messages_decoded": 0,
-            "decode_errors": 0,
-            "unknown_messages": 0,
-            "bytes_received": 0,
-        }
+        self.metrics = Metrics()
 
         # Demo mode simulation
         self.demo_mode = config.get("demo_mode", False)
@@ -130,7 +140,7 @@ class CanCodec(can.Listener):
         logger.info(f"Generated {len(self._events)} event schemas from database")
 
         # Log raw frame configuration
-        if self.config.get("log_raw_frames", False):
+        if self.log_raw_frames:
             logger.info(
                 "Raw CAN frame logging is ENABLED - frames will be logged to 'can_raw' trace source"
             )
@@ -210,7 +220,7 @@ class CanCodec(can.Listener):
         if "bitrate" in self.config:
             bus_config["bitrate"] = self.config["bitrate"]
 
-        if "fd_mode" in self.config and self.config["fd_mode"]:
+        if self.fd_mode:
             bus_config["fd"] = True
             if "data_bitrate" in self.config:
                 bus_config["data_bitrate"] = self.config["data_bitrate"]
@@ -280,7 +290,7 @@ class CanCodec(can.Listener):
             state = self.bus.state
             return state in (can.BusState.ACTIVE, can.BusState.PASSIVE)
         except Exception as e:
-            logger.debug(f"Bus health check failed: {e}")
+            logger.debug("Bus health check failed: %s", e)
             # If state check not supported, assume healthy
             return True
 
@@ -360,46 +370,38 @@ class CanCodec(can.Listener):
 
         :param msg: Received CAN message
         """
-        self.metrics["messages_received"] += 1
-        self.metrics["bytes_received"] += len(msg.data)
+        self.metrics.messages_received += 1
+        self.metrics.bytes_received += len(msg.data)
+
+        # Get timestamp once for all emissions (raw + decoded)
+        timestamp_ns = self.get_timestamp(msg.timestamp)
 
         # Emit raw CAN frame to separate trace source if enabled
-        if self.config.get("log_raw_frames", False):
-            timestamp_ns = self.get_timestamp(msg.timestamp)
+        if self.log_raw_frames:
             if timestamp_ns is not None:
                 self.raw_event.log_at(
                     timestamp_ns,
                     arbitration_id=msg.arbitration_id,
                     dlc=msg.dlc,
-                    data=bytes(msg.data),
+                    data=msg.data,
                 )
             else:
-                self.raw_event.log(
-                    arbitration_id=msg.arbitration_id, dlc=msg.dlc, data=bytes(msg.data)
-                )
+                self.raw_event.log(arbitration_id=msg.arbitration_id, dlc=msg.dlc, data=msg.data)
             logger.debug(
-                f"Emitted raw frame: ID=0x{msg.arbitration_id:04x}, DLC={msg.dlc}, "
-                f"data={msg.data.hex()}"
+                "Emitted raw frame: ID=0x%04x, DLC=%d, data=%s",
+                msg.arbitration_id,
+                msg.dlc,
+                msg.data.hex(),
             )
-
-        max_dlc = 64 if self.config.get("fd_mode", False) else 8
-        if msg.dlc > max_dlc:
-            logger.warning(
-                f"Invalid DLC {msg.dlc} for message {msg.arbitration_id:04x} (max: {max_dlc})"
-            )
-            return
 
         try:
             decoded = self.db.decode_message(msg.arbitration_id, msg.data)
 
             dbc_msg = self.messages_by_id.get(msg.arbitration_id)
             if not dbc_msg:
-                logger.debug(f"Unknown message ID: {msg.arbitration_id:04x}")
-                self.metrics["unknown_messages"] += 1
+                logger.debug("Unknown message ID: %04x", msg.arbitration_id)
+                self.metrics.unknown_messages += 1
                 return
-
-            # Get timestamp once for all emissions
-            timestamp_ns = self.get_timestamp(msg.timestamp)
 
             # Emit base signals (non-multiplexed signals + multiplexer signal if present)
             self._emit_base_signals(dbc_msg, decoded, timestamp_ns)
@@ -408,17 +410,17 @@ class CanCodec(can.Listener):
             if dbc_msg.is_multiplexed():
                 self._emit_multiplexed_signals(dbc_msg, decoded, timestamp_ns)
 
-            self.metrics["messages_decoded"] += 1
+            self.metrics.messages_decoded += 1
 
         except KeyError:
-            logger.debug(f"Message ID {msg.arbitration_id:04x} not in database")
-            self.metrics["unknown_messages"] += 1
+            logger.debug("Message ID %04x not in database", msg.arbitration_id)
+            self.metrics.unknown_messages += 1
         except cantools.database.DecodeError as e:
-            logger.debug(f"Decode error for {msg.arbitration_id:04x}: {e}")
-            self.metrics["decode_errors"] += 1
+            logger.debug("Decode error for %04x: %s", msg.arbitration_id, e)
+            self.metrics.decode_errors += 1
         except Exception as e:
-            logger.debug(f"Error decoding message {msg.arbitration_id:04x}: {e}")
-            self.metrics["decode_errors"] += 1
+            logger.debug("Error decoding message %04x: %s", msg.arbitration_id, e)
+            self.metrics.decode_errors += 1
 
     def _generate_all_schemas(self) -> None:
         """Generate trace event schemas for all messages in database at init time.
@@ -451,7 +453,7 @@ class CanCodec(can.Listener):
                     self.source.add_value_table(event_name, sig.name, value_table)
 
             self._events[cache_key] = event
-            logger.debug(f"Generated base schema: '{event_name}' ({len(fields)} signals)")
+            logger.debug("Generated base schema: '%s' (%d signals)", event_name, len(fields))
 
     def _generate_mux_schemas(self, dbc_msg: cantools.database.can.Message) -> None:
         """Generate schemas for all multiplexed signal variants.
@@ -491,7 +493,7 @@ class CanCodec(can.Listener):
                         self.source.add_value_table(event_name, sig.name, value_table)
 
                 self._events[cache_key] = event
-                logger.debug(f"Generated mux schema: '{event_name}' ({len(fields)} signals)")
+                logger.debug("Generated mux schema: '%s' (%d signals)", event_name, len(fields))
 
     def _emit_signals(
         self,
@@ -512,10 +514,10 @@ class CanCodec(can.Listener):
                 event.log_at(timestamp_ns, **signals)
             else:
                 event.log(**signals)
-            logger.debug(f"Emitted {context}: {signals}")
+            logger.debug("Emitted %s: %s", context, signals)
         except (OverflowError, ValueError) as e:
-            logger.debug(f"Skipping emission for {context}: {e}")
-            self.metrics["decode_errors"] += 1
+            logger.debug("Skipping emission for %s: %s", context, e)
+            self.metrics.decode_errors += 1
 
     def _emit_base_signals(
         self, dbc_msg: cantools.database.can.Message, decoded: dict, timestamp_ns: int | None
@@ -621,10 +623,12 @@ class CanCodec(can.Listener):
         """
         try:
             logger.info(
-                f"Starting periodic transmission: {task_name} (ID: {msg_id:04x}, "
-                f"period: {period}s, extended: {extended_id})"
+                "Starting periodic transmission: %s (ID: %04x, period: %ss, extended: %s)",
+                task_name,
+                msg_id,
+                period,
+                extended_id,
             )
-            is_fd = self.config.get("fd_mode", False)
 
             while self.running:
                 if not self.bus:
@@ -634,7 +638,10 @@ class CanCodec(can.Listener):
 
                 try:
                     msg = can.Message(
-                        arbitration_id=msg_id, data=data, is_extended_id=extended_id, is_fd=is_fd
+                        arbitration_id=msg_id,
+                        data=data,
+                        is_extended_id=extended_id,
+                        is_fd=self.fd_mode,
                     )
                     self.bus.send(msg)
                 except can.CanError as e:
@@ -648,8 +655,6 @@ class CanCodec(can.Listener):
         except Exception as e:
             logger.exception(f"Error in periodic task {task_name}: {e}")
 
-    # --- Actions ---
-
     @action("Get Status", "View CAN bus status")
     def get_status(self) -> dict[str, Any]:
         """Get current CAN bus status.
@@ -662,7 +667,7 @@ class CanCodec(can.Listener):
             "channel": self.config["channel"],
             "messages_in_dbc": len(self.db.messages),
             "active_periodic_tasks": len(self.periodic_tasks),
-            "fd_mode": self.config.get("fd_mode", False),
+            "fd_mode": self.fd_mode,
         }
 
     @action("Get Bus Health", "View detailed bus health metrics")
@@ -707,7 +712,7 @@ class CanCodec(can.Listener):
 
         try:
             data_bytes = bytes.fromhex(data.replace(" ", ""))
-            is_fd = self.config.get("fd_mode", False)
+            is_fd = self.fd_mode
 
             msg = can.Message(
                 arbitration_id=msg_id, data=data_bytes, is_extended_id=extended_id, is_fd=is_fd
@@ -821,16 +826,20 @@ class CanCodec(can.Listener):
         :return: Performance metrics
         """
         uptime = time.time() - self.start_time
-        messages_received = self.metrics["messages_received"]
+        messages_received = self.metrics.messages_received
 
         return {
-            **self.metrics,
+            "messages_received": self.metrics.messages_received,
+            "messages_decoded": self.metrics.messages_decoded,
+            "decode_errors": self.metrics.decode_errors,
+            "unknown_messages": self.metrics.unknown_messages,
+            "bytes_received": self.metrics.bytes_received,
             "uptime_seconds": round(uptime, 2),
             "messages_per_second": round(messages_received / max(uptime, 1), 2),
             "decode_success_rate": round(
-                self.metrics["messages_decoded"] / max(messages_received, 1), 4
+                self.metrics.messages_decoded / max(messages_received, 1), 4
             ),
-            "bytes_per_second": round(self.metrics["bytes_received"] / max(uptime, 1), 2),
+            "bytes_per_second": round(self.metrics.bytes_received / max(uptime, 1), 2),
         }
 
     @action("List Messages", "List all messages in database")
