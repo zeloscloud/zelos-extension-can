@@ -71,15 +71,15 @@ Want to contribute or modify this extension? See [CONTRIBUTING.md](CONTRIBUTING.
 
 ## Links
 
-- **Repository**: [github.com/tkeairns/zelos-extension-can](https://github.com/tkeairns/zelos-extension-can)
-- **Issues**: [Report bugs or request features](https://github.com/tkeairns/zelos-extension-can/issues)
+- **Repository**: [github.com/zeloscloud/zelos-extension-can](https://github.com/zeloscloud/zelos-extension-can)
+- **Issues**: [Report bugs or request features](https://github.com/zeloscloud/zelos-extension-can/issues)
 - **Documentation**: [Zelos Extension Guide](https://docs.zeloscloud.io/extensions)
 
 ## Support
 
 For help and support:
 - 📖 [Zelos Documentation](https://docs.zeloscloud.io)
-- 🐛 [GitHub Issues](https://github.com/tkeairns/zelos-extension-can/issues)
+- 🐛 [GitHub Issues](https://github.com/zeloscloud/zelos-extension-can/issues)
 - 📧 taylor@zeloscloud.io
 
 ## License

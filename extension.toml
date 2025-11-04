@@ -5,8 +5,8 @@ name = "Zelos CAN"
 version = "0.1.0"
 description = "Zelos CAN"
 author = "taylor keairns"
-repository = "https://github.com/tkeairns/zelos-extension-can"
-homepage = "https://github.com/tkeairns/zelos-extension-can"
+repository = "https://github.com/zeloscloud/zelos-extension-can"
+homepage = "https://github.com/zeloscloud/zelos-extension-can"
 keywords = ["sensor", "monitoring", "data-streaming"]
 categories = ["IoT", "Monitoring"]
 

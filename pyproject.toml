@@ -2,7 +2,7 @@
 name = "zelos-extension-can"
 version = "0.1.0"
 description = "Zelos CAN"
-authors = [{ name = "taylor keairns", email = "taylor@zeloscloud.io" }]
+authors = [{ name = "zeloscloud", email = "info@zeloscloud.io" }]
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -24,9 +24,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tkeairns/zelos-extension-can"
-Repository = "https://github.com/tkeairns/zelos-extension-can"
-Issues = "https://github.com/tkeairns/zelos-extension-can/issues"
+Homepage = "https://github.com/zeloscloud/zelos-extension-can"
+Repository = "https://github.com/zeloscloud/zelos-extension-can"
+Issues = "https://github.com/zeloscloud/zelos-extension-can/issues"
 Documentation = "https://docs.zeloscloud.io/extensions"
 
 [project.optional-dependencies]
@@ -36,8 +36,8 @@ cli = [
 dev = [
     "pytest>=8.4.2",
     "pre-commit>=4.3.0",
-    "ruff>=0.13.3",
-    "tomli>=2.0.0; python_version < '3.11'",
+    "ruff>=0.14.2",
+    "tomli>=2.3.0; python_version < '3.11'",
 ]
 
 [build-system]

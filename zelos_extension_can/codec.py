@@ -553,7 +553,7 @@ class CanCodec(can.Listener):
         if mux_value is None:
             return
 
-        if isinstance(mux_value, (int, float)):
+        if isinstance(mux_value, int | float):
             mux_value_int = int(mux_value)
         else:
             # NamedSignalValue - get integer representation
@@ -564,7 +564,7 @@ class CanCodec(can.Listener):
 
         if event:
             # Get string representation for debug logging
-            if isinstance(mux_value, (int, float)):
+            if isinstance(mux_value, int | float):
                 mux_value_str = str(mux_value_int)
             else:
                 mux_value_str = str(mux_value)
@@ -600,7 +600,7 @@ class CanCodec(can.Listener):
             ):
                 continue
 
-            if isinstance(value, (int, float)):
+            if isinstance(value, int | float):
                 signals[signal_name] = value
             else:
                 # NamedSignalValue - convert to integer
