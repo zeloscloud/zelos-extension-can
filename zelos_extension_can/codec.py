@@ -13,8 +13,8 @@ import zelos_sdk
 from zelos_sdk.actions import action
 
 from .demo.demo import run_demo_ev_simulation
-from .schema_utils import cantools_signal_to_trace_metadata
-from .utils.config import data_url_to_file
+from .utils.file_utils import data_url_to_file
+from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -909,7 +909,7 @@ class CanCodec(can.Listener):
             if database_path:
                 # User provided a database file path or data URL - handle it
                 if database_path.startswith("data:"):
-                    from .utils.config import data_url_to_file
+                    from .utils.file_utils import data_url_to_file
 
                     database_file = Path(
                         data_url_to_file(database_path, ".converter", detect_extension=True)

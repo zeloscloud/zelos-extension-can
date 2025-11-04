@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from zelos_extension_can.codec import CanCodec, TimestampMode
-from zelos_extension_can.schema_utils import cantools_signal_to_trace_type
+from zelos_extension_can.utils.schema_utils import cantools_signal_to_trace_type
 
 
 @pytest.fixture
@@ -480,169 +480,12 @@ class TestErrorHandling:
         assert "error" in result  # Bus not started, but ID validated
 
 
-class TestConfigValidation:
-    """Test configuration validation."""
-
-    def test_validate_missing_required_fields(self):
-        """Test validation catches missing required fields."""
-        from zelos_extension_can.utils.config import validate_config
-
-        config = {}
-        errors = validate_config(config)
-        assert len(errors) == 3
-        assert any("interface" in e for e in errors)
-        assert any("channel" in e for e in errors)
-        assert any("database_file" in e for e in errors)
-
-    def test_validate_missing_dbc_file(self):
-        """Test validation catches missing DBC file."""
-        from zelos_extension_can.utils.config import validate_config
-
-        config = {"interface": "virtual", "channel": "vcan0", "database_file": "/nonexistent.dbc"}
-        errors = validate_config(config)
-        assert any("CAN database file not found" in e for e in errors)
-
-    def test_validate_invalid_bitrate(self, test_dbc_path):
-        """Test validation catches invalid bitrate."""
-        from zelos_extension_can.utils.config import validate_config
-
-        config = {
-            "interface": "virtual",
-            "channel": "vcan0",
-            "database_file": test_dbc_path,
-            "bitrate": 999999,
-        }
-        errors = validate_config(config)
-        assert any("Invalid bitrate" in e for e in errors)
-
-    def test_validate_socketcan_channel(self, test_dbc_path):
-        """Test validation of socketcan channel naming."""
-        from zelos_extension_can.utils.config import validate_config
-
-        config = {
-            "interface": "socketcan",
-            "channel": "invalid_name",
-            "database_file": test_dbc_path,
-        }
-        errors = validate_config(config)
-        assert any("socketcan interface requires" in e for e in errors)
-
-    def test_validate_bitrate_optional_for_virtual(self, test_dbc_path):
-        """Test bitrate is optional for virtual interface."""
-        from zelos_extension_can.utils.config import validate_config
-
-        config = {
-            "interface": "virtual",
-            "channel": "vcan0",
-            "database_file": test_dbc_path,
-            # No bitrate
-        }
-        errors = validate_config(config)
-        assert len(errors) == 0  # Should pass without bitrate
-
-    def test_validate_bitrate_optional_for_socketcan(self, test_dbc_path):
-        """Test bitrate is optional for socketcan interface."""
-        from zelos_extension_can.utils.config import validate_config
-
-        config = {
-            "interface": "socketcan",
-            "channel": "can0",
-            "database_file": test_dbc_path,
-            # No bitrate
-        }
-        errors = validate_config(config)
-        assert len(errors) == 0  # Should pass without bitrate
-
-    def test_validate_bitrate_required_for_pcan(self, test_dbc_path):
-        """Test bitrate is required for hardware interfaces like PCAN."""
-        from zelos_extension_can.utils.config import validate_config
-
-        config = {
-            "interface": "pcan",
-            "channel": "PCAN_USBBUS1",
-            "database_file": test_dbc_path,
-            # No bitrate
-        }
-        errors = validate_config(config)
-        assert any("Bitrate is required" in e for e in errors)
-
-    def test_validate_data_url(self):
-        """Test data-url validation works correctly."""
-        from zelos_extension_can.utils.config import validate_config
-
-        # Valid base64-encoded data-url
-        config = {
-            "interface": "virtual",
-            "channel": "vcan0",
-            "database_file": "data:application/octet-stream;base64,VkVSU0lPTiA=",  # "VERSION "
-        }
-        errors = validate_config(config)
-        assert len(errors) == 0  # Should accept valid data-url
-
-    def test_validate_timestamp_mode(self):
-        """Test timestamp_mode validation."""
-        from zelos_extension_can.utils.config import validate_config
-
-        # Valid timestamp modes
-        for mode in ["auto", "absolute", "ignore"]:
-            config = {
-                "interface": "virtual",
-                "channel": "vcan0",
-                "database_file": "/path/to/file.dbc",
-                "timestamp_mode": mode,
-            }
-            errors = validate_config(config)
-            # Should have one error (file not found), but not timestamp_mode error
-            assert not any("timestamp_mode" in e for e in errors)
-
-        # Invalid timestamp mode
-        config = {
-            "interface": "virtual",
-            "channel": "vcan0",
-            "database_file": "/path/to/file.dbc",
-            "timestamp_mode": "invalid_mode",
-        }
-        errors = validate_config(config)
-        assert any("Invalid timestamp_mode" in e for e in errors)
-        assert any("invalid_mode" in e for e in errors)
-
-    def test_validate_config_json(self):
-        """Test config_json validation."""
-        from zelos_extension_can.utils.config import validate_config
-
-        # Valid JSON object
-        config = {
-            "interface": "virtual",
-            "channel": "vcan0",
-            "database_file": "/path/to/file.dbc",
-            "config_json": '{"app_name": "MyApp", "rx_queue_size": 1000}',
-        }
-        errors = validate_config(config)
-        # Should have one error (file not found), but not config_json error
-        assert not any("config_json" in e for e in errors)
-
-        # Invalid JSON syntax
-        config["config_json"] = '{"app_name": "MyApp",}'  # Trailing comma
-        errors = validate_config(config)
-        assert any("Invalid JSON in config_json" in e for e in errors)
-
-        # JSON array instead of object
-        config["config_json"] = '["value1", "value2"]'
-        errors = validate_config(config)
-        assert any("config_json must be a JSON object" in e for e in errors)
-
-        # Empty string is valid (ignored)
-        config["config_json"] = ""
-        errors = validate_config(config)
-        assert not any("config_json" in e for e in errors)
-
-
-class TestConfigUtils:
-    """Test configuration utility functions."""
+class TestFileUtils:
+    """Test file utility functions."""
 
     def test_data_url_to_file(self, tmp_path):
         """Test data-url to file conversion."""
-        from zelos_extension_can.utils.config import data_url_to_file
+        from zelos_extension_can.utils.file_utils import data_url_to_file
 
         # Create a simple data-url (base64 encoded "test content")
         data_url = "data:text/plain;base64,dGVzdCBjb250ZW50"
@@ -653,12 +496,3 @@ class TestConfigUtils:
         assert result == str(output_path)
         assert output_path.exists()
         assert output_path.read_text() == "test content"
-
-    def test_get_platform_defaults(self):
-        """Test platform defaults are returned."""
-        from zelos_extension_can.utils.config import get_platform_defaults
-
-        defaults = get_platform_defaults()
-        assert "interface" in defaults
-        # Now defaults to demo mode, no channel needed
-        assert defaults["interface"] == "demo"
