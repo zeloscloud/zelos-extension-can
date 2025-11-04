@@ -65,6 +65,7 @@ class CanCodec(can.Listener):
         # Cache frequently accessed config values as booleans to avoid repeated string hashing
         self.log_raw_frames = config.get("log_raw_frames", False)
         self.fd_mode = config.get("fd_mode", False)
+        self.emit_schemas_on_init = config.get("emit_schemas_on_init", False)
 
         # Metrics tracking
         self.metrics = Metrics()
@@ -136,8 +137,13 @@ class CanCodec(can.Listener):
                     "access via message ID instead"
                 )
 
-        self._generate_all_schemas()
-        logger.info(f"Generated {len(self._events)} event schemas from database")
+        if self.emit_schemas_on_init:
+            self._generate_all_schemas()
+            logger.info(f"Generated {len(self._events)} event schemas from database")
+        else:
+            logger.info(
+                "Schema generation deferred - will emit schemas as messages are encountered"
+            )
 
         # Log raw frame configuration
         if self.log_raw_frames:
@@ -471,29 +477,48 @@ class CanCodec(can.Listener):
                 mux_values.update(sig.multiplexer_ids)
 
         for mux_value_int in sorted(mux_values):
-            # Use enum name if available, otherwise stringified integer
-            if mux_signal.choices and mux_value_int in mux_signal.choices:
-                mux_value_str = mux_signal.choices[mux_value_int]
-            else:
-                mux_value_str = str(mux_value_int)
+            self._generate_mux_schema_for_value(dbc_msg, mux_value_int)
 
-            cache_key = (dbc_msg.frame_id, mux_value_int)
-            event_name = f"{self._get_event_name(dbc_msg)}/{mux_value_str}"
-            mux_signals = [
-                sig for sig in dbc_msg.signals if mux_value_int in (sig.multiplexer_ids or [])
-            ]
+    def _generate_mux_schema_for_value(
+        self, dbc_msg: cantools.database.can.Message, mux_value_int: int
+    ) -> None:
+        """Generate schema for a specific multiplexed signal variant.
 
-            if mux_signals:
-                fields = [cantools_signal_to_trace_metadata(sig) for sig in mux_signals]
-                event = self.source.add_event(event_name, fields)
+        :param dbc_msg: DBC message definition
+        :param mux_value_int: Multiplexer value to generate schema for
+        """
+        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
+        if not mux_signal:
+            return
 
-                for sig in mux_signals:
-                    if sig.choices:
-                        value_table = {int(k): str(v) for k, v in sig.choices.items()}
-                        self.source.add_value_table(event_name, sig.name, value_table)
+        cache_key = (dbc_msg.frame_id, mux_value_int)
 
-                self._events[cache_key] = event
-                logger.debug("Generated mux schema: '%s' (%d signals)", event_name, len(fields))
+        # Skip if already generated
+        if cache_key in self._events:
+            return
+
+        # Use enum name if available, otherwise stringified integer
+        if mux_signal.choices and mux_value_int in mux_signal.choices:
+            mux_value_str = mux_signal.choices[mux_value_int]
+        else:
+            mux_value_str = str(mux_value_int)
+
+        event_name = f"{self._get_event_name(dbc_msg)}/{mux_value_str}"
+        mux_signals = [
+            sig for sig in dbc_msg.signals if mux_value_int in (sig.multiplexer_ids or [])
+        ]
+
+        if mux_signals:
+            fields = [cantools_signal_to_trace_metadata(sig) for sig in mux_signals]
+            event = self.source.add_event(event_name, fields)
+
+            for sig in mux_signals:
+                if sig.choices:
+                    value_table = {int(k): str(v) for k, v in sig.choices.items()}
+                    self.source.add_value_table(event_name, sig.name, value_table)
+
+            self._events[cache_key] = event
+            logger.debug("Generated mux schema: '%s' (%d signals)", event_name, len(fields))
 
     def _emit_signals(
         self,
@@ -531,6 +556,11 @@ class CanCodec(can.Listener):
         cache_key = dbc_msg.frame_id
         event = self._events.get(cache_key)
 
+        # Generate schema lazily if not already present
+        if event is None and not self.emit_schemas_on_init:
+            self._generate_base_schema(dbc_msg)
+            event = self._events.get(cache_key)
+
         if event:
             signals = self._convert_signals(dbc_msg, decoded, base_only=True)
             self._emit_signals(event, signals, timestamp_ns, f"base:{dbc_msg.name}")
@@ -563,6 +593,11 @@ class CanCodec(can.Listener):
 
         cache_key = (dbc_msg.frame_id, mux_value_int)
         event = self._events.get(cache_key)
+
+        # Generate mux schema lazily if not already present
+        if event is None and not self.emit_schemas_on_init:
+            self._generate_mux_schema_for_value(dbc_msg, mux_value_int)
+            event = self._events.get(cache_key)
 
         if event:
             # Get string representation for debug logging
@@ -692,7 +727,7 @@ class CanCodec(can.Listener):
     @action("Send Message", "Send a single CAN message")
     @action.number("msg_id", minimum=0, maximum=0x1FFFFFFF, title="Message ID", default=0x100)
     @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04", default="00")
-    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False)
+    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False, widget="toggle")
     def send_message(self, msg_id: int, data: str, extended_id: bool = False) -> dict[str, Any]:
         """Send a CAN message.
 
@@ -738,7 +773,7 @@ class CanCodec(can.Listener):
     @action.number("msg_id", minimum=0, maximum=0x1FFFFFFF, title="Message ID", default=0x100)
     @action.text("data", title="Data (hex)", placeholder="01 02 03 04", default="00")
     @action.number("period", minimum=0.001, maximum=10.0, title="Period (seconds)", default=0.1)
-    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False)
+    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False, widget="toggle")
     def start_periodic(
         self, msg_id: int, data: str, period: float, extended_id: bool = False
     ) -> dict[str, Any]:
@@ -885,7 +920,9 @@ class CanCodec(can.Listener):
         placeholder="Leave empty to use extension's database",
         widget="file_path_picker",
     )
-    @action.boolean("overwrite", required=False, default=False, title="Overwrite if exists")
+    @action.boolean(
+        "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
+    )
     def convert_trace_file(
         self,
         input_path: str,

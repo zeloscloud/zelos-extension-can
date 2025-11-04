@@ -43,6 +43,13 @@
                 "CRITICAL"
               ],
               "default": "INFO"
+            },
+            "emit_schemas_on_init": {
+              "type": "boolean",
+              "title": "Emit Schemas On Init",
+              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+              "default": false,
+              "ui:widget": "toggle"
             }
           }
         },
@@ -69,13 +76,15 @@
               "type": "boolean",
               "title": "Receive Own Messages",
               "description": "Receive messages transmitted by this interface",
-              "default": true
+              "default": true,
+              "ui:widget": "toggle"
             },
             "log_raw_frames": {
               "type": "boolean",
               "title": "Log Raw CAN Frames",
               "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "log_level": {
               "type": "string",
@@ -89,6 +98,13 @@
                 "CRITICAL"
               ],
               "default": "INFO"
+            },
+            "emit_schemas_on_init": {
+              "type": "boolean",
+              "title": "Emit Schemas On Init",
+              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+              "default": false,
+              "ui:widget": "toggle"
             }
           },
           "required": [
@@ -119,7 +135,8 @@
               "type": "boolean",
               "title": "CAN-FD Mode",
               "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "timestamp_mode": {
               "type": "string",
@@ -136,13 +153,15 @@
               "type": "boolean",
               "title": "Receive Own Messages",
               "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true
+              "default": true,
+              "ui:widget": "toggle"
             },
             "log_raw_frames": {
               "type": "boolean",
               "title": "Log Raw CAN Frames",
               "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "config_json": {
               "type": "string",
@@ -161,6 +180,13 @@
                 "CRITICAL"
               ],
               "default": "INFO"
+            },
+            "emit_schemas_on_init": {
+              "type": "boolean",
+              "title": "Emit Schemas On Init",
+              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+              "default": false,
+              "ui:widget": "toggle"
             }
           },
           "required": [
@@ -243,7 +269,8 @@
               "type": "boolean",
               "title": "CAN-FD Mode",
               "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "timestamp_mode": {
               "type": "string",
@@ -260,13 +287,15 @@
               "type": "boolean",
               "title": "Receive Own Messages",
               "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true
+              "default": true,
+              "ui:widget": "toggle"
             },
             "log_raw_frames": {
               "type": "boolean",
               "title": "Log Raw CAN Frames",
               "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "config_json": {
               "type": "string",
@@ -285,6 +314,13 @@
                 "CRITICAL"
               ],
               "default": "INFO"
+            },
+            "emit_schemas_on_init": {
+              "type": "boolean",
+              "title": "Emit Schemas On Init",
+              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+              "default": false,
+              "ui:widget": "toggle"
             }
           },
           "required": [
@@ -368,7 +404,8 @@
               "type": "boolean",
               "title": "CAN-FD Mode",
               "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "timestamp_mode": {
               "type": "string",
@@ -385,13 +422,15 @@
               "type": "boolean",
               "title": "Receive Own Messages",
               "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true
+              "default": true,
+              "ui:widget": "toggle"
             },
             "log_raw_frames": {
               "type": "boolean",
               "title": "Log Raw CAN Frames",
               "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "config_json": {
               "type": "string",
@@ -410,6 +449,13 @@
                 "CRITICAL"
               ],
               "default": "INFO"
+            },
+            "emit_schemas_on_init": {
+              "type": "boolean",
+              "title": "Emit Schemas On Init",
+              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+              "default": false,
+              "ui:widget": "toggle"
             }
           },
           "required": [
@@ -493,7 +539,8 @@
               "type": "boolean",
               "title": "CAN-FD Mode",
               "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "timestamp_mode": {
               "type": "string",
@@ -510,13 +557,15 @@
               "type": "boolean",
               "title": "Receive Own Messages",
               "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true
+              "default": true,
+              "ui:widget": "toggle"
             },
             "log_raw_frames": {
               "type": "boolean",
               "title": "Log Raw CAN Frames",
               "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false
+              "default": false,
+              "ui:widget": "toggle"
             },
             "config_json": {
               "type": "string",
@@ -535,6 +584,13 @@
                 "CRITICAL"
               ],
               "default": "INFO"
+            },
+            "emit_schemas_on_init": {
+              "type": "boolean",
+              "title": "Emit Schemas On Init",
+              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+              "default": false,
+              "ui:widget": "toggle"
             }
           },
           "required": [
@@ -613,6 +669,13 @@
                 "CRITICAL"
               ],
               "default": "INFO"
+            },
+            "emit_schemas_on_init": {
+              "type": "boolean",
+              "title": "Emit Schemas On Init",
+              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+              "default": false,
+              "ui:widget": "toggle"
             }
           },
           "required": [

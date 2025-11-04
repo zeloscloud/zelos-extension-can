@@ -63,11 +63,49 @@ class TestCanCodecInitialization:
         assert event_name == "0064_DUT_Status"  # 0x64 = 100
 
     def test_caches_event_loggers_on_first_message(self, codec):
-        """Test that events are pre-generated at init time."""
+        """Test that events are lazily generated on first message (default behavior)."""
         import can
 
+        # By default, events are not pre-generated (emit_all_schemas_on_init=false)
+        assert len(codec._events) == 0
+
+        # Event should not exist before first message
+        assert 0x64 not in codec._events
+
+        msg = can.Message(
+            arbitration_id=0x64,
+            data=bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            timestamp=15.5,
+        )
+
+        # Handle the message - should generate schema lazily
+        codec._handle_message(msg)
+
+        # Now the event should exist
+        assert 0x64 in codec._events
+        assert codec._events[0x64] is not None
+
+        # Handling the same message again should not increase cache size
+        cache_size_after_first = len(codec._events)
+        codec._handle_message(msg)
+        assert len(codec._events) == cache_size_after_first
+
+    def test_emit_all_schemas_on_init(self, mock_config):
+        """Test that all schemas are pre-generated when emit_schemas_on_init=true."""
+        from unittest.mock import patch
+
+        import can
+
+        # Set config to pre-generate all schemas
+        mock_config["emit_schemas_on_init"] = True
+
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+
+        # All events should be pre-generated at init
         assert len(codec._events) > 0
 
+        # Specific event should exist
         assert 0x64 in codec._events
         assert codec._events[0x64] is not None
 
@@ -77,6 +115,7 @@ class TestCanCodecInitialization:
             timestamp=15.5,
         )
 
+        # Handling message should not change cache size (already pre-generated)
         initial_cache_size = len(codec._events)
         codec._handle_message(msg)
         assert len(codec._events) == initial_cache_size
