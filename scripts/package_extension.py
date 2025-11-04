@@ -72,14 +72,22 @@ def main() -> None:
         files.append("uv.lock")
 
     # Add optional files referenced in manifest
+    # (skip files in assets/ directory since we'll add the whole directory)
     for key in ["icon", "readme", "changelog"]:
         if key in manifest:
-            files.append(manifest[key])
+            file_path = manifest[key]
+            # Only add if not in assets directory
+            if not file_path.startswith("assets/"):
+                files.append(file_path)
 
     # Add config schema if present
     config = manifest.get("config", {})
     if "schema" in config:
         files.append(config["schema"])
+
+    # Add assets directory if it exists (includes icon and other assets)
+    if Path("assets").exists():
+        files.append("assets")
 
     # Add Python packages from root directory
     exclude_dirs = {
@@ -91,7 +99,6 @@ def main() -> None:
         ".vscode",
         ".github",
         "scripts",
-        "assets",
     }
     for path in Path().iterdir():
         if path.is_dir() and path.name not in exclude_dirs and (path / "__init__.py").exists():

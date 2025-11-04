@@ -13,7 +13,6 @@ from zelos_sdk.extensions import load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from zelos_extension_can.codec import CanCodec
-from zelos_extension_can.utils.config import validate_config
 
 DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.dbc"
 
@@ -88,12 +87,6 @@ if config.get("interface") == "other":
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in config_json: {e}")
         sys.exit(1)
-
-if errors := validate_config(config):
-    logger.error("Configuration validation failed:")
-    for error in errors:
-        logger.error(f"  - {error}")
-    sys.exit(1)
 
 # Create CAN codec
 codec = CanCodec(config)

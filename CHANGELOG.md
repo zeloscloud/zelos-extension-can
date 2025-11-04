@@ -8,14 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial implementation of zelos-extension-can
-- Real-time sensor data streaming to Zelos
-- Configurable sample interval (0.001s to 1.0s)
-- Interactive actions for runtime control
-- JSON Schema-based configuration UI
-- Support for temperature and humidity monitoring
-- Graceful shutdown handling with SIGTERM/SIGINT
-- Comprehensive error recovery
+- Initial implementation
 
 ### Changed
 - N/A

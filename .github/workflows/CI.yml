@@ -5,22 +5,33 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: extractions/setup-just@v2
+      - uses: extractions/setup-just@v3
 
-      - run: uv sync --extra dev
-      - run: just check
-      - run: just test
+      - name: Install dependencies
+        run: just ci-install
+
+      - name: Run linting
+        run: just check
+
+      - name: Run tests
+        run: just test
