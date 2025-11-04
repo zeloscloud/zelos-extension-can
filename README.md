@@ -2,68 +2,53 @@
 
 > Zelos CAN
 
-A Zelos extension that monitors sensor data and streams environmental and power readings in real-time.
+A Zelos extension for interacting with a CAN bus.
 
 ## Features
 
-- 📊 **Real-time sensor monitoring** - Environmental (temperature/humidity) and power (voltage/current) data streaming
-- ⚙️ **Configurable sample rate** - Adjust collection interval from 1ms to 1s with fine-grained control
-- 🎯 **Interactive actions** - Update settings on the fly
-- 🛡️ **Production ready** - Robust error handling and graceful shutdown
+- 📊 **Visualizing CAN frames** - Real-time decoding of CAN messages
+- 📤 **Sending CAN frames** - Send CAN messages directly from the Zelos App
+- ⚙️ **Supports any CAN HW/SW stack** - Support for SocketCAN, PCAN, Kvaser, Vector, and virtual interfaces
+- 📄 **Multiple database formats** - Supports DBC, ARXML, KCD, and SYM formats
+- 📁 **Trace file conversion** - Convert CAN logs to Zelos format for offline analysis
+- 🚗 **Demo mode** - Built-in EV simulation for testing without hardware
 
 ## Quick Start
 
 1. **Install** the extension from the Zelos App
-2. **Configure** your sensor name and sample interval
+2. **Configure** your CAN connection and provide your database file (.dbc, .arxml, .kcd, or .sym)
 3. **Start** the extension to begin streaming data
-4. **View** real-time sensor data in your Zelos dashboard
+4. **View** real-time data in your Zelos App
 
 ## Configuration
 
-| Setting | Type | Description | Range | Default |
-|---------|------|-------------|-------|---------|
-| **Sensor Name** | String | Unique identifier for this sensor | 3-50 chars | `sensor-01` |
-| **Interval** | Number | Sample interval in seconds | 0.001 - 1.0 (1ms steps) | `0.1` |
-
 All configuration is managed through the Zelos App settings interface.
+
+### Required Settings
+- **Database File**: Upload your CAN database file (`.dbc`, `.arxml`, `.kcd`, or `.sym` format)
+- **Interface**: Choose your CAN adapter type (socketcan, pcan, kvaser, vector, virtual, or demo)
+- **Channel**: Specify the CAN channel/device name
+
+### Optional Settings
+- **Bitrate**: CAN bus bitrate (default: 500000)
+- **FD Mode**: Enable CAN-FD support
+- **Timestamp Mode**: Control how timestamps are interpreted (auto, absolute, ignore)
+- **Schema Emission**: Emit all schemas on startup or lazily as messages appear
+- **Raw Frame Logging**: Log undecoded raw CAN frames for debugging
 
 ## Actions
 
-### Set Interval
-Updates the sample interval dynamically without restarting.
+The extension provides several actions accessible from the Zelos App:
 
-**Parameter:**
-- `seconds` (number, 0.001 to 1.0) - New sample interval
+- **Get Status**: View current CAN bus connection status and configuration
+- **Send Message**: Send a single CAN message with custom signal values
+- **Start Periodic Message**: Begin periodic transmission of a CAN message at a specified interval
+- **Stop Periodic Message**: Stop an active periodic transmission
+- **List Periodic Tasks**: View all currently running periodic transmissions
+- **Get Metrics**: View performance statistics (message counts, rates, errors)
+- **List Messages**: Browse all CAN messages defined in your DBC file
+- **Convert Trace File**: Convert CAN log files to Zelos trace format for offline analysis
 
-**Response:**
-```json
-{
-  "message": "Interval set to 0.05s",
-  "interval": 0.05
-}
-```
-
-## Data Format
-
-The extension streams two event types:
-
-### Environmental Event
-```json
-{
-  "temperature": 22.5,
-  "humidity": 55.0
-}
-```
-
-### Power Event
-```json
-{
-  "voltage": 12.0,
-  "current": 2.5
-}
-```
-
-All values include proper units (°C, %, V, A) and use Float32 types for optimal performance.
 
 ## Development
 
@@ -80,7 +65,7 @@ Want to contribute or modify this extension? See [CONTRIBUTING.md](CONTRIBUTING.
 For help and support:
 - 📖 [Zelos Documentation](https://docs.zeloscloud.io)
 - 🐛 [GitHub Issues](https://github.com/zeloscloud/zelos-extension-can/issues)
-- 📧 taylor@zeloscloud.io
+- 📧 help@zeloscloud.io
 
 ## License
 

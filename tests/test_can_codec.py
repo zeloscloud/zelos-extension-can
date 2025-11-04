@@ -437,14 +437,8 @@ class TestActions:
         assert "running" in status
         assert "interface" in status
         assert "channel" in status
-        assert "messages_in_dbc" in status
-        assert status["messages_in_dbc"] == 13
+        assert "bus_state" in status
         assert "fd_mode" in status
-
-    def test_get_bus_health(self, codec):
-        """Test get_bus_health action."""
-        result = codec.get_bus_health()
-        assert "error" in result  # Bus not initialized yet
 
     def test_get_metrics(self, codec):
         """Test get_metrics action."""

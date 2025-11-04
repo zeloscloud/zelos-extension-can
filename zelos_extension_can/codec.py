@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from enum import IntEnum
@@ -28,7 +29,6 @@ class Metrics:
     messages_decoded: int = 0
     decode_errors: int = 0
     unknown_messages: int = 0
-    bytes_received: int = 0
 
 
 class TimestampMode(IntEnum):
@@ -89,19 +89,19 @@ class CanCodec(can.Listener):
         # Store the resolved database file path for reuse in actions
         self.database_file_path = database_path
 
-        logger.info(f"Loading CAN database file: {database_path}")
+        logger.info("Loading CAN database file: %s", database_path)
         try:
             self.db = cantools.database.load_file(database_path)
-            logger.info(f"Loaded {len(self.db.messages)} messages from database")
+            logger.info("Loaded %d messages from database", len(self.db.messages))
         except Exception as e:
             raise ValueError(f"Failed to load database file: {e}") from e
 
         # Create trace source (in isolated namespace if provided)
         if self.namespace:
-            self.source = zelos_sdk.TraceSource("can", namespace=self.namespace)
+            self.source = zelos_sdk.TraceSource("can_codec", namespace=self.namespace)
             self.raw_source = zelos_sdk.TraceSource("can_raw", namespace=self.namespace)
         else:
-            self.source = zelos_sdk.TraceSource("can")
+            self.source = zelos_sdk.TraceSource("can_codec")
             self.raw_source = zelos_sdk.TraceSource("can_raw")
 
         # Create raw CAN frame event schema (for log_raw_frames feature)
@@ -139,7 +139,7 @@ class CanCodec(can.Listener):
 
         if self.emit_schemas_on_init:
             self._generate_all_schemas()
-            logger.info(f"Generated {len(self._events)} event schemas from database")
+            logger.info("Generated %d event schemas from database", len(self._events))
         else:
             logger.info(
                 "Schema generation deferred - will emit schemas as messages are encountered"
@@ -237,10 +237,10 @@ class CanCodec(can.Listener):
                 import json
 
                 additional_config = json.loads(self.config["config_json"])
-                logger.info(f"Merging additional config: {list(additional_config.keys())}")
+                logger.info("Merging additional config: %s", list(additional_config.keys()))
                 bus_config.update(additional_config)
             except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse config_json: {e}")
+                logger.error("Failed to parse config_json: %s", e)
                 raise ValueError(f"Invalid config_json: {e}") from e
 
         max_retries = 3
@@ -252,9 +252,9 @@ class CanCodec(can.Listener):
                 return
             except can.CanError as e:
                 if attempt == max_retries - 1:
-                    logger.error(f"Failed to initialize CAN bus after {max_retries} attempts")
+                    logger.error("Failed to initialize CAN bus after %d attempts", max_retries)
                     raise
-                logger.warning(f"Bus init failed (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.warning("Bus init failed (attempt %d/%d): %s", attempt + 1, max_retries, e)
                 time.sleep(1)
 
     def stop(self) -> None:
@@ -267,7 +267,7 @@ class CanCodec(can.Listener):
             self.demo_task = None
 
         for task_name, task in self.periodic_tasks.items():
-            logger.info(f"Cancelling periodic task: {task_name}")
+            logger.info("Cancelling periodic task: %s", task_name)
             task.cancel()
 
         self.periodic_tasks.clear()
@@ -286,37 +286,42 @@ class CanCodec(can.Listener):
         :return: True if bus is operational
         """
         if not self.bus:
+            logger.debug("Bus health check: bus is None")
             return False
 
-        # Virtual/demo interfaces don't support state checks - assume healthy
+        # For virtual/demo interfaces, just check if bus object exists
         if self.config.get("interface") == "virtual" or self.demo_mode:
             return True
 
-        try:
-            state = self.bus.state
-            return state in (can.BusState.ACTIVE, can.BusState.PASSIVE)
-        except Exception as e:
-            logger.debug("Bus health check failed: %s", e)
-            # If state check not supported, assume healthy
-            return True
+        # For hardware interfaces, check bus state
+        bus_state = self.bus.state
+        is_active = bus_state == can.BusState.ACTIVE
+
+        if not is_active:
+            logger.info("Bus health check failed: state is %s, expected ACTIVE", bus_state.name)
+
+        return is_active
 
     async def _reconnect_bus(self) -> bool:
         """Attempt to reconnect to CAN bus.
 
         :return: True if reconnection successful
         """
-        logger.warning("Attempting bus reconnection...")
+        logger.debug("Attempting bus reconnection...")
         try:
             if self.bus:
+                logger.debug("Shutting down existing bus object...")
                 self.bus.shutdown()
                 self.bus = None
 
+            logger.debug("Waiting 1 second before reinitializing bus...")
             await asyncio.sleep(1)
+
+            logger.debug("Reinitializing bus...")
             self.start()
-            logger.info("Bus reconnected successfully")
             return True
         except Exception as e:
-            logger.error(f"Bus reconnection failed: {e}")
+            logger.error("Bus reconnection failed: %s", e)
             return False
 
     def on_message_received(self, message: can.Message) -> None:
@@ -329,6 +334,57 @@ class CanCodec(can.Listener):
         """
         self._handle_message(message)
         self.last_message_time = time.time()
+
+    def _check_notifier_health(self, notifier: can.Notifier) -> bool:
+        """Check if notifier threads are alive.
+
+        :param notifier: CAN notifier instance
+        :return: True if at least one notifier thread is alive
+        """
+        try:
+            if not hasattr(notifier, "_readers"):
+                return False
+
+            for reader in notifier._readers:
+                if isinstance(reader, threading.Thread):
+                    if reader.is_alive():
+                        return True
+                    logger.debug("Notifier thread '%s' is not alive", reader.name)
+
+            logger.debug("No alive notifier threads found")
+            return False
+        except Exception as e:
+            logger.error("Exception while checking notifier thread status: %s", e)
+            return False
+
+    def _log_reconnection_reason(self, notifier_alive: bool, bus_healthy: bool) -> None:
+        """Log detailed reason for reconnection.
+
+        :param notifier_alive: Whether notifier threads are alive
+        :param bus_healthy: Whether bus health check passed
+        """
+        if not notifier_alive and not bus_healthy:
+            logger.error("Reconnection triggered: Both notifier thread stopped AND bus unhealthy")
+        elif not notifier_alive:
+            logger.error("Reconnection triggered: Notifier thread stopped (bus was healthy)")
+        else:
+            logger.error("Reconnection triggered: Bus health check failed (notifier was alive)")
+
+    async def _handle_reconnection(self, notifier: can.Notifier) -> can.Notifier:
+        """Handle bus reconnection and notifier recreation.
+
+        :param notifier: Current notifier instance (will be stopped)
+        :return: New notifier instance if successful, otherwise the old one
+        """
+        logger.debug("Stopping notifier...")
+        notifier.stop()
+
+        if await self._reconnect_bus():
+            new_notifier = can.Notifier(self.bus, [self])
+            return new_notifier
+        else:
+            logger.error("Reconnection failed - bus remains uninitialized, will retry in 5 seconds")
+            return notifier
 
     async def _run_async(self) -> None:
         """Main async loop - health monitoring and reconnection handling.
@@ -347,61 +403,63 @@ class CanCodec(can.Listener):
             logger.info("Started EV simulation task for demo mode")
 
         try:
-            logger.info("Starting CAN message reception with direct listener pattern")
+            logger.info("Starting CAN message rx loop")
             while self.running:
                 await asyncio.sleep(5.0)
 
-                if not self._check_bus_health():
-                    logger.error("Bus health check failed")
-                    notifier.stop()
-                    if await self._reconnect_bus():
-                        notifier = can.Notifier(self.bus, [self])
-                    else:
-                        logger.error("Failed to reconnect, stopping")
-                        break
+                notifier_alive = self._check_notifier_health(notifier)
+                bus_healthy = self._check_bus_health()
+
+                if not notifier_alive or not bus_healthy:
+                    self._log_reconnection_reason(notifier_alive, bus_healthy)
+                    notifier = await self._handle_reconnection(notifier)
         except asyncio.CancelledError:
             logger.info("CAN reader cancelled")
         except Exception as e:
-            logger.exception(f"Error in CAN reception loop: {e}")
+            logger.exception("Error in CAN reception loop: %s", e)
         finally:
             notifier.stop()
             logger.info("CAN reception stopped")
 
-    def _handle_message(self, msg: can.Message) -> None:
-        """Decode and emit CAN message to trace.
-
-        For multiplexed messages, emits TWO separate events to minimize memory footprint:
-        1. Base signals (including multiplexer): {id:04x}_{name}
-        2. Multiplexed signals: {id:04x}_{name}/{mux_value}
+    def _update_receive_metrics(self, msg: can.Message) -> None:
+        """Update metrics for received message.
 
         :param msg: Received CAN message
         """
         self.metrics.messages_received += 1
-        self.metrics.bytes_received += len(msg.data)
 
-        # Get timestamp once for all emissions (raw + decoded)
-        timestamp_ns = self.get_timestamp(msg.timestamp)
+    def _emit_raw_frame(self, msg: can.Message, timestamp_ns: int | None) -> None:
+        """Emit raw CAN frame to trace if logging is enabled.
 
-        # Emit raw CAN frame to separate trace source if enabled
-        if self.log_raw_frames:
-            if timestamp_ns is not None:
-                self.raw_event.log_at(
-                    timestamp_ns,
-                    arbitration_id=msg.arbitration_id,
-                    dlc=msg.dlc,
-                    data=msg.data,
-                )
-            else:
-                self.raw_event.log(arbitration_id=msg.arbitration_id, dlc=msg.dlc, data=msg.data)
-            logger.debug(
-                "Emitted raw frame: ID=0x%04x, DLC=%d, data=%s",
-                msg.arbitration_id,
-                msg.dlc,
-                msg.data.hex(),
+        :param msg: CAN message
+        :param timestamp_ns: Timestamp in nanoseconds
+        """
+        if not self.log_raw_frames:
+            return
+
+        if timestamp_ns is None:
+            self.raw_event.log(
+                arbitration_id=msg.arbitration_id,
+                dlc=msg.dlc,
+                data=msg.data,
+            )
+        else:
+            self.raw_event.log_at(
+                timestamp_ns,
+                arbitration_id=msg.arbitration_id,
+                dlc=msg.dlc,
+                data=msg.data,
             )
 
+    def _decode_and_emit_message(self, msg: can.Message, timestamp_ns: int | None) -> None:
+        """Decode CAN message and emit decoded signals to trace.
+
+        :param msg: CAN message
+        :param timestamp_ns: Timestamp in nanoseconds
+        """
         try:
             decoded = self.db.decode_message(msg.arbitration_id, msg.data)
+            self.metrics.messages_decoded += 1
 
             dbc_msg = self.messages_by_id.get(msg.arbitration_id)
             if not dbc_msg:
@@ -411,12 +469,8 @@ class CanCodec(can.Listener):
 
             # Emit base signals (non-multiplexed signals + multiplexer signal if present)
             self._emit_base_signals(dbc_msg, decoded, timestamp_ns)
-
-            # Emit multiplexed signals if applicable
             if dbc_msg.is_multiplexed():
                 self._emit_multiplexed_signals(dbc_msg, decoded, timestamp_ns)
-
-            self.metrics.messages_decoded += 1
 
         except KeyError:
             logger.debug("Message ID %04x not in database", msg.arbitration_id)
@@ -427,6 +481,21 @@ class CanCodec(can.Listener):
         except Exception as e:
             logger.debug("Error decoding message %04x: %s", msg.arbitration_id, e)
             self.metrics.decode_errors += 1
+
+    def _handle_message(self, msg: can.Message) -> None:
+        """Decode and emit CAN message to trace.
+
+        For multiplexed messages, emits TWO separate events to minimize memory footprint:
+        1. Base signals (including multiplexer): {id:04x}_{name}
+        2. Multiplexed signals: {id:04x}_{name}/{mux_value}
+
+        :param msg: Received CAN message
+        """
+        logger.debug("Received CAN message: %s", msg)
+        self._update_receive_metrics(msg)
+        timestamp_ns = self.get_timestamp(msg.timestamp)
+        self._emit_raw_frame(msg, timestamp_ns)
+        self._decode_and_emit_message(msg, timestamp_ns)
 
     def _generate_all_schemas(self) -> None:
         """Generate trace event schemas for all messages in database at init time.
@@ -667,7 +736,7 @@ class CanCodec(can.Listener):
 
             while self.running:
                 if not self.bus:
-                    logger.warning(f"Bus not available for periodic task {task_name}")
+                    logger.warning("Bus not available for periodic task %s", task_name)
                     await asyncio.sleep(period)
                     continue
 
@@ -680,15 +749,15 @@ class CanCodec(can.Listener):
                     )
                     self.bus.send(msg)
                 except can.CanError as e:
-                    logger.error(f"Failed to send periodic message {task_name}: {e}")
+                    logger.error("Failed to send periodic message %s: %s", task_name, e)
                 except Exception as e:
-                    logger.error(f"Unexpected error in periodic send {task_name}: {e}")
+                    logger.error("Unexpected error in periodic send %s: %s", task_name, e)
 
                 await asyncio.sleep(period)
         except asyncio.CancelledError:
-            logger.info(f"Periodic task cancelled: {task_name}")
+            logger.info("Periodic task cancelled: %s", task_name)
         except Exception as e:
-            logger.exception(f"Error in periodic task {task_name}: {e}")
+            logger.exception("Error in periodic task %s: %s", task_name, e)
 
     @action("Get Status", "View CAN bus status")
     def get_status(self) -> dict[str, Any]:
@@ -696,33 +765,15 @@ class CanCodec(can.Listener):
 
         :return: Status information
         """
+        bus_state = "not_initialized" if not self.bus else str(self.bus.state.name)
+
         return {
+            "bus_state": bus_state,
             "running": self.running,
             "interface": self.config["interface"],
             "channel": self.config["channel"],
-            "messages_in_dbc": len(self.db.messages),
-            "active_periodic_tasks": len(self.periodic_tasks),
             "fd_mode": self.fd_mode,
         }
-
-    @action("Get Bus Health", "View detailed bus health metrics")
-    def get_bus_health(self) -> dict[str, Any]:
-        """Get detailed bus health information.
-
-        :return: Health metrics
-        """
-        if not self.bus:
-            return {"error": "Bus not initialized"}
-
-        try:
-            state = self.bus.state
-            return {
-                "state": str(state),
-                "healthy": state in (can.BusState.ACTIVE, can.BusState.PASSIVE),
-                "last_message_age_seconds": round(time.time() - self.last_message_time, 2),
-            }
-        except Exception as e:
-            return {"error": f"Failed to get bus health: {e}"}
 
     @action("Send Message", "Send a single CAN message")
     @action.number("msg_id", minimum=0, maximum=0x1FFFFFFF, title="Message ID", default=0x100)
@@ -763,10 +814,10 @@ class CanCodec(can.Listener):
                 "extended_id": extended_id,
             }
         except can.CanError as e:
-            logger.error(f"CAN error sending message: {e}")
+            logger.error("CAN error sending message: %s", e)
             return {"error": f"CAN error: {e}"}
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.error("Error sending message: %s", e)
             return {"error": str(e)}
 
     @action("Start Periodic Message", "Start periodic transmission of a CAN message")
@@ -801,7 +852,7 @@ class CanCodec(can.Listener):
             # Cancel existing task if present
             if task_name in self.periodic_tasks:
                 self.periodic_tasks[task_name].cancel()
-                logger.info(f"Cancelled existing periodic task: {task_name}")
+                logger.info("Cancelled existing periodic task: %s", task_name)
 
             # Create new periodic task
             task = asyncio.create_task(
@@ -817,7 +868,7 @@ class CanCodec(can.Listener):
                 "extended_id": extended_id,
             }
         except Exception as e:
-            logger.error(f"Error starting periodic transmission: {e}")
+            logger.error("Error starting periodic transmission: %s", e)
             return {"error": str(e)}
 
     @action("Stop Periodic Message", "Stop periodic transmission")
@@ -831,7 +882,7 @@ class CanCodec(can.Listener):
         if task_name in self.periodic_tasks:
             self.periodic_tasks[task_name].cancel()
             del self.periodic_tasks[task_name]
-            logger.info(f"Stopped periodic task: {task_name}")
+            logger.info("Stopped periodic task: %s", task_name)
             return {"status": "stopped", "task_name": task_name}
         else:
             return {"error": f"No periodic task found: {task_name}"}
@@ -868,13 +919,11 @@ class CanCodec(can.Listener):
             "messages_decoded": self.metrics.messages_decoded,
             "decode_errors": self.metrics.decode_errors,
             "unknown_messages": self.metrics.unknown_messages,
-            "bytes_received": self.metrics.bytes_received,
             "uptime_seconds": round(uptime, 2),
             "messages_per_second": round(messages_received / max(uptime, 1), 2),
             "decode_success_rate": round(
                 self.metrics.messages_decoded / max(messages_received, 1), 4
             ),
-            "bytes_per_second": round(self.metrics.bytes_received / max(uptime, 1), 2),
         }
 
     @action("List Messages", "List all messages in database")
@@ -996,7 +1045,7 @@ class CanCodec(can.Listener):
             # Check if output exists
             if output_file.exists():
                 if overwrite:
-                    logger.info(f"Removing existing file: {output_file}")
+                    logger.info("Removing existing file: %s", output_file)
                     output_file.unlink()
                 else:
                     return {
@@ -1006,7 +1055,9 @@ class CanCodec(can.Listener):
                     }
 
             # Perform conversion
-            logger.info(f"Converting {input_file} -> {output_file} using database: {database_file}")
+            logger.info(
+                "Converting %s -> %s using database: %s", input_file, output_file, database_file
+            )
             stats = convert_can_trace(input_file, database_file, output_file)
 
             return {
