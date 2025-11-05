@@ -2,7 +2,7 @@
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
 name = "Zelos CAN"
-version = "0.1.1"
+version = "0.1.2"
 description = "Zelos CAN"
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
@@ -17,7 +17,7 @@ changelog = "CHANGELOG.md"
 
 # Compatibility (optional, defaults to ^25.0.20)
 [zelos]
-version = ">=25.0.20"
+version = ">=25.0.22-0"
 
 # Configuration schema (enables UI in Zelos App)
 [config]
