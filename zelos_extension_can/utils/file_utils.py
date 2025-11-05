@@ -1,6 +1,7 @@
 """File utilities for handling data URLs and file conversions."""
 
 import base64
+import os
 from pathlib import Path
 
 
@@ -27,8 +28,22 @@ def data_url_to_file(data_url: str, output_path: str, detect_extension: bool = F
     except Exception as e:
         raise ValueError(f"Failed to decode base64 data: {e}") from e
 
-    # If detect_extension is True, try to detect file format from content
+    # Use absolute path or write to extension data directory if relative
     output_path_obj = Path(output_path)
+    if not output_path_obj.is_absolute():
+        # Get extension root directory from ZELOS_CONFIG_PATH
+        # Config is at: /path/to/extension/root/config.json
+        # We want to write to: /path/to/extension/root/data/<filename>
+        config_path = os.environ.get("ZELOS_CONFIG_PATH")
+        if not config_path:
+            raise RuntimeError("ZELOS_CONFIG_PATH environment variable not set")
+
+        # Use extension root/data directory
+        ext_root = Path(config_path).parent
+        data_dir = ext_root / "data"
+        data_dir.mkdir(exist_ok=True)
+        output_path_obj = data_dir / output_path_obj.name
+
     if detect_extension:
         # Detect CAN database file format from content
         content_start = file_bytes[:100].decode("latin-1", errors="ignore")
