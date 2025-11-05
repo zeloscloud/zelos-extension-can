@@ -17,7 +17,7 @@ changelog = "CHANGELOG.md"
 
 # Compatibility (optional, defaults to ^25.0.20)
 [zelos]
-version = "^25.0.20"
+version = ">=25.0.20"
 
 # Configuration schema (enables UI in Zelos App)
 [config]
