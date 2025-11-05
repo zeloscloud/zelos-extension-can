@@ -4,11 +4,11 @@
 name = "Zelos CAN"
 version = "0.1.1"
 description = "Zelos CAN"
-author = "taylor keairns"
+author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
 homepage = "https://github.com/zeloscloud/zelos-extension-can"
-keywords = ["sensor", "monitoring", "data-streaming"]
-categories = ["IoT", "Monitoring"]
+keywords = ["can", "can-bus", "automotive", "vehicle"]
+categories = ["Automotive", "Networking", "Industrial", "IoT"]
 
 # File references (relative paths in archive)
 icon = "assets/icon.svg"

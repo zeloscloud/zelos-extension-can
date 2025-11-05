@@ -1,8 +1,4 @@
-# Zelos Extension for Controller Area Network (CAN)
-
-> Zelos CAN
-
-A Zelos extension for interacting with a CAN bus.
+# Zelos extension for CAN (Controller Area Network)
 
 ## Features
 
@@ -49,6 +45,8 @@ The extension provides several actions accessible from the Zelos App:
 - **List Messages**: Browse all CAN messages defined in your DBC file
 - **Convert Trace File**: Convert CAN log files to Zelos trace format for offline analysis
 
+## What is CAN?
+[See this tutorial](https://www.csselectronics.com/pages/can-bus-simple-intro-tutorial)
 
 ## Development
 
@@ -58,7 +56,6 @@ Want to contribute or modify this extension? See [CONTRIBUTING.md](CONTRIBUTING.
 
 - **Repository**: [github.com/zeloscloud/zelos-extension-can](https://github.com/zeloscloud/zelos-extension-can)
 - **Issues**: [Report bugs or request features](https://github.com/zeloscloud/zelos-extension-can/issues)
-- **Documentation**: [Zelos Extension Guide](https://docs.zeloscloud.io/extensions)
 
 ## Support
 
