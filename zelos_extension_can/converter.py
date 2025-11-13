@@ -106,9 +106,9 @@ def _process_messages(
         codec._handle_message(can_msg)
 
         # Track stats from codec metrics
-        stats.messages_converted = codec.metrics["messages_decoded"]
-        stats.messages_skipped = codec.metrics["unknown_messages"]
-        stats.decode_errors = codec.metrics["decode_errors"]
+        stats.messages_converted = codec.metrics.messages_decoded
+        stats.messages_skipped = codec.metrics.unknown_messages
+        stats.decode_errors = codec.metrics.decode_errors
 
         # Track timing
         if stats.start_timestamp is None and can_msg.timestamp:

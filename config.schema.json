@@ -68,9 +68,9 @@
             },
             "database_file": {
               "type": "string",
-              "format": "data-url",
               "title": "CAN Database File (.dbc)",
-              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
+              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+              "ui:widget": "file-picker"
             },
             "receive_own_messages": {
               "type": "boolean",
@@ -127,9 +127,9 @@
             },
             "database_file": {
               "type": "string",
-              "format": "data-url",
               "title": "CAN Database File (.dbc)",
-              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
+              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+              "ui:widget": "file-picker"
             },
             "fd_mode": {
               "type": "boolean",
@@ -249,9 +249,9 @@
             },
             "database_file": {
               "type": "string",
-              "format": "data-url",
               "title": "CAN Database File (.dbc)",
-              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
+              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+              "ui:widget": "file-picker"
             },
             "bitrate": {
               "type": "integer",
@@ -384,9 +384,9 @@
             },
             "database_file": {
               "type": "string",
-              "format": "data-url",
               "title": "CAN Database File (.dbc)",
-              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
+              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+              "ui:widget": "file-picker"
             },
             "bitrate": {
               "type": "integer",
@@ -519,9 +519,9 @@
             },
             "database_file": {
               "type": "string",
-              "format": "data-url",
               "title": "CAN Database File (.dbc)",
-              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
+              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+              "ui:widget": "file-picker"
             },
             "bitrate": {
               "type": "integer",
@@ -648,9 +648,9 @@
             },
             "database_file": {
               "type": "string",
-              "format": "data-url",
               "title": "CAN Database File (.dbc)",
-              "description": "Upload CAN database file (supports .dbc, .arxml, .kcd, .sym)"
+              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+              "ui:widget": "file-picker"
             },
             "config_json": {
               "type": "string",
