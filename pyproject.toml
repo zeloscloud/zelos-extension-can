@@ -21,7 +21,11 @@ dependencies = [
     "zelos-sdk==0.0.8",
     "python-can",
     "cantools",
+    "rich-click>=1.8.0",
 ]
+
+[project.scripts]
+zelos-extension-can = "main:cli"
 
 [project.urls]
 Homepage = "https://github.com/zeloscloud/zelos-extension-can"

@@ -92,26 +92,33 @@ class CanCodec(can.Listener):
         # Create trace source (in isolated namespace if provided)
         if self.namespace:
             self.source = zelos_sdk.TraceSource("can_codec", namespace=self.namespace)
-            self.raw_source = zelos_sdk.TraceSource("can_raw", namespace=self.namespace)
         else:
             self.source = zelos_sdk.TraceSource("can_codec")
-            self.raw_source = zelos_sdk.TraceSource("can_raw")
 
         # Create raw CAN frame event schema (for log_raw_frames feature)
-        self.raw_event = self.raw_source.add_event(
-            "messages",
-            [
-                zelos_sdk.TraceEventFieldMetadata(
-                    name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
-                ),
-                zelos_sdk.TraceEventFieldMetadata(
-                    name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
-                ),
-                zelos_sdk.TraceEventFieldMetadata(
-                    name="data", data_type=zelos_sdk.DataType.Binary, unit=None
-                ),
-            ],
-        )
+        if self.log_raw_frames:
+            if self.namespace:
+                self.raw_source = zelos_sdk.TraceSource("can_raw", namespace=self.namespace)
+            else:
+                self.raw_source = zelos_sdk.TraceSource("can_raw")
+
+            self.raw_event = self.raw_source.add_event(
+                "messages",
+                [
+                    zelos_sdk.TraceEventFieldMetadata(
+                        name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
+                    ),
+                    zelos_sdk.TraceEventFieldMetadata(
+                        name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
+                    ),
+                    zelos_sdk.TraceEventFieldMetadata(
+                        name="data", data_type=zelos_sdk.DataType.Binary, unit=None
+                    ),
+                ],
+            )
+        else:
+            self.raw_source = None
+            self.raw_event = None
 
         # Build message lookup tables (handle duplicates permissively)
         self.messages_by_id: dict[int, cantools.db.can.Message] = {}

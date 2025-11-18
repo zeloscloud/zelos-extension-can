@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Zelos CAN extension - CAN bus monitoring and database decoding."""
 
-import argparse
 import logging
-import signal
-import sys
 from pathlib import Path
-from types import FrameType
 
-import zelos_sdk
-from zelos_sdk.extensions import load_config
+import rich_click as click
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
-from zelos_extension_can.codec import CanCodec
+from zelos_extension_can import cli as cli_commands
 
 DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.dbc"
+
+# Configure rich-click
+click.rich_click.USE_RICH_MARKUP = True
+click.rich_click.USE_MARKDOWN = True
+click.rich_click.SHOW_ARGUMENTS = True
+click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
+click.rich_click.STYLE_ERRORS_SUGGESTION = "yellow italic"
 
 # Configure logging - INFO level prevents debug logs from being sent to backend
 logging.basicConfig(level=logging.INFO)
@@ -24,96 +26,41 @@ logging.basicConfig(level=logging.INFO)
 handler = TraceLoggingHandler("can_log")
 handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(handler)
-logger = logging.getLogger(__name__)
 
-# Parse command line arguments
-parser = argparse.ArgumentParser(description="Zelos CAN Extension")
-parser.add_argument(
+
+@click.group(invoke_without_command=True)
+@click.option(
     "--demo",
-    action="store_true",
+    is_flag=True,
     help="Run in demo mode with built-in EV simulator",
 )
-args = parser.parse_args()
+@click.option(
+    "--file",
+    type=click.Path(path_type=Path),
+    default=None,
+    is_flag=False,
+    flag_value=".",
+    help="Record trace to .trz file (defaults to UTC.trz if no filename specified)",
+)
+@click.pass_context
+def cli(ctx: click.Context, demo: bool, file: Path | None) -> None:
+    """CAN bus monitoring and database decoding.
 
-# Load and validate configuration
-config = load_config()
-
-# Apply log level from config
-log_level_str = config.get("log_level", "INFO")
-try:
-    log_level = getattr(logging, log_level_str)
-    logging.getLogger().setLevel(log_level)
-    logger.info(f"Log level set to: {log_level_str}")
-except AttributeError:
-    logger.warning(f"Invalid log level '{log_level_str}', using INFO")
-    logging.getLogger().setLevel(logging.INFO)
-
-# Override with demo mode if requested via CLI flag
-if args.demo:
-    logger.info("Demo mode enabled via --demo flag")
-    config["interface"] = "demo"
-
-# Handle demo interface selection
-if config.get("interface") == "demo":
-    logger.info("Demo mode: using built-in EV simulator")
-    config["demo_mode"] = True
-    config["interface"] = "virtual"
-    config["channel"] = "vcan0"
-    config["database_file"] = str(DEMO_DBC_PATH)
-    config["receive_own_messages"] = True  # Required for demo mode to receive simulated messages
-
-# Handle "other" interface - merge config_json into main config
-if config.get("interface") == "other":
-    logger.info("Using custom interface from config_json")
-    import json
-
-    if "config_json" not in config or not config["config_json"]:
-        logger.error("'other' interface requires config_json with interface and channel")
-        sys.exit(1)
-    try:
-        custom_config = json.loads(config["config_json"])
-        if "interface" not in custom_config:
-            logger.error("config_json must include 'interface' key")
-            sys.exit(1)
-        if "channel" not in custom_config:
-            logger.error("config_json must include 'channel' key")
-            sys.exit(1)
-        # Merge custom config into main config
-        config["interface"] = custom_config.pop("interface")
-        config["channel"] = custom_config.pop("channel")
-        # Update config_json with remaining custom parameters
-        config["config_json"] = json.dumps(custom_config) if custom_config else ""
-        logger.info(f"Custom interface: {config['interface']}, channel: {config['channel']}")
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in config_json: {e}")
-        sys.exit(1)
-
-# Create CAN codec
-codec = CanCodec(config)
-
-# Register interactive actions
-zelos_sdk.actions_registry.register(codec, "can")
-
-# Initialize SDK
-zelos_sdk.init(name="can", log_level="info", actions=True)
-
-
-def shutdown_handler(signum: int, frame: FrameType | None) -> None:
-    """Handle graceful shutdown.
-
-    :param signum: Signal number
-    :param frame: Current stack frame
+    Traces a CAN bus given an interface, channel, database file, bitrate, etc.
+    Configure via Zelos extension settings or use --demo for testing.
     """
-    logger.info("Shutting down CAN extension...")
-    codec.stop()
-    sys.exit(0)
+    # If a subcommand was invoked, don't run the main trace logic
+    if ctx.invoked_subcommand is not None:
+        return
+
+    # Run app-based configuration mode
+    cli_commands.run_app_mode(demo, file, DEMO_DBC_PATH)
 
 
-signal.signal(signal.SIGTERM, shutdown_handler)
-signal.signal(signal.SIGINT, shutdown_handler)
+# Register subcommands
+cli.add_command(cli_commands.trace)
+cli.add_command(cli_commands.convert)
 
-# Run
+
 if __name__ == "__main__":
-    logger.info("Starting CAN extension")
-    codec.start()
-    codec.run()
+    cli()

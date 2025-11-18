@@ -30,26 +30,6 @@
               "enum": [
                 "demo"
               ]
-            },
-            "log_level": {
-              "type": "string",
-              "title": "Log Level",
-              "description": "Set the logging verbosity level",
-              "enum": [
-                "DEBUG",
-                "INFO",
-                "WARNING",
-                "ERROR",
-                "CRITICAL"
-              ],
-              "default": "INFO"
-            },
-            "emit_schemas_on_init": {
-              "type": "boolean",
-              "title": "Emit Schemas On Init",
-              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-              "default": false,
-              "ui:widget": "toggle"
             }
           }
         },
