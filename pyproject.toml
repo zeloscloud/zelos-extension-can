@@ -1,6 +1,6 @@
 [project]
 name = "zelos-extension-can"
-version = "0.1.5"
+version = "0.1.6"
 description = "Zelos CAN"
 authors = [{ name = "zeloscloud", email = "info@zeloscloud.io" }]
 readme = "README.md"
