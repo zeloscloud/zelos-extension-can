@@ -57,21 +57,23 @@ Want to contribute or modify this extension? See [CONTRIBUTING.md](CONTRIBUTING.
 - **Repository**: [github.com/zeloscloud/zelos-extension-can](https://github.com/zeloscloud/zelos-extension-can)
 - **Issues**: [Report bugs or request features](https://github.com/zeloscloud/zelos-extension-can/issues)
 
-## CLI Usage Examples
+## CLI Usage
 
-The extension includes a command-line interface for advanced use cases:
+The extension includes a command-line interface for advanced use cases. No installation required - just use `uv run`:
+
+> **Tip:** Run `pip install .` to install and use `zelos-extension-can <args>` from anywhere.
 
 ### CAN Bus Tracing
 
 ```bash
 # Launch trace process
-zelos-extension-can trace socketcan can0 /path/to/file.dbc
+uv run main.py trace socketcan can0 /path/to/file.dbc
 
 # Launch trace process and record to .trz file
-zelos-extension-can trace socketcan can0 /path/to/file.dbc --file
+uv run main.py trace socketcan can0 /path/to/file.dbc --file
 
-# Convert canudmp log to Zelos trace format (supports .asc, .blf, .trc, .log, .csv, .mf4)
-zelos-extension-can convert capture.log vehicle.dbc
+# Convert candump log to Zelos trace format (supports .asc, .blf, .trc, .log, .csv, .mf4)
+uv run main.py convert capture.log vehicle.dbc
 ```
 
 ## Support
