@@ -11,7 +11,7 @@ keywords = ["can", "can-bus", "automotive", "vehicle"]
 categories = ["Automotive", "Networking", "Industrial", "IoT"]
 
 # File references (relative paths in archive)
-icon = "assets/icon.svg"
+icon = "assets/icon.png"
 readme = "README.md"
 changelog = "CHANGELOG.md"
 
