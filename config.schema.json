@@ -1,32 +1,26 @@
 {
   "type": "object",
-  "title": "CAN Bus Configuration",
-  "description": "Configure CAN interface and database file. Add additional buses to monitor multiple CAN networks in parallel.",
+  "title": "CAN Extension Configuration",
+  "description": "Configure one or more CAN buses to monitor in parallel.",
   "properties": {
-    "name": {
+    "log_level": {
       "type": "string",
-      "title": "Bus Name",
-      "description": "Optional name to identify this bus (used as prefix in trace events). Leave empty to use channel name.",
-      "default": ""
-    },
-    "interface": {
-      "type": "string",
-      "title": "CAN Interface",
-      "description": "CAN interface type (e.g. Linux: socketcan, macOS/Windows: pcan)",
+      "title": "Log Level",
+      "description": "Set the logging verbosity level for all buses",
       "enum": [
-        "demo",
-        "virtual",
-        "socketcan",
-        "pcan",
-        "kvaser",
-        "vector",
-        "other"
-      ]
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ],
+      "default": "INFO"
     },
-    "additional_buses": {
+    "buses": {
       "type": "array",
-      "title": "Additional CAN Buses",
-      "description": "Add more CAN buses to monitor in parallel. Each bus runs independently with its own interface and database.",
+      "title": "CAN Buses",
+      "description": "Configure CAN buses to monitor. Click 'Add' to add a new bus.",
+      "minItems": 1,
       "ui:widget": "array-add",
       "items": {
         "type": "object",
@@ -35,14 +29,15 @@
           "name": {
             "type": "string",
             "title": "Bus Name",
-            "description": "Name to identify this bus (required, used as prefix in trace events)",
+            "description": "Name to identify this bus (used as prefix in trace events)",
             "minLength": 1
           },
           "interface": {
             "type": "string",
             "title": "CAN Interface",
-            "description": "CAN interface type",
+            "description": "CAN interface type (e.g. Linux: socketcan, macOS/Windows: pcan)",
             "enum": [
+              "demo",
               "virtual",
               "socketcan",
               "pcan",
@@ -50,726 +45,584 @@
               "vector",
               "other"
             ]
-          },
-          "channel": {
-            "type": "string",
-            "title": "Channel",
-            "description": "CAN channel identifier (e.g., can0, vcan0, PCAN_USBBUS1)"
-          },
-          "database_file": {
-            "type": "string",
-            "title": "CAN Database File (.dbc)",
-            "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-            "ui:widget": "file-picker"
-          },
-          "bitrate": {
-            "type": "integer",
-            "title": "Bitrate (bps)",
-            "description": "CAN bus bitrate (required for hardware interfaces)",
-            "enum": [
-              125000,
-              250000,
-              500000,
-              1000000
-            ],
-            "default": 500000
-          },
-          "fd_mode": {
-            "type": "boolean",
-            "title": "CAN-FD Mode",
-            "description": "Enable CAN-FD for higher data rates and larger payloads",
-            "default": false,
-            "ui:widget": "toggle"
-          },
-          "data_bitrate": {
-            "type": "integer",
-            "title": "Data Bitrate (bps)",
-            "description": "CAN-FD data phase bitrate (required when fd_mode is enabled)",
-            "enum": [
-              500000,
-              1000000,
-              2000000,
-              4000000,
-              8000000
-            ],
-            "default": 2000000
-          },
-          "receive_own_messages": {
-            "type": "boolean",
-            "title": "Receive Own Messages",
-            "description": "Receive messages transmitted by this interface",
-            "default": true,
-            "ui:widget": "toggle"
-          },
-          "log_raw_frames": {
-            "type": "boolean",
-            "title": "Log Raw CAN Frames",
-            "description": "Log raw CAN frames to separate trace source",
-            "default": false,
-            "ui:widget": "toggle"
-          },
-          "config_json": {
-            "type": "string",
-            "title": "Advanced Configuration (JSON)",
-            "description": "Additional python-can Bus() kwargs as JSON object"
           }
         },
         "required": [
           "name",
-          "interface",
-          "channel",
-          "database_file"
-        ]
+          "interface"
+        ],
+        "dependencies": {
+          "interface": {
+            "oneOf": [
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "demo"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "virtual"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "Virtual CAN channel identifier (e.g. vcan0)",
+                    "default": "vcan0"
+                  },
+                  "database_file": {
+                    "type": "string",
+                    "title": "CAN Database File (.dbc)",
+                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+                    "ui:widget": "file-picker"
+                  },
+                  "receive_own_messages": {
+                    "type": "boolean",
+                    "title": "Receive Own Messages",
+                    "description": "Receive messages transmitted by this interface",
+                    "default": true,
+                    "ui:widget": "toggle"
+                  },
+                  "log_raw_frames": {
+                    "type": "boolean",
+                    "title": "Log Raw CAN Frames",
+                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "emit_schemas_on_init": {
+                    "type": "boolean",
+                    "title": "Emit Schemas On Init",
+                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "database_file"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "socketcan"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "CAN channel identifier",
+                    "default": "can0"
+                  },
+                  "database_file": {
+                    "type": "string",
+                    "title": "CAN Database File (.dbc)",
+                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+                    "ui:widget": "file-picker"
+                  },
+                  "fd_mode": {
+                    "type": "boolean",
+                    "title": "CAN-FD Mode",
+                    "description": "Enable CAN-FD for higher data rates and larger payloads",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
+                  "receive_own_messages": {
+                    "type": "boolean",
+                    "title": "Receive Own Messages",
+                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+                    "default": true,
+                    "ui:widget": "toggle"
+                  },
+                  "log_raw_frames": {
+                    "type": "boolean",
+                    "title": "Log Raw CAN Frames",
+                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
+                  "emit_schemas_on_init": {
+                    "type": "boolean",
+                    "title": "Emit Schemas On Init",
+                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "database_file"
+                ],
+                "dependencies": {
+                  "fd_mode": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "data_bitrate": {
+                            "type": "integer",
+                            "title": "Data Bitrate (bps)",
+                            "description": "CAN-FD data phase bitrate",
+                            "enum": [
+                              500000,
+                              1000000,
+                              2000000,
+                              4000000,
+                              8000000
+                            ],
+                            "default": 2000000
+                          }
+                        },
+                        "required": [
+                          "data_bitrate"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "pcan"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "CAN channel identifier",
+                    "default": "PCAN_USBBUS1"
+                  },
+                  "database_file": {
+                    "type": "string",
+                    "title": "CAN Database File (.dbc)",
+                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+                    "ui:widget": "file-picker"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "CAN bus bitrate",
+                    "enum": [
+                      125000,
+                      250000,
+                      500000,
+                      1000000
+                    ],
+                    "default": 500000
+                  },
+                  "fd_mode": {
+                    "type": "boolean",
+                    "title": "CAN-FD Mode",
+                    "description": "Enable CAN-FD for higher data rates and larger payloads",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
+                  "receive_own_messages": {
+                    "type": "boolean",
+                    "title": "Receive Own Messages",
+                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+                    "default": true,
+                    "ui:widget": "toggle"
+                  },
+                  "log_raw_frames": {
+                    "type": "boolean",
+                    "title": "Log Raw CAN Frames",
+                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
+                  "emit_schemas_on_init": {
+                    "type": "boolean",
+                    "title": "Emit Schemas On Init",
+                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "database_file",
+                  "bitrate"
+                ],
+                "dependencies": {
+                  "fd_mode": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "data_bitrate": {
+                            "type": "integer",
+                            "title": "Data Bitrate (bps)",
+                            "description": "CAN-FD data phase bitrate",
+                            "enum": [
+                              500000,
+                              1000000,
+                              2000000,
+                              4000000,
+                              8000000
+                            ],
+                            "default": 2000000
+                          }
+                        },
+                        "required": [
+                          "data_bitrate"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "kvaser"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "CAN channel identifier",
+                    "default": "0"
+                  },
+                  "database_file": {
+                    "type": "string",
+                    "title": "CAN Database File (.dbc)",
+                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+                    "ui:widget": "file-picker"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "CAN bus bitrate",
+                    "enum": [
+                      125000,
+                      250000,
+                      500000,
+                      1000000
+                    ],
+                    "default": 500000
+                  },
+                  "fd_mode": {
+                    "type": "boolean",
+                    "title": "CAN-FD Mode",
+                    "description": "Enable CAN-FD for higher data rates and larger payloads",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
+                  "receive_own_messages": {
+                    "type": "boolean",
+                    "title": "Receive Own Messages",
+                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+                    "default": true,
+                    "ui:widget": "toggle"
+                  },
+                  "log_raw_frames": {
+                    "type": "boolean",
+                    "title": "Log Raw CAN Frames",
+                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
+                  "emit_schemas_on_init": {
+                    "type": "boolean",
+                    "title": "Emit Schemas On Init",
+                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "database_file",
+                  "bitrate"
+                ],
+                "dependencies": {
+                  "fd_mode": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "data_bitrate": {
+                            "type": "integer",
+                            "title": "Data Bitrate (bps)",
+                            "description": "CAN-FD data phase bitrate",
+                            "enum": [
+                              500000,
+                              1000000,
+                              2000000,
+                              4000000,
+                              8000000
+                            ],
+                            "default": 2000000
+                          }
+                        },
+                        "required": [
+                          "data_bitrate"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "vector"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "CAN channel identifier",
+                    "default": "0"
+                  },
+                  "database_file": {
+                    "type": "string",
+                    "title": "CAN Database File (.dbc)",
+                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+                    "ui:widget": "file-picker"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "CAN bus bitrate",
+                    "enum": [
+                      125000,
+                      250000,
+                      500000,
+                      1000000
+                    ],
+                    "default": 500000
+                  },
+                  "fd_mode": {
+                    "type": "boolean",
+                    "title": "CAN-FD Mode",
+                    "description": "Enable CAN-FD for higher data rates and larger payloads",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
+                  "receive_own_messages": {
+                    "type": "boolean",
+                    "title": "Receive Own Messages",
+                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
+                    "default": true,
+                    "ui:widget": "toggle"
+                  },
+                  "log_raw_frames": {
+                    "type": "boolean",
+                    "title": "Log Raw CAN Frames",
+                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
+                  "emit_schemas_on_init": {
+                    "type": "boolean",
+                    "title": "Emit Schemas On Init",
+                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "database_file",
+                  "bitrate"
+                ],
+                "dependencies": {
+                  "fd_mode": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "data_bitrate": {
+                            "type": "integer",
+                            "title": "Data Bitrate (bps)",
+                            "description": "CAN-FD data phase bitrate",
+                            "enum": [
+                              500000,
+                              1000000,
+                              2000000,
+                              4000000,
+                              8000000
+                            ],
+                            "default": 2000000
+                          }
+                        },
+                        "required": [
+                          "data_bitrate"
+                        ]
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "other"
+                    ]
+                  },
+                  "database_file": {
+                    "type": "string",
+                    "title": "CAN Database File (.dbc)",
+                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+                    "ui:widget": "file-picker"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"slcan\", \"channel\": \"/dev/ttyUSB0\", \"bitrate\": 500000}"
+                  },
+                  "emit_schemas_on_init": {
+                    "type": "boolean",
+                    "title": "Emit Schemas On Init",
+                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "database_file",
+                  "config_json"
+                ]
+              }
+            ]
+          }
+        }
       },
       "default": []
     }
   },
   "required": [
-    "interface"
-  ],
-  "dependencies": {
-    "interface": {
-      "oneOf": [
-        {
-          "properties": {
-            "interface": {
-              "enum": [
-                "demo"
-              ]
-            }
-          }
-        },
-        {
-          "properties": {
-            "interface": {
-              "enum": [
-                "virtual"
-              ]
-            },
-            "channel": {
-              "type": "string",
-              "title": "Channel",
-              "description": "Virtual CAN channel identifier (e.g. vcan0)",
-              "default": "vcan0"
-            },
-            "database_file": {
-              "type": "string",
-              "title": "CAN Database File (.dbc)",
-              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-              "ui:widget": "file-picker"
-            },
-            "receive_own_messages": {
-              "type": "boolean",
-              "title": "Receive Own Messages",
-              "description": "Receive messages transmitted by this interface",
-              "default": true,
-              "ui:widget": "toggle"
-            },
-            "log_raw_frames": {
-              "type": "boolean",
-              "title": "Log Raw CAN Frames",
-              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "log_level": {
-              "type": "string",
-              "title": "Log Level",
-              "description": "Set the logging verbosity level",
-              "enum": [
-                "DEBUG",
-                "INFO",
-                "WARNING",
-                "ERROR",
-                "CRITICAL"
-              ],
-              "default": "INFO"
-            },
-            "emit_schemas_on_init": {
-              "type": "boolean",
-              "title": "Emit Schemas On Init",
-              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-              "default": false,
-              "ui:widget": "toggle"
-            }
-          },
-          "required": [
-            "channel",
-            "database_file"
-          ]
-        },
-        {
-          "properties": {
-            "interface": {
-              "enum": [
-                "socketcan"
-              ]
-            },
-            "channel": {
-              "type": "string",
-              "title": "Channel",
-              "description": "CAN channel identifier",
-              "default": "can0"
-            },
-            "database_file": {
-              "type": "string",
-              "title": "CAN Database File (.dbc)",
-              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-              "ui:widget": "file-picker"
-            },
-            "fd_mode": {
-              "type": "boolean",
-              "title": "CAN-FD Mode",
-              "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "timestamp_mode": {
-              "type": "string",
-              "title": "Timestamp Mode",
-              "description": "Hardware timestamp handling mode",
-              "enum": [
-                "auto",
-                "absolute",
-                "ignore"
-              ],
-              "default": "auto"
-            },
-            "receive_own_messages": {
-              "type": "boolean",
-              "title": "Receive Own Messages",
-              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true,
-              "ui:widget": "toggle"
-            },
-            "log_raw_frames": {
-              "type": "boolean",
-              "title": "Log Raw CAN Frames",
-              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "config_json": {
-              "type": "string",
-              "title": "Advanced Configuration (JSON)",
-              "description": "Additional python-can Bus() kwargs as JSON object"
-            },
-            "log_level": {
-              "type": "string",
-              "title": "Log Level",
-              "description": "Set the logging verbosity level",
-              "enum": [
-                "DEBUG",
-                "INFO",
-                "WARNING",
-                "ERROR",
-                "CRITICAL"
-              ],
-              "default": "INFO"
-            },
-            "emit_schemas_on_init": {
-              "type": "boolean",
-              "title": "Emit Schemas On Init",
-              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-              "default": false,
-              "ui:widget": "toggle"
-            }
-          },
-          "required": [
-            "channel",
-            "database_file"
-          ],
-          "dependencies": {
-            "fd_mode": {
-              "oneOf": [
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        false
-                      ]
-                    }
-                  }
-                },
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        true
-                      ]
-                    },
-                    "data_bitrate": {
-                      "type": "integer",
-                      "title": "Data Bitrate (bps)",
-                      "description": "CAN-FD data phase bitrate",
-                      "enum": [
-                        500000,
-                        1000000,
-                        2000000,
-                        4000000,
-                        8000000
-                      ],
-                      "default": 2000000
-                    }
-                  },
-                  "required": [
-                    "data_bitrate"
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        {
-          "properties": {
-            "interface": {
-              "enum": [
-                "pcan"
-              ]
-            },
-            "channel": {
-              "type": "string",
-              "title": "Channel",
-              "description": "CAN channel identifier",
-              "default": "PCAN_USBBUS1"
-            },
-            "database_file": {
-              "type": "string",
-              "title": "CAN Database File (.dbc)",
-              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-              "ui:widget": "file-picker"
-            },
-            "bitrate": {
-              "type": "integer",
-              "title": "Bitrate (bps)",
-              "description": "CAN bus bitrate",
-              "enum": [
-                125000,
-                250000,
-                500000,
-                1000000
-              ],
-              "default": 500000
-            },
-            "fd_mode": {
-              "type": "boolean",
-              "title": "CAN-FD Mode",
-              "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "timestamp_mode": {
-              "type": "string",
-              "title": "Timestamp Mode",
-              "description": "Hardware timestamp handling mode",
-              "enum": [
-                "auto",
-                "absolute",
-                "ignore"
-              ],
-              "default": "auto"
-            },
-            "receive_own_messages": {
-              "type": "boolean",
-              "title": "Receive Own Messages",
-              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true,
-              "ui:widget": "toggle"
-            },
-            "log_raw_frames": {
-              "type": "boolean",
-              "title": "Log Raw CAN Frames",
-              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "config_json": {
-              "type": "string",
-              "title": "Advanced Configuration (JSON)",
-              "description": "Additional python-can Bus() kwargs as JSON object"
-            },
-            "log_level": {
-              "type": "string",
-              "title": "Log Level",
-              "description": "Set the logging verbosity level",
-              "enum": [
-                "DEBUG",
-                "INFO",
-                "WARNING",
-                "ERROR",
-                "CRITICAL"
-              ],
-              "default": "INFO"
-            },
-            "emit_schemas_on_init": {
-              "type": "boolean",
-              "title": "Emit Schemas On Init",
-              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-              "default": false,
-              "ui:widget": "toggle"
-            }
-          },
-          "required": [
-            "channel",
-            "database_file",
-            "bitrate"
-          ],
-          "dependencies": {
-            "fd_mode": {
-              "oneOf": [
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        false
-                      ]
-                    }
-                  }
-                },
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        true
-                      ]
-                    },
-                    "data_bitrate": {
-                      "type": "integer",
-                      "title": "Data Bitrate (bps)",
-                      "description": "CAN-FD data phase bitrate",
-                      "enum": [
-                        500000,
-                        1000000,
-                        2000000,
-                        4000000,
-                        8000000
-                      ],
-                      "default": 2000000
-                    }
-                  },
-                  "required": [
-                    "data_bitrate"
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        {
-          "properties": {
-            "interface": {
-              "enum": [
-                "kvaser"
-              ]
-            },
-            "channel": {
-              "type": "string",
-              "title": "Channel",
-              "description": "CAN channel identifier",
-              "default": "0"
-            },
-            "database_file": {
-              "type": "string",
-              "title": "CAN Database File (.dbc)",
-              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-              "ui:widget": "file-picker"
-            },
-            "bitrate": {
-              "type": "integer",
-              "title": "Bitrate (bps)",
-              "description": "CAN bus bitrate",
-              "enum": [
-                125000,
-                250000,
-                500000,
-                1000000
-              ],
-              "default": 500000
-            },
-            "fd_mode": {
-              "type": "boolean",
-              "title": "CAN-FD Mode",
-              "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "timestamp_mode": {
-              "type": "string",
-              "title": "Timestamp Mode",
-              "description": "Hardware timestamp handling mode",
-              "enum": [
-                "auto",
-                "absolute",
-                "ignore"
-              ],
-              "default": "auto"
-            },
-            "receive_own_messages": {
-              "type": "boolean",
-              "title": "Receive Own Messages",
-              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true,
-              "ui:widget": "toggle"
-            },
-            "log_raw_frames": {
-              "type": "boolean",
-              "title": "Log Raw CAN Frames",
-              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "config_json": {
-              "type": "string",
-              "title": "Advanced Configuration (JSON)",
-              "description": "Additional python-can Bus() kwargs as JSON object"
-            },
-            "log_level": {
-              "type": "string",
-              "title": "Log Level",
-              "description": "Set the logging verbosity level",
-              "enum": [
-                "DEBUG",
-                "INFO",
-                "WARNING",
-                "ERROR",
-                "CRITICAL"
-              ],
-              "default": "INFO"
-            },
-            "emit_schemas_on_init": {
-              "type": "boolean",
-              "title": "Emit Schemas On Init",
-              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-              "default": false,
-              "ui:widget": "toggle"
-            }
-          },
-          "required": [
-            "channel",
-            "database_file",
-            "bitrate"
-          ],
-          "dependencies": {
-            "fd_mode": {
-              "oneOf": [
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        false
-                      ]
-                    }
-                  }
-                },
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        true
-                      ]
-                    },
-                    "data_bitrate": {
-                      "type": "integer",
-                      "title": "Data Bitrate (bps)",
-                      "description": "CAN-FD data phase bitrate",
-                      "enum": [
-                        500000,
-                        1000000,
-                        2000000,
-                        4000000,
-                        8000000
-                      ],
-                      "default": 2000000
-                    }
-                  },
-                  "required": [
-                    "data_bitrate"
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        {
-          "properties": {
-            "interface": {
-              "enum": [
-                "vector"
-              ]
-            },
-            "channel": {
-              "type": "string",
-              "title": "Channel",
-              "description": "CAN channel identifier",
-              "default": "0"
-            },
-            "database_file": {
-              "type": "string",
-              "title": "CAN Database File (.dbc)",
-              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-              "ui:widget": "file-picker"
-            },
-            "bitrate": {
-              "type": "integer",
-              "title": "Bitrate (bps)",
-              "description": "CAN bus bitrate",
-              "enum": [
-                125000,
-                250000,
-                500000,
-                1000000
-              ],
-              "default": 500000
-            },
-            "fd_mode": {
-              "type": "boolean",
-              "title": "CAN-FD Mode",
-              "description": "Enable CAN-FD for higher data rates and larger payloads",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "timestamp_mode": {
-              "type": "string",
-              "title": "Timestamp Mode",
-              "description": "Hardware timestamp handling mode",
-              "enum": [
-                "auto",
-                "absolute",
-                "ignore"
-              ],
-              "default": "auto"
-            },
-            "receive_own_messages": {
-              "type": "boolean",
-              "title": "Receive Own Messages",
-              "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-              "default": true,
-              "ui:widget": "toggle"
-            },
-            "log_raw_frames": {
-              "type": "boolean",
-              "title": "Log Raw CAN Frames",
-              "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-              "default": false,
-              "ui:widget": "toggle"
-            },
-            "config_json": {
-              "type": "string",
-              "title": "Advanced Configuration (JSON)",
-              "description": "Additional python-can Bus() kwargs as JSON object"
-            },
-            "log_level": {
-              "type": "string",
-              "title": "Log Level",
-              "description": "Set the logging verbosity level",
-              "enum": [
-                "DEBUG",
-                "INFO",
-                "WARNING",
-                "ERROR",
-                "CRITICAL"
-              ],
-              "default": "INFO"
-            },
-            "emit_schemas_on_init": {
-              "type": "boolean",
-              "title": "Emit Schemas On Init",
-              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-              "default": false,
-              "ui:widget": "toggle"
-            }
-          },
-          "required": [
-            "channel",
-            "database_file",
-            "bitrate"
-          ],
-          "dependencies": {
-            "fd_mode": {
-              "oneOf": [
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        false
-                      ]
-                    }
-                  }
-                },
-                {
-                  "properties": {
-                    "fd_mode": {
-                      "enum": [
-                        true
-                      ]
-                    },
-                    "data_bitrate": {
-                      "type": "integer",
-                      "title": "Data Bitrate (bps)",
-                      "description": "CAN-FD data phase bitrate",
-                      "enum": [
-                        500000,
-                        1000000,
-                        2000000,
-                        4000000,
-                        8000000
-                      ],
-                      "default": 2000000
-                    }
-                  },
-                  "required": [
-                    "data_bitrate"
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        {
-          "properties": {
-            "interface": {
-              "enum": [
-                "other"
-              ]
-            },
-            "database_file": {
-              "type": "string",
-              "title": "CAN Database File (.dbc)",
-              "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-              "ui:widget": "file-picker"
-            },
-            "config_json": {
-              "type": "string",
-              "title": "Advanced Configuration (JSON)",
-              "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"slcan\", \"channel\": \"/dev/ttyUSB0\", \"bitrate\": 500000}"
-            },
-            "log_level": {
-              "type": "string",
-              "title": "Log Level",
-              "description": "Set the logging verbosity level",
-              "enum": [
-                "DEBUG",
-                "INFO",
-                "WARNING",
-                "ERROR",
-                "CRITICAL"
-              ],
-              "default": "INFO"
-            },
-            "emit_schemas_on_init": {
-              "type": "boolean",
-              "title": "Emit Schemas On Init",
-              "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-              "default": false,
-              "ui:widget": "toggle"
-            }
-          },
-          "required": [
-            "database_file",
-            "config_json"
-          ]
-        }
-      ]
-    }
-  }
+    "buses"
+  ]
 }
