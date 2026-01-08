@@ -69,9 +69,7 @@ def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
     return config
 
 
-def _create_codecs(
-    config: dict, demo_dbc_path: Path
-) -> list[tuple[CanCodec, str]]:
+def _create_codecs(config: dict, demo_dbc_path: Path) -> list[tuple[CanCodec, str]]:
     """Create CanCodec instances for all buses in the configuration.
 
     :param config: Full configuration dict with 'buses' array
@@ -85,23 +83,48 @@ def _create_codecs(
         logger.error("No buses configured. Add at least one bus to the 'buses' array.")
         sys.exit(1)
 
-    for i, bus_config in enumerate(buses):
-        # Each bus must have a name
-        bus_name = bus_config.get("name")
-        if not bus_name:
-            logger.error(f"Bus {i + 1} missing required 'name' field")
-            sys.exit(1)
+    is_multi_bus = len(buses) > 1
+    seen_names: set[str] = set()
 
-        # Prepare the bus config (handles demo mode and 'other' interface)
+    for i, bus_config in enumerate(buses):
+        # Prepare the bus config first (handles demo mode and 'other' interface)
+        # This gives us the actual channel name for defaulting
         prepared_config = _prepare_bus_config(bus_config, demo_dbc_path)
 
-        # Create codec with bus_name for trace source prefixing
+        # Determine bus name:
+        # - Explicit name from config takes priority
+        # - Multi-bus without name: default to channel name
+        # - Single bus without name: None (backward compatible "can_codec")
+        explicit_name = bus_config.get("name", "").strip() or None
+        if explicit_name:
+            bus_name = explicit_name
+        elif is_multi_bus:
+            # Default to channel name for multi-bus setups
+            bus_name = prepared_config.get("channel", f"bus{i}")
+            logger.info(f"Bus {i + 1}: no name specified, defaulting to '{bus_name}'")
+        else:
+            # Single bus without name: backward compatible
+            bus_name = None
+
+        # Validate uniqueness for multi-bus setups
+        if is_multi_bus:
+            if bus_name in seen_names:
+                logger.error(f"Duplicate bus name '{bus_name}'. Each bus must have a unique name.")
+                sys.exit(1)
+            seen_names.add(bus_name)
+
+        # Create codec:
+        # - Single bus without name: bus_name=None → trace source "can_codec" (backward compatible)
+        # - Otherwise: bus_name=name → trace source "{name}_can"
         codec = CanCodec(prepared_config, bus_name=bus_name)
-        action_name = f"{bus_name}_can"
+
+        # Action registry name: use exact bus_name, or "can_codec" for backward compat
+        action_name = bus_name if bus_name else "can_codec"
         codecs.append((codec, action_name))
 
+        display_name = bus_name or "(default)"
         logger.info(
-            f"Created bus codec: {bus_name} "
+            f"Created bus codec: {display_name} "
             f"({prepared_config['interface']}:{prepared_config.get('channel', 'N/A')})"
         )
 
