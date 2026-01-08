@@ -42,15 +42,20 @@ class CanCodec(can.Listener):
     """CAN bus monitor with database decoding and periodic transmission support."""
 
     def __init__(
-        self, config: dict[str, Any], namespace: zelos_sdk.TraceNamespace | None = None
+        self,
+        config: dict[str, Any],
+        namespace: zelos_sdk.TraceNamespace | None = None,
+        bus_name: str | None = None,
     ) -> None:
         """Initialize CAN codec.
 
         :param config: Configuration dictionary with interface, channel, database_file
         :param namespace: Optional isolated TraceNamespace for the TraceSource
+        :param bus_name: Optional name prefix for trace sources (for multi-bus setups)
         """
         self.config = config
         self.namespace = namespace
+        self.bus_name = bus_name
         self.running = False
         self.last_message_time = time.time()
         self.start_time = time.time()
@@ -89,18 +94,22 @@ class CanCodec(can.Listener):
         except Exception as e:
             raise ValueError(f"Failed to load database file: {e}") from e
 
+        # Determine trace source name (with optional bus_name prefix for multi-bus)
+        source_name = f"{self.bus_name}_can" if self.bus_name else "can_codec"
+        raw_source_name = f"{self.bus_name}_can_raw" if self.bus_name else "can_raw"
+
         # Create trace source (in isolated namespace if provided)
         if self.namespace:
-            self.source = zelos_sdk.TraceSource("can_codec", namespace=self.namespace)
+            self.source = zelos_sdk.TraceSource(source_name, namespace=self.namespace)
         else:
-            self.source = zelos_sdk.TraceSource("can_codec")
+            self.source = zelos_sdk.TraceSource(source_name)
 
         # Create raw CAN frame event schema (for log_raw_frames feature)
         if self.log_raw_frames:
             if self.namespace:
-                self.raw_source = zelos_sdk.TraceSource("can_raw", namespace=self.namespace)
+                self.raw_source = zelos_sdk.TraceSource(raw_source_name, namespace=self.namespace)
             else:
-                self.raw_source = zelos_sdk.TraceSource("can_raw")
+                self.raw_source = zelos_sdk.TraceSource(raw_source_name)
 
             self.raw_event = self.raw_source.add_event(
                 "messages",
@@ -218,8 +227,9 @@ class CanCodec(can.Listener):
 
     def start(self) -> None:
         """Initialize CAN bus connection with retry logic."""
+        bus_id = f"[{self.bus_name}] " if self.bus_name else ""
         logger.info(
-            f"Starting CAN bus: interface={self.config['interface']}, "
+            f"{bus_id}Starting CAN bus: interface={self.config['interface']}, "
             f"channel={self.config['channel']}"
         )
 
@@ -268,7 +278,8 @@ class CanCodec(can.Listener):
 
     def stop(self) -> None:
         """Stop CAN bus and periodic tasks."""
-        logger.info("Stopping CAN codec")
+        bus_id = f"[{self.bus_name}] " if self.bus_name else ""
+        logger.info(f"{bus_id}Stopping CAN codec")
         self.running = False
 
         if self.demo_task:

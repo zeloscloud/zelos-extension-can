@@ -1,8 +1,14 @@
 {
   "type": "object",
   "title": "CAN Bus Configuration",
-  "description": "Configure CAN interface and database file",
+  "description": "Configure CAN interface and database file. Add additional buses to monitor multiple CAN networks in parallel.",
   "properties": {
+    "name": {
+      "type": "string",
+      "title": "Bus Name",
+      "description": "Optional name to identify this bus (used as prefix in trace events). Leave empty to use channel name.",
+      "default": ""
+    },
     "interface": {
       "type": "string",
       "title": "CAN Interface",
@@ -16,6 +22,106 @@
         "vector",
         "other"
       ]
+    },
+    "additional_buses": {
+      "type": "array",
+      "title": "Additional CAN Buses",
+      "description": "Add more CAN buses to monitor in parallel. Each bus runs independently with its own interface and database.",
+      "ui:widget": "array-add",
+      "items": {
+        "type": "object",
+        "title": "CAN Bus",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Bus Name",
+            "description": "Name to identify this bus (required, used as prefix in trace events)",
+            "minLength": 1
+          },
+          "interface": {
+            "type": "string",
+            "title": "CAN Interface",
+            "description": "CAN interface type",
+            "enum": [
+              "virtual",
+              "socketcan",
+              "pcan",
+              "kvaser",
+              "vector",
+              "other"
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel",
+            "description": "CAN channel identifier (e.g., can0, vcan0, PCAN_USBBUS1)"
+          },
+          "database_file": {
+            "type": "string",
+            "title": "CAN Database File (.dbc)",
+            "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+            "ui:widget": "file-picker"
+          },
+          "bitrate": {
+            "type": "integer",
+            "title": "Bitrate (bps)",
+            "description": "CAN bus bitrate (required for hardware interfaces)",
+            "enum": [
+              125000,
+              250000,
+              500000,
+              1000000
+            ],
+            "default": 500000
+          },
+          "fd_mode": {
+            "type": "boolean",
+            "title": "CAN-FD Mode",
+            "description": "Enable CAN-FD for higher data rates and larger payloads",
+            "default": false,
+            "ui:widget": "toggle"
+          },
+          "data_bitrate": {
+            "type": "integer",
+            "title": "Data Bitrate (bps)",
+            "description": "CAN-FD data phase bitrate (required when fd_mode is enabled)",
+            "enum": [
+              500000,
+              1000000,
+              2000000,
+              4000000,
+              8000000
+            ],
+            "default": 2000000
+          },
+          "receive_own_messages": {
+            "type": "boolean",
+            "title": "Receive Own Messages",
+            "description": "Receive messages transmitted by this interface",
+            "default": true,
+            "ui:widget": "toggle"
+          },
+          "log_raw_frames": {
+            "type": "boolean",
+            "title": "Log Raw CAN Frames",
+            "description": "Log raw CAN frames to separate trace source",
+            "default": false,
+            "ui:widget": "toggle"
+          },
+          "config_json": {
+            "type": "string",
+            "title": "Advanced Configuration (JSON)",
+            "description": "Additional python-can Bus() kwargs as JSON object"
+          }
+        },
+        "required": [
+          "name",
+          "interface",
+          "channel",
+          "database_file"
+        ]
+      },
+      "default": []
     }
   },
   "required": [
