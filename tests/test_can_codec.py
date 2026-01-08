@@ -529,3 +529,102 @@ class TestFileUtils:
         assert result == str(output_path)
         assert output_path.exists()
         assert output_path.read_text() == "test content"
+
+
+class TestMultiBusSupport:
+    """Test multi-bus configuration support."""
+
+    def test_codec_with_bus_name_prefixes_trace_source(self, mock_config):
+        """Test that bus_name prefixes the trace source name."""
+        with patch("zelos_sdk.TraceSource") as mock_source:
+            CanCodec(mock_config, bus_name="powertrain")
+            # Verify trace source created with prefixed name
+            mock_source.assert_any_call("powertrain_can")
+
+    def test_codec_without_bus_name_uses_default(self, mock_config):
+        """Test that no bus_name uses default trace source name."""
+        with patch("zelos_sdk.TraceSource") as mock_source:
+            CanCodec(mock_config)
+            mock_source.assert_any_call("can_codec")
+
+    def test_codec_with_bus_name_prefixes_raw_source(self, mock_config):
+        """Test that bus_name prefixes raw trace source when enabled."""
+        mock_config["log_raw_frames"] = True
+        with patch("zelos_sdk.TraceSource") as mock_source:
+            CanCodec(mock_config, bus_name="chassis")
+            calls = [str(c) for c in mock_source.call_args_list]
+            assert any("chassis_can" in c for c in calls)
+            assert any("chassis_can_raw" in c for c in calls)
+
+    def test_prepare_bus_config_demo_mode(self, test_dbc_path):
+        """Test _prepare_bus_config handles demo interface."""
+        from zelos_extension_can.cli.app import _prepare_bus_config
+
+        bus_config = {"name": "demo", "interface": "demo"}
+        demo_dbc = Path(test_dbc_path)
+
+        result = _prepare_bus_config(bus_config, demo_dbc)
+
+        assert result["interface"] == "virtual"
+        assert result["channel"] == "vcan0"
+        assert result["demo_mode"] is True
+        assert result["receive_own_messages"] is True
+
+    def test_prepare_bus_config_passthrough(self, test_dbc_path):
+        """Test _prepare_bus_config passes through normal config."""
+        from zelos_extension_can.cli.app import _prepare_bus_config
+
+        bus_config = {
+            "name": "can0",
+            "interface": "socketcan",
+            "channel": "can0",
+            "database_file": test_dbc_path,
+        }
+
+        result = _prepare_bus_config(bus_config, Path(test_dbc_path))
+
+        assert result["interface"] == "socketcan"
+        assert result["channel"] == "can0"
+        assert "demo_mode" not in result
+
+    def test_single_bus_no_name_backward_compatible(self, test_dbc_path):
+        """Test single bus without name uses default 'can_codec' (backward compatible)."""
+        from zelos_extension_can.cli.app import _create_codecs
+
+        config = {
+            "buses": [
+                {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path}
+            ]
+        }
+
+        with patch("zelos_sdk.TraceSource"):
+            codecs = _create_codecs(config, Path(test_dbc_path))
+
+        assert len(codecs) == 1
+        codec, action_name = codecs[0]
+        assert action_name == "can_codec"
+        assert codec.bus_name is None
+
+    def test_multi_bus_requires_unique_names(self, test_dbc_path):
+        """Test multiple buses require unique names, reject duplicates."""
+        from zelos_extension_can.cli.app import _create_codecs
+
+        # Missing names
+        config_no_names = {
+            "buses": [
+                {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
+                {"interface": "virtual", "channel": "vcan1", "database_file": test_dbc_path},
+            ]
+        }
+        with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
+            _create_codecs(config_no_names, Path(test_dbc_path))
+
+        # Duplicate names
+        config_dupes = {
+            "buses": [
+                {"name": "bus", "interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
+                {"name": "bus", "interface": "virtual", "channel": "vcan1", "database_file": test_dbc_path},
+            ]
+        }
+        with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
+            _create_codecs(config_dupes, Path(test_dbc_path))
