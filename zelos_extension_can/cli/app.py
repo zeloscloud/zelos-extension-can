@@ -16,19 +16,19 @@ from .utils import setup_shutdown_handler
 logger = logging.getLogger(__name__)
 
 
-def _prepare_bus_config(
-    config: dict, demo_dbc_path: Path, is_primary: bool = True
-) -> dict:
+def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
     """Prepare a bus configuration, handling demo and 'other' interface modes.
 
-    :param config: Raw bus configuration
+    :param bus_config: Raw bus configuration from the buses array
     :param demo_dbc_path: Path to demo DBC file
-    :param is_primary: Whether this is the primary bus (for demo mode handling)
     :return: Prepared configuration dict
     """
-    # Handle demo interface selection (only for primary bus)
-    if is_primary and config.get("interface") == "demo":
-        logger.info("Demo mode: using built-in EV simulator")
+    config = bus_config.copy()
+    bus_name = config.get("name", "bus")
+
+    # Handle demo interface selection
+    if config.get("interface") == "demo":
+        logger.info(f"[{bus_name}] Demo mode: using built-in EV simulator")
         config["demo_mode"] = True
         config["interface"] = "virtual"
         config["channel"] = "vcan0"
@@ -38,7 +38,6 @@ def _prepare_bus_config(
 
     # Handle "other" interface - merge config_json into main config
     if config.get("interface") == "other":
-        bus_name = config.get("name", "bus")
         logger.info(f"[{bus_name}] Using custom interface from config_json")
 
         if "config_json" not in config or not config["config_json"]:
@@ -73,48 +72,37 @@ def _prepare_bus_config(
 def _create_codecs(
     config: dict, demo_dbc_path: Path
 ) -> list[tuple[CanCodec, str]]:
-    """Create CanCodec instances for primary and additional buses.
+    """Create CanCodec instances for all buses in the configuration.
 
-    :param config: Full configuration dict (may include additional_buses)
+    :param config: Full configuration dict with 'buses' array
     :param demo_dbc_path: Path to demo DBC file
     :return: List of (codec, action_registry_name) tuples
     """
     codecs: list[tuple[CanCodec, str]] = []
 
-    # Prepare primary bus config
-    primary_config = _prepare_bus_config(config.copy(), demo_dbc_path, is_primary=True)
+    buses = config.get("buses", [])
+    if not buses:
+        logger.error("No buses configured. Add at least one bus to the 'buses' array.")
+        sys.exit(1)
 
-    # Determine bus name for primary (use 'name' if provided, else None for default behavior)
-    primary_name = config.get("name") or None
-
-    # Create primary codec
-    primary_codec = CanCodec(primary_config, bus_name=primary_name)
-    action_name = f"{primary_name}_can" if primary_name else "can_codec"
-    codecs.append((primary_codec, action_name))
-    logger.info(
-        f"Created primary bus codec: {primary_name or 'default'} "
-        f"({primary_config['interface']}:{primary_config['channel']})"
-    )
-
-    # Create codecs for additional buses
-    additional_buses = config.get("additional_buses", [])
-    for i, bus_config in enumerate(additional_buses):
-        # Each additional bus must have a name
+    for i, bus_config in enumerate(buses):
+        # Each bus must have a name
         bus_name = bus_config.get("name")
         if not bus_name:
-            logger.error(f"Additional bus {i + 1} missing required 'name' field")
+            logger.error(f"Bus {i + 1} missing required 'name' field")
             sys.exit(1)
 
-        # Prepare the bus config
-        prepared_config = _prepare_bus_config(bus_config.copy(), demo_dbc_path, is_primary=False)
+        # Prepare the bus config (handles demo mode and 'other' interface)
+        prepared_config = _prepare_bus_config(bus_config, demo_dbc_path)
 
         # Create codec with bus_name for trace source prefixing
         codec = CanCodec(prepared_config, bus_name=bus_name)
         action_name = f"{bus_name}_can"
         codecs.append((codec, action_name))
+
         logger.info(
-            f"Created additional bus codec: {bus_name} "
-            f"({prepared_config['interface']}:{prepared_config['channel']})"
+            f"Created bus codec: {bus_name} "
+            f"({prepared_config['interface']}:{prepared_config.get('channel', 'N/A')})"
         )
 
     return codecs
@@ -145,14 +133,14 @@ async def _run_codecs_async(codecs: list[CanCodec]) -> None:
 def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     """Run CAN extension in app-based configuration mode.
 
-    :param demo: Enable demo mode
+    :param demo: Enable demo mode (adds a demo bus if no buses configured)
     :param file: Optional output file for trace recording
     :param demo_dbc_path: Path to demo DBC file
     """
     # Load and validate configuration
     config = load_config()
 
-    # Apply log level from config
+    # Apply log level from config (global setting)
     log_level_str = config.get("log_level", "INFO")
     try:
         log_level = getattr(logging, log_level_str)
@@ -162,10 +150,14 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         logger.warning(f"Invalid log level '{log_level_str}', using INFO")
         logging.getLogger().setLevel(logging.INFO)
 
-    # Override with demo mode if requested via CLI flag
+    # If demo flag is set and no buses configured, add a demo bus
     if demo:
         logger.info("Demo mode enabled via --demo flag")
-        config["interface"] = "demo"
+        if not config.get("buses"):
+            config["buses"] = [{"name": "demo", "interface": "demo"}]
+        else:
+            # Add demo bus to existing buses
+            config["buses"].append({"name": "demo", "interface": "demo"})
 
     # Determine output file if --file was specified
     output_file = None
@@ -177,7 +169,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         output_file = file
         logger.info(f"Recording trace to: {output_file}")
 
-    # Create all CAN codecs (primary + additional buses)
+    # Create all CAN codecs from buses array
     codec_pairs = _create_codecs(config, demo_dbc_path)
     codecs = [codec for codec, _ in codec_pairs]
 
