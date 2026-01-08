@@ -586,3 +586,45 @@ class TestMultiBusSupport:
         assert result["interface"] == "socketcan"
         assert result["channel"] == "can0"
         assert "demo_mode" not in result
+
+    def test_single_bus_no_name_backward_compatible(self, test_dbc_path):
+        """Test single bus without name uses default 'can_codec' (backward compatible)."""
+        from zelos_extension_can.cli.app import _create_codecs
+
+        config = {
+            "buses": [
+                {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path}
+            ]
+        }
+
+        with patch("zelos_sdk.TraceSource"):
+            codecs = _create_codecs(config, Path(test_dbc_path))
+
+        assert len(codecs) == 1
+        codec, action_name = codecs[0]
+        assert action_name == "can_codec"
+        assert codec.bus_name is None
+
+    def test_multi_bus_requires_unique_names(self, test_dbc_path):
+        """Test multiple buses require unique names, reject duplicates."""
+        from zelos_extension_can.cli.app import _create_codecs
+
+        # Missing names
+        config_no_names = {
+            "buses": [
+                {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
+                {"interface": "virtual", "channel": "vcan1", "database_file": test_dbc_path},
+            ]
+        }
+        with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
+            _create_codecs(config_no_names, Path(test_dbc_path))
+
+        # Duplicate names
+        config_dupes = {
+            "buses": [
+                {"name": "bus", "interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
+                {"name": "bus", "interface": "virtual", "channel": "vcan1", "database_file": test_dbc_path},
+            ]
+        }
+        with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
+            _create_codecs(config_dupes, Path(test_dbc_path))

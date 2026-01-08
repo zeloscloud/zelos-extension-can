@@ -29,8 +29,7 @@
           "name": {
             "type": "string",
             "title": "Bus Name",
-            "description": "Name to identify this bus (used as prefix in trace events)",
-            "minLength": 1
+            "description": "Name to identify this bus (used as prefix in trace events). Required when configuring multiple buses. Leave empty for single-bus setups to use default 'can_codec' source name."
           },
           "interface": {
             "type": "string",
@@ -48,7 +47,6 @@
           }
         },
         "required": [
-          "name",
           "interface"
         ],
         "dependencies": {

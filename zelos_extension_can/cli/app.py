@@ -85,23 +85,44 @@ def _create_codecs(
         logger.error("No buses configured. Add at least one bus to the 'buses' array.")
         sys.exit(1)
 
+    # For multiple buses, names are required and must be unique
+    is_multi_bus = len(buses) > 1
+    seen_names: set[str] = set()
+
     for i, bus_config in enumerate(buses):
-        # Each bus must have a name
-        bus_name = bus_config.get("name")
-        if not bus_name:
-            logger.error(f"Bus {i + 1} missing required 'name' field")
-            sys.exit(1)
+        bus_name = bus_config.get("name", "").strip() or None
+
+        # Validate names for multi-bus setups
+        if is_multi_bus:
+            if not bus_name:
+                logger.error(
+                    f"Bus {i + 1} missing required 'name' field. "
+                    "Names are required when configuring multiple buses."
+                )
+                sys.exit(1)
+            if bus_name in seen_names:
+                logger.error(
+                    f"Duplicate bus name '{bus_name}'. Each bus must have a unique name."
+                )
+                sys.exit(1)
+            seen_names.add(bus_name)
 
         # Prepare the bus config (handles demo mode and 'other' interface)
         prepared_config = _prepare_bus_config(bus_config, demo_dbc_path)
 
-        # Create codec with bus_name for trace source prefixing
+        # Create codec:
+        # - Single bus without name: bus_name=None → trace source "can_codec" (backward compatible)
+        # - Single bus with name: bus_name=name → trace source "{name}_can"
+        # - Multi bus: bus_name=name → trace source "{name}_can"
         codec = CanCodec(prepared_config, bus_name=bus_name)
-        action_name = f"{bus_name}_can"
+
+        # Action registry name follows same pattern
+        action_name = f"{bus_name}_can" if bus_name else "can_codec"
         codecs.append((codec, action_name))
 
+        display_name = bus_name or "(default)"
         logger.info(
-            f"Created bus codec: {bus_name} "
+            f"Created bus codec: {display_name} "
             f"({prepared_config['interface']}:{prepared_config.get('channel', 'N/A')})"
         )
 
