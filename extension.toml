@@ -1,9 +1,9 @@
 # Zelos CAN Extension Manifest
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
-name = "Zelos CAN"
+name = "CAN"
 version = "0.1.7"
-description = "Zelos CAN"
+description = "CAN extension for Zelos"
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
 homepage = "https://github.com/zeloscloud/zelos-extension-can"

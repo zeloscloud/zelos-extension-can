@@ -3,38 +3,18 @@
   "title": "CAN Extension Configuration",
   "description": "Configure one or more CAN buses to monitor in parallel.",
   "properties": {
-    "log_level": {
-      "type": "string",
-      "title": "Log Level",
-      "description": "Set the logging verbosity level for all buses",
-      "enum": [
-        "DEBUG",
-        "INFO",
-        "WARNING",
-        "ERROR",
-        "CRITICAL"
-      ],
-      "default": "INFO"
-    },
     "buses": {
       "type": "array",
-      "title": "CAN Buses",
       "description": "Configure CAN buses to monitor. Click 'Add' to add a new bus.",
+      "title": "Buses",
       "minItems": 1,
-      "ui:widget": "array-add",
       "items": {
+        "title": "Bus",
         "type": "object",
-        "title": "CAN Bus",
         "properties": {
-          "name": {
-            "type": "string",
-            "title": "Bus Name",
-            "description": "Name to identify this bus (used as prefix in trace events)",
-            "minLength": 1
-          },
           "interface": {
             "type": "string",
-            "title": "CAN Interface",
+            "title": "Interface",
             "description": "CAN interface type (e.g. Linux: socketcan, macOS/Windows: pcan)",
             "enum": [
               "demo",
@@ -48,7 +28,6 @@
           }
         },
         "required": [
-          "name",
           "interface"
         ],
         "dependencies": {
@@ -60,6 +39,11 @@
                     "enum": [
                       "demo"
                     ]
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)"
                   }
                 }
               },
@@ -78,9 +62,14 @@
                   },
                   "database_file": {
                     "type": "string",
-                    "title": "CAN Database File (.dbc)",
+                    "title": "Database File (.dbc)",
                     "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
                     "ui:widget": "file-picker"
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)"
                   },
                   "receive_own_messages": {
                     "type": "boolean",
@@ -124,9 +113,14 @@
                   },
                   "database_file": {
                     "type": "string",
-                    "title": "CAN Database File (.dbc)",
+                    "title": "Database File (.dbc)",
                     "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
                     "ui:widget": "file-picker"
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -233,7 +227,7 @@
                   },
                   "database_file": {
                     "type": "string",
-                    "title": "CAN Database File (.dbc)",
+                    "title": "Database File (.dbc)",
                     "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
                     "ui:widget": "file-picker"
                   },
@@ -248,6 +242,11 @@
                       1000000
                     ],
                     "default": 500000
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -355,7 +354,7 @@
                   },
                   "database_file": {
                     "type": "string",
-                    "title": "CAN Database File (.dbc)",
+                    "title": "Database File (.dbc)",
                     "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
                     "ui:widget": "file-picker"
                   },
@@ -370,6 +369,11 @@
                       1000000
                     ],
                     "default": 500000
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -477,7 +481,7 @@
                   },
                   "database_file": {
                     "type": "string",
-                    "title": "CAN Database File (.dbc)",
+                    "title": "Database File (.dbc)",
                     "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
                     "ui:widget": "file-picker"
                   },
@@ -492,6 +496,11 @@
                       1000000
                     ],
                     "default": 500000
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -593,7 +602,7 @@
                   },
                   "database_file": {
                     "type": "string",
-                    "title": "CAN Database File (.dbc)",
+                    "title": "Database File (.dbc)",
                     "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
                     "ui:widget": "file-picker"
                   },
@@ -601,6 +610,11 @@
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
                     "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"slcan\", \"channel\": \"/dev/ttyUSB0\", \"bitrate\": 500000}"
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)"
                   },
                   "emit_schemas_on_init": {
                     "type": "boolean",
@@ -620,6 +634,19 @@
         }
       },
       "default": []
+    },
+    "log_level": {
+      "type": "string",
+      "title": "Log Level",
+      "description": "Set the logging verbosity level for all buses",
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ],
+      "default": "INFO"
     }
   },
   "required": [

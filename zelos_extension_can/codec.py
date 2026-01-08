@@ -94,9 +94,9 @@ class CanCodec(can.Listener):
         except Exception as e:
             raise ValueError(f"Failed to load database file: {e}") from e
 
-        # Determine trace source name (with optional bus_name prefix for multi-bus)
-        source_name = f"{self.bus_name}_can" if self.bus_name else "can_codec"
-        raw_source_name = f"{self.bus_name}_can_raw" if self.bus_name else "can_raw"
+        # Determine trace source name (use exact bus_name for multi-bus)
+        source_name = self.bus_name if self.bus_name else "can_codec"
+        raw_source_name = f"{self.bus_name}_raw" if self.bus_name else "can_raw"
 
         # Create trace source (in isolated namespace if provided)
         if self.namespace:
