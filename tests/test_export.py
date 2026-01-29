@@ -109,7 +109,7 @@ class TestExportIntegration:
             time.sleep(0.1)
 
         # Now export the TRZ to candump log
-        stats = export_to_candump(trz_file, log_file, channel="can0")
+        stats = export_to_candump(trz_file, log_file)
 
         # Verify export succeeded
         assert stats["frame_count"] == 3
@@ -363,7 +363,7 @@ class TestRoundtrip:
             time.sleep(0.1)
 
         # Export trz -> log
-        stats = export_to_candump(trz_file, exported_log, channel="can0")
+        stats = export_to_candump(trz_file, exported_log)
 
         assert stats["frame_count"] == 3
 

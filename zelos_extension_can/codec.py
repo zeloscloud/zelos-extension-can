@@ -1027,6 +1027,7 @@ class CanCodec(can.Listener):
                         "status": "error",
                         "message": f"CAN database file not found: {database_file}",
                     }
+                logger.info("Using user-specified database: %s", database_file)
             else:
                 # Use extension's already-loaded database file path (already resolved)
                 if not hasattr(self, "database_file_path") or not self.database_file_path:
@@ -1035,6 +1036,7 @@ class CanCodec(can.Listener):
                         "message": "No database file specified and extension has none configured",
                     }
                 database_file = Path(self.database_file_path)
+                logger.info("Using extension's configured database: %s", database_file)
 
             # Determine output path
             if not output_path:
@@ -1104,22 +1106,6 @@ class CanCodec(can.Listener):
         description="Output .log file path (optional, defaults to input name with .log)",
         placeholder="e.g., /path/to/output.log",
     )
-    @action.text(
-        "channel",
-        required=False,
-        default="",
-        title="Channel Override",
-        description="Override channel name in output (e.g., can0, vcan0)",
-        placeholder="Leave empty to derive from source name",
-    )
-    @action.text(
-        "source_filter",
-        required=False,
-        default="",
-        title="Source Filter",
-        description="Only export from sources matching this pattern (e.g., chassis_raw)",
-        placeholder="Leave empty to export all raw sources",
-    )
     @action.boolean(
         "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
     )
@@ -1127,8 +1113,6 @@ class CanCodec(can.Listener):
         self,
         input_path: str,
         output_path: str = "",
-        channel: str = "",
-        source_filter: str = "",
         overwrite: bool = False,
     ) -> dict[str, Any]:
         """Export raw CAN frames from TRZ trace to candump log format.
@@ -1142,8 +1126,6 @@ class CanCodec(can.Listener):
 
         :param input_path: Path to TRZ trace file
         :param output_path: Output .log file path (optional)
-        :param channel: Override channel name in output
-        :param source_filter: Only export sources matching this pattern
         :param overwrite: Overwrite existing output file
         :return: Export result with statistics
         """
@@ -1197,12 +1179,7 @@ class CanCodec(can.Listener):
 
             # Perform export
             logger.info("Exporting %s -> %s", input_file, output_file)
-            stats = export_to_candump(
-                input_file,
-                output_file,
-                channel=channel if channel else None,
-                source_filter=source_filter if source_filter else None,
-            )
+            stats = export_to_candump(input_file, output_file)
 
             if stats["frame_count"] == 0:
                 return {

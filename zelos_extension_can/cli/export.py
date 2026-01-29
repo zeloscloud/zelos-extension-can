@@ -55,18 +55,11 @@ def _format_candump_line(timestamp_ns: int, channel: str, arb_id: int, data: byt
     return f"({timestamp_sec:.6f}) {channel} {arb_id:03X}#{data_hex}"
 
 
-def export_to_candump(
-    input_file: Path,
-    output_file: Path,
-    channel: str | None = None,
-    source_filter: str | None = None,
-) -> dict:
+def export_to_candump(input_file: Path, output_file: Path) -> dict:
     """Export raw CAN frames from TRZ file to candump log format.
 
     :param input_file: Source TRZ trace file
     :param output_file: Destination .log file
-    :param channel: Override channel name in output (default: derived from source name)
-    :param source_filter: Only export from sources matching this pattern
     :return: Statistics dict with frame_count, sources_found, etc.
     """
     stats = {
@@ -85,13 +78,6 @@ def export_to_candump(
             logger.error("Ensure 'Log Raw CAN Frames' was enabled when recording the trace")
             return stats
 
-        # Filter sources if requested
-        if source_filter:
-            raw_sources = [(seg_id, src) for seg_id, src in raw_sources if source_filter in src]
-            if not raw_sources:
-                logger.warning(f"No sources matching filter '{source_filter}'")
-                return stats
-
         # Get time range for queries
         time_range = reader.time_range()
 
@@ -102,15 +88,8 @@ def export_to_candump(
             logger.info(f"Reading from source: {source_name}")
             stats["sources_exported"].append(source_name)
 
-            # Derive channel name from source if not overridden
-            # can_raw -> can0, vcan0_raw -> vcan0
-            if channel:
-                chan = channel
-            elif source_name == "can_raw":
-                chan = "can0"
-            else:
-                # Remove _raw suffix
-                chan = source_name.rsplit("_raw", 1)[0]
+            # Derive channel name from source: can_raw -> can0, vcan0_raw -> vcan0
+            chan = "can0" if source_name == "can_raw" else source_name.rsplit("_raw", 1)[0]
 
             # Query for raw frame data
             fields = [
@@ -196,20 +175,6 @@ def export_to_candump(
     help="Output .log file (default: input_file.log)",
 )
 @click.option(
-    "-c",
-    "--channel",
-    type=str,
-    default=None,
-    help="Override channel name in output (e.g., can0, vcan0)",
-)
-@click.option(
-    "-s",
-    "--source",
-    type=str,
-    default=None,
-    help="Only export from sources matching this pattern",
-)
-@click.option(
     "-f",
     "--force",
     is_flag=True,
@@ -224,8 +189,6 @@ def export_to_candump(
 def export(
     input_file: Path,
     output: Path | None,
-    channel: str | None,
-    source: str | None,
     force: bool,
     verbose: bool,
 ) -> None:
@@ -251,14 +214,6 @@ def export(
       # Specify output file
 
       zelos-extension-can export recording.trz -o frames.log
-
-      # Override channel name
-
-      zelos-extension-can export recording.trz -c vcan0
-
-      # Export only from specific source
-
-      zelos-extension-can export recording.trz -s chassis_raw
 
     **Workflow for re-decoding with a new DBC:**
 
@@ -297,7 +252,7 @@ def export(
 
     try:
         logger.info(f"Exporting {input_file} -> {output_file}")
-        stats = export_to_candump(input_file, output_file, channel, source)
+        stats = export_to_candump(input_file, output_file)
 
         # Print results
         if stats["frame_count"] > 0:
