@@ -156,9 +156,7 @@ class CanCodec(can.Listener):
 
         # Log raw frame configuration
         if self.log_raw_frames:
-            logger.info(
-                "Raw CAN frame logging is ENABLED - frames will be logged to 'can_raw' trace source"
-            )
+            logger.info(f"Raw CAN frame logging is ENABLED - logging to '{raw_source_name}'")
         else:
             logger.info("Raw CAN frame logging is DISABLED")
 
@@ -1090,3 +1088,141 @@ class CanCodec(can.Listener):
         except Exception as e:
             logger.exception("Conversion failed")
             return {"status": "error", "message": f"Conversion failed: {e}"}
+
+    @action("Export Trace to Log", "Export raw CAN frames from TRZ to candump log format")
+    @action.text(
+        "input_path",
+        title="Input TRZ File",
+        description="Path to Zelos trace file (.trz) with raw CAN frames",
+        widget="file-picker",
+    )
+    @action.text(
+        "output_path",
+        required=False,
+        default="",
+        title="Output Log File",
+        description="Output .log file path (optional, defaults to input name with .log)",
+        placeholder="e.g., /path/to/output.log",
+    )
+    @action.text(
+        "channel",
+        required=False,
+        default="",
+        title="Channel Override",
+        description="Override channel name in output (e.g., can0, vcan0)",
+        placeholder="Leave empty to derive from source name",
+    )
+    @action.text(
+        "source_filter",
+        required=False,
+        default="",
+        title="Source Filter",
+        description="Only export from sources matching this pattern (e.g., chassis_raw)",
+        placeholder="Leave empty to export all raw sources",
+    )
+    @action.boolean(
+        "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
+    )
+    def export_trace_to_log(
+        self,
+        input_path: str,
+        output_path: str = "",
+        channel: str = "",
+        source_filter: str = "",
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """Export raw CAN frames from TRZ trace to candump log format.
+
+        This extracts raw CAN frames from a Zelos trace file and writes them
+        in candump log format (.log), which can be replayed or re-converted
+        with a different DBC file.
+
+        Requirements: The source trace must have been recorded with
+        'Log Raw CAN Frames' enabled.
+
+        :param input_path: Path to TRZ trace file
+        :param output_path: Output .log file path (optional)
+        :param channel: Override channel name in output
+        :param source_filter: Only export sources matching this pattern
+        :param overwrite: Overwrite existing output file
+        :return: Export result with statistics
+        """
+        from pathlib import Path
+
+        from .cli.export import export_to_candump
+
+        try:
+            # Validate input path
+            input_file = Path(input_path).expanduser().resolve()
+            if not input_file.exists():
+                return {
+                    "status": "error",
+                    "message": f"Input file not found: {input_file}",
+                }
+
+            if input_file.suffix.lower() != ".trz":
+                return {
+                    "status": "error",
+                    "message": f"Input file must be a .trz file: {input_file}",
+                }
+
+            # Determine output path
+            if not output_path:
+                output_path = str(input_file.with_suffix(".log"))
+
+            output_file = Path(output_path).expanduser().resolve()
+
+            # Ensure output always has .log extension
+            if output_file.suffix.lower() != ".log":
+                output_file = output_file.with_suffix(".log")
+
+            # Safety check: prevent overwriting input file
+            if output_file == input_file:
+                return {
+                    "status": "error",
+                    "message": f"Output file cannot be the same as input file: {input_file}",
+                }
+
+            # Check if output exists
+            if output_file.exists():
+                if overwrite:
+                    logger.info("Removing existing file: %s", output_file)
+                    output_file.unlink()
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Output file '{output_file}' already exists. "
+                        "Enable 'Overwrite if exists' to replace it.",
+                    }
+
+            # Perform export
+            logger.info("Exporting %s -> %s", input_file, output_file)
+            stats = export_to_candump(
+                input_file,
+                output_file,
+                channel=channel if channel else None,
+                source_filter=source_filter if source_filter else None,
+            )
+
+            if stats["frame_count"] == 0:
+                return {
+                    "status": "warning",
+                    "message": "No raw CAN frames found in trace. "
+                    "Ensure 'Log Raw CAN Frames' was enabled when recording.",
+                    "input_file": str(input_file),
+                    "sources_found": stats["sources_found"],
+                }
+
+            return {
+                "status": "success",
+                "input_file": str(input_file),
+                "output_file": str(output_file),
+                "frame_count": stats["frame_count"],
+                "sources_exported": stats["sources_exported"],
+            }
+
+        except FileNotFoundError as e:
+            return {"status": "error", "message": f"File not found: {e}"}
+        except Exception as e:
+            logger.exception("Export failed")
+            return {"status": "error", "message": f"Export failed: {e}"}

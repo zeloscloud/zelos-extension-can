@@ -60,6 +60,7 @@ def cli(ctx: click.Context, demo: bool, file: Path | None) -> None:
 # Register subcommands
 cli.add_command(cli_commands.trace)
 cli.add_command(cli_commands.convert)
+cli.add_command(cli_commands.export)
 
 
 if __name__ == "__main__":
