@@ -101,6 +101,7 @@ def _process_messages(
         stats: ConversionStats to update
         progress_callback: Optional callback(message_count) for progress updates
     """
+    last_log_count = 0
     for can_msg in reader:
         # Let the codec handle all the decoding complexity
         codec._handle_message(can_msg)
@@ -119,6 +120,15 @@ def _process_messages(
         # Progress callback every 1000 messages
         if progress_callback and stats.messages_converted % 1000 == 0:
             progress_callback(stats.messages_converted)
+
+        # Log progress every 100k messages
+        total = codec.metrics.messages_received
+        if total - last_log_count >= 100000:
+            logger.info(
+                f"Progress: {total:,} received, {stats.messages_converted:,} decoded, "
+                f"{stats.messages_skipped:,} skipped, {stats.decode_errors:,} errors"
+            )
+            last_log_count = total
 
 
 def convert_can_trace(
@@ -177,6 +187,7 @@ def convert_can_trace(
             "channel": "converter",
             "database_file": str(database_file),
             "timestamp_mode": "absolute",  # Preserve timestamps as-is
+            "emit_schemas_on_init": True,  # Pre-generate all schemas to avoid NaN batch failures
         }
 
         # Create local codec in isolated namespace
@@ -185,6 +196,12 @@ def convert_can_trace(
         # Create reader and process messages
         reader = reader_class(str(input_file), **reader_kwargs)
         _process_messages(reader, codec, stats, progress_callback)
+
+        # Wait for async trace writer to flush all buffered data
+        # TODO: TraceWriter should have proper backpressure/flush - this is a workaround
+        import time
+
+        time.sleep(2.0)
 
     logger.info(f"Conversion complete: {stats.to_dict()}")
     return stats
@@ -334,6 +351,7 @@ def _convert_with_progress(
             "channel": "converter",
             "database_file": str(database_file),
             "timestamp_mode": "absolute",
+            "emit_schemas_on_init": True,  # Pre-generate all schemas to avoid NaN batch failures
         }
 
         codec = CanCodec(codec_config, namespace=converter_namespace)
@@ -347,10 +365,11 @@ def _convert_with_progress(
         else:
             _process_messages(reader, codec, stats)
 
-        # Hack to ensure all messages are piped through to the writer
+        # Wait for async trace writer to flush all buffered data
+        # TODO: TraceWriter should have proper backpressure/flush - this is a workaround
         import time
 
-        time.sleep(0.1)
+        time.sleep(2.0)
 
     # Print results to console
     print("\n✓ Conversion complete!")
