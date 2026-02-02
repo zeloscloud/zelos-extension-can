@@ -11,31 +11,65 @@ import zelos_sdk
 logger = logging.getLogger(__name__)
 
 
-def _find_raw_sources(reader: zelos_sdk.TraceReader) -> list[tuple[str, str]]:
-    """Find all can_raw sources in the trace file.
+def _find_raw_sources(reader: zelos_sdk.TraceReader) -> list[tuple[str, str, str]]:
+    """Find all sources containing raw CAN frame data.
+
+    Searches for any event with the required CAN frame signals (arbitration_id, dlc, data),
+    regardless of source or event naming convention. This supports:
+    - New format: can_raw/messages, {bus}_raw/messages
+    - Old format: can#-link/rx, etc.
 
     :param reader: Open TraceReader instance
-    :return: List of (segment_id, source_name) tuples for raw CAN sources
+    :return: List of (segment_id, source_name, event_name) tuples for raw CAN sources
     """
     raw_sources = []
+    required_fields = {"arbitration_id", "dlc", "data"}
 
     for segment in reader.list_data_segments():
         segment_id = segment.id
         sources = reader.list_fields(segment_id)
 
-        # Look for sources ending in _raw or exactly can_raw
         for source in sources:
             source_name = source.name
-            if source_name == "can_raw" or source_name.endswith("_raw"):
-                # Verify it has the expected messages event with required fields
-                event_names = [e.name for e in source.events]
-                if "messages" in event_names:
-                    msg_event = next(e for e in source.events if e.name == "messages")
-                    field_names = [f.name for f in msg_event.fields]
-                    if all(f in field_names for f in ["arbitration_id", "dlc", "data"]):
-                        raw_sources.append((segment_id, source_name))
+            for event in source.events:
+                field_names = {f.name for f in event.fields}
+                # Check if this event has all required CAN frame fields
+                if required_fields.issubset(field_names):
+                    raw_sources.append((segment_id, source_name, event.name))
+                    logger.debug(
+                        f"Found CAN source: {source_name}/{event.name} "
+                        f"(fields: {', '.join(sorted(field_names))})"
+                    )
 
     return raw_sources
+
+
+def _derive_channel_name(source_name: str, _event_name: str = "") -> str:
+    """Derive CAN channel name from source/event naming.
+
+    Handles various naming conventions:
+    - can_raw -> can0
+    - vcan0_raw -> vcan0
+    - can0-link -> can0
+    - vehicle_raw -> vehicle
+
+    :param source_name: Trace source name
+    :param _event_name: Event name (reserved for future use)
+    :return: Channel name to use in candump log
+    """
+    # Try common suffixes
+    for suffix in ("_raw", "-link", "-raw"):
+        if source_name.endswith(suffix):
+            base = source_name[: -len(suffix)]
+            # If base is just "can", default to "can0"
+            return "can0" if base == "can" else base
+
+    # If source name looks like a channel already (can0, vcan0, etc.), use it
+    if source_name.startswith(("can", "vcan", "pcan", "slcan")):
+        return source_name
+
+    # Default: use source name as-is
+    return source_name
 
 
 def _format_candump_line(timestamp_ns: int, channel: str, arb_id: int, data: bytes) -> str:
@@ -58,6 +92,9 @@ def _format_candump_line(timestamp_ns: int, channel: str, arb_id: int, data: byt
 def export_to_candump(input_file: Path, output_file: Path) -> dict:
     """Export raw CAN frames from TRZ file to candump log format.
 
+    Supports both old and new trace formats by searching for any event
+    containing the required CAN frame fields (arbitration_id, dlc, data).
+
     :param input_file: Source TRZ trace file
     :param output_file: Destination .log file
     :return: Statistics dict with frame_count, sources_found, etc.
@@ -69,13 +106,17 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
     }
 
     with zelos_sdk.TraceReader(str(input_file)) as reader:
-        # Find all raw CAN sources
+        # Find all sources with CAN frame data
         raw_sources = _find_raw_sources(reader)
-        stats["sources_found"] = [s[1] for s in raw_sources]
+        stats["sources_found"] = list({s[1] for s in raw_sources})  # Unique source names
 
         if not raw_sources:
-            logger.error("No raw CAN sources found in trace file")
-            logger.error("Ensure 'Log Raw CAN Frames' was enabled when recording the trace")
+            logger.error("No CAN frame sources found in trace file")
+            logger.error(
+                "Looking for events with signals: arbitration_id, dlc, data\n"
+                "  - New traces: enable 'Log Raw CAN Frames' when recording\n"
+                "  - Old traces: should have can#-link/rx or similar"
+            )
             return stats
 
         # Get time range for queries
@@ -84,18 +125,19 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
         # Collect all frames with timestamps for sorting
         all_frames = []
 
-        for segment_id, source_name in raw_sources:
-            logger.info(f"Reading from source: {source_name}")
-            stats["sources_exported"].append(source_name)
+        for segment_id, source_name, event_name in raw_sources:
+            source_path = f"{source_name}/{event_name}"
+            logger.info(f"Reading from: {source_path}")
+            stats["sources_exported"].append(source_path)
 
-            # Derive channel name from source: can_raw -> can0, vcan0_raw -> vcan0
-            chan = "can0" if source_name == "can_raw" else source_name.rsplit("_raw", 1)[0]
+            # Derive channel name from source naming convention
+            chan = _derive_channel_name(source_name, event_name)
 
             # Query for raw frame data
             fields = [
-                f"*/{source_name}/messages.arbitration_id",
-                f"*/{source_name}/messages.dlc",
-                f"*/{source_name}/messages.data",
+                f"*/{source_name}/{event_name}.arbitration_id",
+                f"*/{source_name}/{event_name}.dlc",
+                f"*/{source_name}/{event_name}.data",
             ]
 
             result = reader.query(
@@ -109,7 +151,7 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
             table = pa.ipc.open_stream(result.to_arrow()).read_all()
 
             if table.num_rows == 0:
-                logger.info(f"  No frames in {source_name}")
+                logger.info(f"  No frames in {source_path}")
                 continue
 
             # Get column names (they include the full path with segment UUID)
@@ -121,7 +163,7 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
             time_col = "time_s" if "time_s" in col_names else None
 
             if not arb_col or not data_col:
-                logger.warning(f"  Missing required columns in {source_name}")
+                logger.warning(f"  Missing required columns in {source_path}")
                 continue
 
             # Extract data
@@ -151,7 +193,7 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
 
                 all_frames.append((ts_ns, chan, arb_id, data_bytes))
 
-            logger.info(f"  Read {len(arb_ids)} frames from {source_name}")
+            logger.info(f"  Read {len(arb_ids)} frames from {source_path}")
 
         # Sort all frames by timestamp
         all_frames.sort(key=lambda x: x[0])
@@ -198,8 +240,14 @@ def export(
     and writes them in candump log format (.log), which can be replayed
     or re-converted with a different DBC file.
 
-    **Requirements:** The source trace must have been recorded with
-    'Log Raw CAN Frames' enabled.
+    **Supported trace formats:**
+
+    - New traces: Enable 'Log Raw CAN Frames' when recording
+
+    - Old traces: Automatically detects can#-link/rx or similar events
+
+    The export searches for any event containing (arbitration_id, dlc, data)
+    signals, regardless of source naming convention.
 
     **Output format (candump):**
 

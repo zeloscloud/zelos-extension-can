@@ -84,26 +84,40 @@ def _create_codecs(config: dict, demo_dbc_path: Path) -> list[tuple[CanCodec, st
         sys.exit(1)
 
     is_multi_bus = len(buses) > 1
+
+    # Prepare all configs first to get channel names
+    prepared_configs = [_prepare_bus_config(bus, demo_dbc_path) for bus in buses]
+
+    # For multi-bus: if all buses have the default "can_codec" name, use channel names instead
+    use_channel_names = False
+    if is_multi_bus:
+        all_default = all(
+            bus.get("name", "can_codec").strip() in ("", "can_codec") for bus in buses
+        )
+        if all_default:
+            use_channel_names = True
+            logger.info("Multi-bus with default names: using channel names as bus identifiers")
+
     seen_names: set[str] = set()
 
-    for i, bus_config in enumerate(buses):
-        # Prepare the bus config first (handles demo mode and 'other' interface)
-        # This gives us the actual channel name for defaulting
-        prepared_config = _prepare_bus_config(bus_config, demo_dbc_path)
+    for i, (bus_config, prepared_config) in enumerate(zip(buses, prepared_configs, strict=True)):
+        # Determine bus name
+        config_name = bus_config.get("name", "can_codec").strip()
 
-        # Determine bus name:
-        # - Explicit name from config takes priority
-        # - Multi-bus without name: default to channel name
-        # - Single bus without name: None (backward compatible "can_codec")
-        explicit_name = bus_config.get("name", "").strip() or None
-        if explicit_name:
-            bus_name = explicit_name
-        elif is_multi_bus:
-            # Default to channel name for multi-bus setups
+        if use_channel_names:
+            # Multi-bus with all defaults: use channel name
             bus_name = prepared_config.get("channel", f"bus{i}")
-            logger.info(f"Bus {i + 1}: no name specified, defaulting to '{bus_name}'")
+        elif is_multi_bus and config_name in ("", "can_codec"):
+            # Multi-bus with mixed names: default empty to channel name
+            bus_name = prepared_config.get("channel", f"bus{i}")
+        elif config_name and config_name != "can_codec":
+            # Explicit custom name
+            bus_name = config_name
+        elif is_multi_bus:
+            # Multi-bus fallback
+            bus_name = prepared_config.get("channel", f"bus{i}")
         else:
-            # Single bus without name: backward compatible
+            # Single bus with default: use None for backward compat ("can_codec")
             bus_name = None
 
         # Validate uniqueness for multi-bus setups
@@ -115,14 +129,14 @@ def _create_codecs(config: dict, demo_dbc_path: Path) -> list[tuple[CanCodec, st
 
         # Create codec:
         # - Single bus without name: bus_name=None → trace source "can_codec" (backward compatible)
-        # - Otherwise: bus_name=name → trace source "{name}_can"
+        # - Otherwise: bus_name=name → trace source "{name}"
         codec = CanCodec(prepared_config, bus_name=bus_name)
 
         # Action registry name: use exact bus_name, or "can_codec" for backward compat
         action_name = bus_name if bus_name else "can_codec"
         codecs.append((codec, action_name))
 
-        display_name = bus_name or "(default)"
+        display_name = bus_name or "can_codec"
         logger.info(
             f"Created bus codec: {display_name} "
             f"({prepared_config['interface']}:{prepared_config.get('channel', 'N/A')})"

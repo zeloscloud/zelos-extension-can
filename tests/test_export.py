@@ -6,6 +6,7 @@ import pytest
 import zelos_sdk
 
 from zelos_extension_can.cli.export import (
+    _derive_channel_name,
     _format_candump_line,
     export_to_candump,
 )
@@ -54,6 +55,56 @@ class TestCandumpFormatting:
             data=b"\x00\x11\x22\x33\x44\x55\x66\x77",
         )
         assert line == "(0.500000) can1 7FF#0011223344556677"
+
+
+class TestChannelNameDerivation:
+    """Tests for deriving candump channel names from trace source/event names."""
+
+    def test_new_format_can_raw(self):
+        """Test new format: can_raw/messages -> can0."""
+        assert _derive_channel_name("can_raw", "messages") == "can0"
+
+    def test_new_format_named_bus(self):
+        """Test new format with named bus: chassis_raw/messages -> chassis."""
+        assert _derive_channel_name("chassis_raw", "messages") == "chassis"
+
+    def test_new_format_custom_name(self):
+        """Test new format: custom_name_raw/messages -> custom_name."""
+        assert _derive_channel_name("custom_name_raw", "messages") == "custom_name"
+
+    def test_new_format_vcan(self):
+        """Test new format: vcan0_raw/messages -> vcan0."""
+        assert _derive_channel_name("vcan0_raw", "messages") == "vcan0"
+
+    def test_old_format_link_rx(self):
+        """Test old format: can0-link/rx -> can0."""
+        assert _derive_channel_name("can0-link", "rx") == "can0"
+
+    def test_old_format_can1_link(self):
+        """Test old format: can1-link/rx -> can1."""
+        assert _derive_channel_name("can1-link", "rx") == "can1"
+
+    def test_old_format_can_link_default(self):
+        """Test old format: can-link/rx -> can0 (default channel)."""
+        assert _derive_channel_name("can-link", "rx") == "can0"
+
+    def test_dash_raw_suffix(self):
+        """Test -raw suffix variant: can0-raw/messages -> can0."""
+        assert _derive_channel_name("can0-raw", "messages") == "can0"
+
+    def test_passthrough_can_prefixed(self):
+        """Test passthrough for can-prefixed names without suffix."""
+        assert _derive_channel_name("can0", "data") == "can0"
+        assert _derive_channel_name("can1", "frames") == "can1"
+
+    def test_passthrough_vcan_prefixed(self):
+        """Test passthrough for vcan-prefixed names."""
+        assert _derive_channel_name("vcan0", "rx") == "vcan0"
+
+    def test_passthrough_other_names(self):
+        """Test passthrough for arbitrary source names."""
+        assert _derive_channel_name("vehicle_bus", "frames") == "vehicle_bus"
+        assert _derive_channel_name("obd", "messages") == "obd"
 
 
 class TestExportIntegration:
@@ -204,7 +255,7 @@ class TestExportIntegration:
         assert stats["frame_count"] == 0
         assert len(stats["sources_found"]) == 0
         # Verify error message about enabling raw frame logging
-        assert "No raw CAN sources found" in caplog.text
+        assert "No CAN frame sources found" in caplog.text
         assert "Log Raw CAN Frames" in caplog.text
 
     def test_export_multi_bus(self, tmp_path):
@@ -274,8 +325,8 @@ class TestExportIntegration:
         assert stats["frame_count"] == 4
         assert "can0_raw" in stats["sources_found"]
         assert "can1_raw" in stats["sources_found"]
-        assert "can0_raw" in stats["sources_exported"]
-        assert "can1_raw" in stats["sources_exported"]
+        assert "can0_raw/messages" in stats["sources_exported"]
+        assert "can1_raw/messages" in stats["sources_exported"]
 
         # Verify log file contains frames from both buses
         content = log_file.read_text()
