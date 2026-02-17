@@ -990,12 +990,22 @@ class CanCodec(can.Listener):
     @action.boolean(
         "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
     )
+    @action.boolean(
+        "emit_all_schemas",
+        required=False,
+        default=True,
+        title="Emit all schemas",
+        description="Emit all schemas before processing. "
+        "Disable for faster startup with large databases.",
+        widget="toggle",
+    )
     def convert_trace_file(
         self,
         input_path: str,
         output_path: str = "",
         database_path: str = "",
         overwrite: bool = False,
+        emit_all_schemas: bool = True,
     ) -> dict[str, Any]:
         """Convert CAN trace file to Zelos format using CAN database file.
 
@@ -1003,6 +1013,7 @@ class CanCodec(can.Listener):
         :param output_path: Output .trz file path (optional)
         :param database_path: Database file path (.dbc, .arxml, etc.) - defaults to extension's file
         :param overwrite: Overwrite existing output file
+        :param emit_all_schemas: Pre-generate all schemas before processing
         :return: Conversion result with statistics
         """
         from pathlib import Path
@@ -1071,7 +1082,12 @@ class CanCodec(can.Listener):
             logger.info(
                 "Converting %s -> %s using database: %s", input_file, output_file, database_file
             )
-            stats = convert_can_trace(input_file, database_file, output_file)
+            stats = convert_can_trace(
+                input_file,
+                database_file,
+                output_file,
+                emit_schemas_on_init=emit_all_schemas,
+            )
 
             return {
                 "status": "success",
