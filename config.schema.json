@@ -44,7 +44,7 @@
                     "type": "string",
                     "title": "Name",
                     "description": "Name to identify this bus (used as prefix in trace events)",
-                    "default": "can_codec"
+                    "ui:placeholder": "can_codec"
                   }
                 }
               },
@@ -71,7 +71,7 @@
                     "type": "string",
                     "title": "Name",
                     "description": "Name to identify this bus (used as prefix in trace events)",
-                    "default": "can_codec"
+                    "ui:placeholder": "can_codec"
                   },
                   "receive_own_messages": {
                     "type": "boolean",
@@ -123,7 +123,7 @@
                     "type": "string",
                     "title": "Name",
                     "description": "Name to identify this bus (used as prefix in trace events)",
-                    "default": "can_codec"
+                    "ui:placeholder": "can_codec"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -250,7 +250,7 @@
                     "type": "string",
                     "title": "Name",
                     "description": "Name to identify this bus (used as prefix in trace events)",
-                    "default": "can_codec"
+                    "ui:placeholder": "can_codec"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -378,7 +378,7 @@
                     "type": "string",
                     "title": "Name",
                     "description": "Name to identify this bus (used as prefix in trace events)",
-                    "default": "can_codec"
+                    "ui:placeholder": "can_codec"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -506,7 +506,7 @@
                     "type": "string",
                     "title": "Name",
                     "description": "Name to identify this bus (used as prefix in trace events)",
-                    "default": "can_codec"
+                    "ui:placeholder": "can_codec"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -621,7 +621,7 @@
                     "type": "string",
                     "title": "Name",
                     "description": "Name to identify this bus (used as prefix in trace events)",
-                    "default": "can_codec"
+                    "ui:placeholder": "can_codec"
                   },
                   "emit_schemas_on_init": {
                     "type": "boolean",

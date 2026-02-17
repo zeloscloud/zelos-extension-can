@@ -88,36 +88,20 @@ def _create_codecs(config: dict, demo_dbc_path: Path) -> list[tuple[CanCodec, st
     # Prepare all configs first to get channel names
     prepared_configs = [_prepare_bus_config(bus, demo_dbc_path) for bus in buses]
 
-    # For multi-bus: if all buses have the default "can_codec" name, use channel names instead
-    use_channel_names = False
-    if is_multi_bus:
-        all_default = all(
-            bus.get("name", "can_codec").strip() in ("", "can_codec") for bus in buses
-        )
-        if all_default:
-            use_channel_names = True
-            logger.info("Multi-bus with default names: using channel names as bus identifiers")
-
     seen_names: set[str] = set()
 
     for i, (bus_config, prepared_config) in enumerate(zip(buses, prepared_configs, strict=True)):
-        # Determine bus name
-        config_name = bus_config.get("name", "can_codec").strip()
+        # Determine bus name: empty/None means user left it blank
+        config_name = (bus_config.get("name") or "").strip() or None
 
-        if use_channel_names:
-            # Multi-bus with all defaults: use channel name
-            bus_name = prepared_config.get("channel", f"bus{i}")
-        elif is_multi_bus and config_name in ("", "can_codec"):
-            # Multi-bus with mixed names: default empty to channel name
-            bus_name = prepared_config.get("channel", f"bus{i}")
-        elif config_name and config_name != "can_codec":
-            # Explicit custom name
+        if config_name:
+            # User provided an explicit name
             bus_name = config_name
         elif is_multi_bus:
-            # Multi-bus fallback
+            # Multi-bus with no explicit name: use channel to avoid collisions
             bus_name = prepared_config.get("channel", f"bus{i}")
         else:
-            # Single bus with default: use None for backward compat ("can_codec")
+            # Single bus, no name: use None for backward compat ("can_codec")
             bus_name = None
 
         # Validate uniqueness for multi-bus setups

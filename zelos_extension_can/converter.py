@@ -136,6 +136,7 @@ def convert_can_trace(
     database_file: Path,
     output_file: Path,
     progress_callback: Callable[[int], None] | None = None,
+    emit_schemas_on_init: bool = True,
 ) -> ConversionStats:
     """Convert CAN trace file to Zelos trace format.
 
@@ -151,6 +152,7 @@ def convert_can_trace(
         database_file: CAN database file for decoding (.dbc, .arxml, .kcd, .sym)
         output_file: Destination .trz file
         progress_callback: Optional callback(message_count) for progress updates
+        emit_schemas_on_init: Pre-generate all schemas before processing
 
     Returns:
         ConversionStats object with conversion statistics
@@ -187,7 +189,7 @@ def convert_can_trace(
             "channel": "converter",
             "database_file": str(database_file),
             "timestamp_mode": "absolute",  # Preserve timestamps as-is
-            "emit_schemas_on_init": True,  # Pre-generate all schemas to avoid NaN batch failures
+            "emit_schemas_on_init": emit_schemas_on_init,
         }
 
         # Create local codec in isolated namespace
