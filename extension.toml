@@ -7,17 +7,16 @@ description = "CAN extension for Zelos"
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
 homepage = "https://github.com/zeloscloud/zelos-extension-can"
-keywords = ["can", "can-bus", "automotive", "vehicle"]
+keywords = ["can", "can-bus", "automotive", "vehicle", "j1939"]
 categories = ["Automotive", "Networking", "Industrial", "IoT"]
 
 # File references (relative paths in archive)
 icon = "assets/icon.png"
 readme = "README.md"
-changelog = "CHANGELOG.md"
 
 # Compatibility (optional, defaults to ^25.0.20)
 [zelos]
-version = ">=25.0.22-0"
+version = ">=26.0.2"
 
 # Configuration schema (enables UI in Zelos App)
 [config]

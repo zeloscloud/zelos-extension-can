@@ -1,0 +1,12 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BO_ 2364540158 EEC1: 8 Vector__XXX
+ SG_ EngineSpeed : 24|16@1+ (0.125,0) [0|8031.875] "rpm" Vector__XXX
+ SG_ ActualEngTorque : 16|8@1+ (1,-125) [-125|125] "%" Vector__XXX
+
+BO_ 2566844926 CCVS: 8 Vector__XXX
+ SG_ WheelBasedVehicleSpeed : 8|16@1+ (0.00390625,0) [0|250.996] "km/h" Vector__XXX

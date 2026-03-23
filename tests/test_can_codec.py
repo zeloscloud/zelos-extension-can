@@ -429,20 +429,35 @@ class TestTimestampHandling:
 
 
 class TestActions:
-    """Test action methods."""
+    """Test free-standing action functions via the actions registry."""
 
-    def test_get_status(self, codec):
+    BUS_NAME = "_test_actions_bus"
+
+    @pytest.fixture(autouse=True)
+    def _register_codec(self, codec):
+        """Register the codec in the actions registry for each test."""
+        from zelos_extension_can.actions import registry
+
+        registry.register(self.BUS_NAME, codec)
+        yield
+        registry._codecs.pop(self.BUS_NAME, None)
+
+    def test_get_status(self):
         """Test get_status action returns expected fields."""
-        status = codec.get_status()
+        from zelos_extension_can.actions.status import get_status
+
+        status = get_status(self.BUS_NAME)
         assert "running" in status
         assert "interface" in status
         assert "channel" in status
         assert "bus_state" in status
         assert "fd_mode" in status
 
-    def test_get_metrics(self, codec):
+    def test_get_metrics(self):
         """Test get_metrics action."""
-        metrics = codec.get_metrics()
+        from zelos_extension_can.actions.status import get_metrics
+
+        metrics = get_metrics(self.BUS_NAME)
         assert "messages_received" in metrics
         assert "messages_decoded" in metrics
         assert "decode_errors" in metrics
@@ -451,16 +466,20 @@ class TestActions:
         assert "messages_per_second" in metrics
         assert metrics["messages_received"] == 0
 
-    def test_list_periodic_tasks(self, codec):
+    def test_list_periodic_tasks(self):
         """Test list_periodic_tasks action."""
-        result = codec.list_periodic_tasks()
+        from zelos_extension_can.actions.transmit import list_periodic_tasks
+
+        result = list_periodic_tasks(self.BUS_NAME)
         assert "count" in result
         assert "tasks" in result
         assert result["count"] == 0
 
-    def test_list_messages(self, codec):
+    def test_list_messages(self):
         """Test list_messages action."""
-        result = codec.list_messages()
+        from zelos_extension_can.actions.status import list_messages
+
+        result = list_messages(self.BUS_NAME)
         assert "count" in result
         assert "messages" in result
         assert result["count"] == 13
@@ -504,13 +523,21 @@ class TestErrorHandling:
 
     def test_send_message_with_extended_id(self, codec):
         """Test sending message with extended ID validation."""
-        # Standard ID within range
-        result = codec.send_message(0x100, "01 02", extended_id=False)
-        assert "error" in result  # Bus not started
+        from zelos_extension_can.actions import registry
+        from zelos_extension_can.actions.transmit import send_message
 
-        # Extended ID validation
-        result = codec.send_message(0x1FFFFFFF, "01 02", extended_id=True)
-        assert "error" in result  # Bus not started, but ID validated
+        bus = "_test_send_bus"
+        registry.register(bus, codec)
+        try:
+            # Standard ID within range
+            result = send_message(bus, 0x100, "01 02", extended_id=False)
+            assert "error" in result  # Bus not started
+
+            # Extended ID validation
+            result = send_message(bus, 0x1FFFFFFF, "01 02", extended_id=True)
+            assert "error" in result  # Bus not started, but ID validated
+        finally:
+            registry._codecs.pop(bus, None)
 
 
 class TestFileUtils:

@@ -93,11 +93,17 @@
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939_enabled": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
-                  "channel",
-                  "database_file"
+                  "channel"
                 ]
               },
               {
@@ -157,17 +163,24 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939_enabled": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
@@ -284,17 +297,24 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939_enabled": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
@@ -412,17 +432,24 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939_enabled": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
@@ -540,17 +567,24 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939_enabled": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
@@ -627,6 +661,13 @@
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "j1939_enabled": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
                     "default": false,
                     "ui:widget": "toggle"
                   }

@@ -31,8 +31,10 @@ logging.getLogger().addHandler(handler)
 @click.group(invoke_without_command=True)
 @click.option(
     "--demo",
-    is_flag=True,
-    help="Run in demo mode with built-in EV simulator",
+    is_flag=False,
+    flag_value="ev",
+    default=None,
+    help="Run in demo mode (ev, j1939, or canopen)",
 )
 @click.option(
     "--file",
@@ -43,7 +45,7 @@ logging.getLogger().addHandler(handler)
     help="Record trace to .trz file (defaults to UTC.trz if no filename specified)",
 )
 @click.pass_context
-def cli(ctx: click.Context, demo: bool, file: Path | None) -> None:
+def cli(ctx: click.Context, demo: str | None, file: Path | None) -> None:
     """CAN bus monitoring and database decoding.
 
     Traces a CAN bus given an interface, channel, database file, bitrate, etc.

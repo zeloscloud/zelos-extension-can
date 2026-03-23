@@ -12,9 +12,9 @@ from typing import Any
 import can
 import cantools
 import zelos_sdk
-from zelos_sdk.actions import action
 
 from .demo.demo import run_demo_ev_simulation
+from .protocols import ProtocolHandler, create_handler
 from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
@@ -78,21 +78,25 @@ class CanCodec(can.Listener):
         self.demo_mode = config.get("demo_mode", False)
         self.demo_task: asyncio.Task | None = None
 
-        # Load and validate database file
-        database_path = config["database_file"]
+        # Load and validate database file (optional when protocol handler is active)
+        database_path = config.get("database_file")
 
-        if not Path(database_path).exists():
-            raise FileNotFoundError(f"CAN database file not found: {database_path}")
+        if database_path:
+            if not Path(database_path).exists():
+                raise FileNotFoundError(f"CAN database file not found: {database_path}")
 
-        # Store the resolved database file path for reuse in actions
-        self.database_file_path = database_path
+            # Store the resolved database file path for reuse in actions
+            self.database_file_path = database_path
 
-        logger.info("Loading CAN database file: %s", database_path)
-        try:
-            self.db = cantools.database.load_file(database_path)
-            logger.info("Loaded %d messages from database", len(self.db.messages))
-        except Exception as e:
-            raise ValueError(f"Failed to load database file: {e}") from e
+            logger.info("Loading CAN database file: %s", database_path)
+            try:
+                self.db = cantools.database.load_file(database_path)
+                logger.info("Loaded %d messages from database", len(self.db.messages))
+            except Exception as e:
+                raise ValueError(f"Failed to load database file: {e}") from e
+        else:
+            self.database_file_path = None
+            self.db = cantools.database.can.Database()
 
         # Determine trace source name (use exact bus_name for multi-bus)
         source_name = self.bus_name if self.bus_name else "can_codec"
@@ -129,15 +133,22 @@ class CanCodec(can.Listener):
             self.raw_source = None
             self.raw_event = None
 
+        # Initialize protocol handler (J1939, CANopen, or None)
+        self._protocol_handler: ProtocolHandler | None = create_handler(
+            config, self.source, self.namespace, self.bus_name
+        )
+        if self._protocol_handler:
+            logger.info("Protocol handler active: %s", type(self._protocol_handler).__name__)
+            self._protocol_handler.set_codec(self)
+
         # Build message lookup tables (handle duplicates permissively)
-        self.messages_by_id: dict[int, cantools.db.can.Message] = {}
-        self.messages_by_name: dict[str, cantools.db.can.Message] = {}
+        self.messages_by_id: dict[int, cantools.database.can.Message] = {}
+        self.messages_by_name: dict[str, cantools.database.can.Message] = {}
 
         self._events: dict[int, Any] = {}
 
         for msg in self.db.messages:
             self.messages_by_id[msg.frame_id] = msg
-            # Only store first occurrence of duplicate names
             if msg.name not in self.messages_by_name:
                 self.messages_by_name[msg.name] = msg
             else:
@@ -145,6 +156,30 @@ class CanCodec(can.Listener):
                     f"Duplicate message name '{msg.name}' (ID {msg.frame_id}), "
                     "access via message ID instead"
                 )
+
+        # For J1939 DBCs: build PGN-keyed lookup so frames from any source
+        # address match the DBC entry (which has a fixed SA baked in).
+        # Bind the lookup function once to avoid per-frame conditionals.
+        pgn_lookup = {
+            cantools.j1939.pgn_from_frame_id(msg.frame_id): msg
+            for msg in self.db.messages
+            if msg.is_extended_frame
+        }
+        if pgn_lookup:
+            _pgn_get = pgn_lookup.get
+
+            def _find_dbc_msg(msg: can.Message) -> cantools.database.can.Message | None:
+                return self.messages_by_id.get(msg.arbitration_id) or (
+                    _pgn_get(cantools.j1939.pgn_from_frame_id(msg.arbitration_id))
+                    if msg.is_extended_id
+                    else None
+                )
+        else:
+
+            def _find_dbc_msg(msg: can.Message) -> cantools.database.can.Message | None:
+                return self.messages_by_id.get(msg.arbitration_id)
+
+        self._find_dbc_msg = _find_dbc_msg
 
         if self.emit_schemas_on_init:
             self._generate_all_schemas()
@@ -275,7 +310,7 @@ class CanCodec(can.Listener):
                 time.sleep(1)
 
     def stop(self) -> None:
-        """Stop CAN bus and periodic tasks."""
+        """Signal the codec to stop. Bus shutdown happens in _run_async's finally block."""
         bus_id = f"[{self.bus_name}] " if self.bus_name else ""
         logger.info(f"{bus_id}Stopping CAN codec")
         self.running = False
@@ -289,10 +324,6 @@ class CanCodec(can.Listener):
             task.cancel()
 
         self.periodic_tasks.clear()
-
-        if self.bus:
-            self.bus.shutdown()
-            self.bus = None
 
     def run(self) -> None:
         """Run async message reception loop."""
@@ -417,13 +448,30 @@ class CanCodec(can.Listener):
         notifier = can.Notifier(self.bus, [self])
 
         if self.demo_mode:
-            self.demo_task = asyncio.create_task(run_demo_ev_simulation(self.bus, self.db, self))
-            logger.info("Started EV simulation task for demo mode")
+            demo_type = self.config.get("demo_type", "ev")
+            if demo_type == "j1939":
+                from .demo.j1939_demo import run_demo_j1939_simulation
+
+                self.demo_task = asyncio.create_task(run_demo_j1939_simulation(self.bus, self))
+                logger.info("Started J1939 truck simulation for demo mode")
+            elif demo_type == "canopen":
+                from .demo.canopen_demo import run_demo_canopen_simulation
+
+                self.demo_task = asyncio.create_task(run_demo_canopen_simulation(self.bus, self))
+                logger.info("Started CANopen servo simulation for demo mode")
+            else:
+                self.demo_task = asyncio.create_task(
+                    run_demo_ev_simulation(self.bus, self.db, self)
+                )
+                logger.info("Started EV simulation task for demo mode")
 
         try:
             logger.info("Starting CAN message rx loop")
             while self.running:
                 await asyncio.sleep(5.0)
+
+                if self._protocol_handler:
+                    self._protocol_handler.cleanup()
 
                 notifier_alive = self._check_notifier_health(notifier)
                 bus_healthy = self._check_bus_health()
@@ -437,6 +485,9 @@ class CanCodec(can.Listener):
             logger.exception("Error in CAN reception loop: %s", e)
         finally:
             notifier.stop()
+            if self.bus:
+                self.bus.shutdown()
+                self.bus = None
             logger.info("CAN reception stopped")
 
     def _update_receive_metrics(self, msg: can.Message) -> None:
@@ -476,28 +527,23 @@ class CanCodec(can.Listener):
         :param timestamp_ns: Timestamp in nanoseconds
         """
         try:
-            decoded = self.db.decode_message(msg.arbitration_id, msg.data)
-            self.metrics.messages_decoded += 1
-
-            dbc_msg = self.messages_by_id.get(msg.arbitration_id)
+            dbc_msg = self._find_dbc_msg(msg)
             if not dbc_msg:
-                logger.debug("Unknown message ID: %04x", msg.arbitration_id)
                 self.metrics.unknown_messages += 1
                 return
 
-            # Emit base signals (non-multiplexed signals + multiplexer signal if present)
+            decoded = dbc_msg.decode(msg.data)
+            self.metrics.messages_decoded += 1
+
             self._emit_base_signals(dbc_msg, decoded, timestamp_ns)
             if dbc_msg.is_multiplexed():
                 self._emit_multiplexed_signals(dbc_msg, decoded, timestamp_ns)
 
-        except KeyError:
-            logger.debug("Message ID %04x not in database", msg.arbitration_id)
-            self.metrics.unknown_messages += 1
         except cantools.database.DecodeError as e:
-            logger.debug("Decode error for %04x: %s", msg.arbitration_id, e)
+            logger.debug("Decode error for %08x: %s", msg.arbitration_id, e)
             self.metrics.decode_errors += 1
         except Exception as e:
-            logger.debug("Error decoding message %04x: %s", msg.arbitration_id, e)
+            logger.debug("Error decoding message %08x: %s", msg.arbitration_id, e)
             self.metrics.decode_errors += 1
 
     def _handle_message(self, msg: can.Message) -> None:
@@ -513,6 +559,8 @@ class CanCodec(can.Listener):
         self._update_receive_metrics(msg)
         timestamp_ns = self.get_timestamp(msg.timestamp)
         self._emit_raw_frame(msg, timestamp_ns)
+        if self._protocol_handler and self._protocol_handler.handle_frame(msg, timestamp_ns):
+            return  # Frame consumed by protocol handler
         self._decode_and_emit_message(msg, timestamp_ns)
 
     def _generate_all_schemas(self) -> None:
@@ -627,7 +675,7 @@ class CanCodec(can.Listener):
             else:
                 event.log(**signals)
             logger.debug("Emitted %s: %s", context, signals)
-        except (OverflowError, ValueError) as e:
+        except (OverflowError, TypeError, ValueError) as e:
             logger.debug("Skipping emission for %s: %s", context, e)
             self.metrics.decode_errors += 1
 
@@ -776,446 +824,3 @@ class CanCodec(can.Listener):
             logger.info("Periodic task cancelled: %s", task_name)
         except Exception as e:
             logger.exception("Error in periodic task %s: %s", task_name, e)
-
-    @action("Get Status", "View CAN bus status")
-    def get_status(self) -> dict[str, Any]:
-        """Get current CAN bus status.
-
-        :return: Status information
-        """
-        bus_state = "not_initialized" if not self.bus else str(self.bus.state.name)
-
-        return {
-            "bus_state": bus_state,
-            "running": self.running,
-            "interface": self.config["interface"],
-            "channel": self.config["channel"],
-            "fd_mode": self.fd_mode,
-        }
-
-    @action("Send Message", "Send a single CAN message")
-    @action.number("msg_id", minimum=0, maximum=0x1FFFFFFF, title="Message ID", default=0x100)
-    @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04", default="00")
-    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False, widget="toggle")
-    def send_message(self, msg_id: int, data: str, extended_id: bool = False) -> dict[str, Any]:
-        """Send a CAN message.
-
-        :param msg_id: CAN message ID (11-bit standard or 29-bit extended)
-        :param data: Hex data string (e.g., "01 02 03")
-        :param extended_id: Use 29-bit extended ID
-        :return: Confirmation message
-        """
-        if not self.bus:
-            return {"error": "CAN bus not started"}
-
-        # Validate ID range
-        max_id = 0x1FFFFFFF if extended_id else 0x7FF
-        if msg_id > max_id:
-            id_type = "extended" if extended_id else "standard"
-            return {"error": f"Message ID {msg_id:x} exceeds max for {id_type} ID ({max_id:x})"}
-
-        try:
-            data_bytes = bytes.fromhex(data.replace(" ", ""))
-            is_fd = self.fd_mode
-
-            msg = can.Message(
-                arbitration_id=msg_id, data=data_bytes, is_extended_id=extended_id, is_fd=is_fd
-            )
-            self.bus.send(msg)
-            logger.info(
-                f"Sent message: ID={msg_id:04x}, data={data_bytes.hex()}, extended={extended_id}"
-            )
-            return {
-                "status": "sent",
-                "id": f"0x{msg_id:04x}" if not extended_id else f"0x{msg_id:08x}",
-                "data": data_bytes.hex(),
-                "extended_id": extended_id,
-            }
-        except can.CanError as e:
-            logger.error("CAN error sending message: %s", e)
-            return {"error": f"CAN error: {e}"}
-        except Exception as e:
-            logger.error("Error sending message: %s", e)
-            return {"error": str(e)}
-
-    @action("Start Periodic Message", "Start periodic transmission of a CAN message")
-    @action.number("msg_id", minimum=0, maximum=0x1FFFFFFF, title="Message ID", default=0x100)
-    @action.text("data", title="Data (hex)", placeholder="01 02 03 04", default="00")
-    @action.number("period", minimum=0.001, maximum=10.0, title="Period (seconds)", default=0.1)
-    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False, widget="toggle")
-    def start_periodic(
-        self, msg_id: int, data: str, period: float, extended_id: bool = False
-    ) -> dict[str, Any]:
-        """Start periodic transmission of a message.
-
-        :param msg_id: CAN message ID
-        :param data: Hex data string
-        :param period: Transmission period in seconds
-        :param extended_id: Use 29-bit extended ID
-        :return: Confirmation message
-        """
-        if not self.bus or not self.running:
-            return {"error": "CAN bus not running"}
-
-        # Validate ID range
-        max_id = 0x1FFFFFFF if extended_id else 0x7FF
-        if msg_id > max_id:
-            id_type = "extended" if extended_id else "standard"
-            return {"error": f"Message ID {msg_id:x} exceeds max for {id_type} ID ({max_id:x})"}
-
-        try:
-            data_bytes = bytes.fromhex(data.replace(" ", ""))
-            task_name = f"periodic_{msg_id:08x}" if extended_id else f"periodic_{msg_id:04x}"
-
-            # Cancel existing task if present
-            if task_name in self.periodic_tasks:
-                self.periodic_tasks[task_name].cancel()
-                logger.info("Cancelled existing periodic task: %s", task_name)
-
-            # Create new periodic task
-            task = asyncio.create_task(
-                self._periodic_send_task(msg_id, data_bytes, period, task_name, extended_id)
-            )
-            self.periodic_tasks[task_name] = task
-
-            return {
-                "status": "started",
-                "task_name": task_name,
-                "id": f"0x{msg_id:04x}" if not extended_id else f"0x{msg_id:08x}",
-                "period": period,
-                "extended_id": extended_id,
-            }
-        except Exception as e:
-            logger.error("Error starting periodic transmission: %s", e)
-            return {"error": str(e)}
-
-    @action("Stop Periodic Message", "Stop periodic transmission")
-    @action.text("task_name", title="Task Name", placeholder="periodic_0100")
-    def stop_periodic(self, task_name: str) -> dict[str, Any]:
-        """Stop periodic transmission of a message.
-
-        :param task_name: Task name (from list_periodic_tasks)
-        :return: Confirmation message
-        """
-        if task_name in self.periodic_tasks:
-            self.periodic_tasks[task_name].cancel()
-            del self.periodic_tasks[task_name]
-            logger.info("Stopped periodic task: %s", task_name)
-            return {"status": "stopped", "task_name": task_name}
-        else:
-            return {"error": f"No periodic task found: {task_name}"}
-
-    @action("List Periodic Tasks", "Show all active periodic transmissions")
-    def list_periodic_tasks(self) -> dict[str, Any]:
-        """List all active periodic transmission tasks.
-
-        :return: Dictionary of active tasks
-        """
-        tasks = []
-        for name, task in self.periodic_tasks.items():
-            tasks.append(
-                {
-                    "name": name,
-                    "running": not task.done(),
-                    "cancelled": task.cancelled(),
-                }
-            )
-
-        return {"count": len(tasks), "tasks": tasks}
-
-    @action("Get Metrics", "View performance metrics and statistics")
-    def get_metrics(self) -> dict[str, Any]:
-        """Get codec performance metrics.
-
-        :return: Performance metrics
-        """
-        uptime = time.time() - self.start_time
-        messages_received = self.metrics.messages_received
-
-        return {
-            "messages_received": self.metrics.messages_received,
-            "messages_decoded": self.metrics.messages_decoded,
-            "decode_errors": self.metrics.decode_errors,
-            "unknown_messages": self.metrics.unknown_messages,
-            "uptime_seconds": round(uptime, 2),
-            "messages_per_second": round(messages_received / max(uptime, 1), 2),
-            "decode_success_rate": round(
-                self.metrics.messages_decoded / max(messages_received, 1), 4
-            ),
-        }
-
-    @action("List Messages", "List all messages in database")
-    def list_messages(self) -> dict[str, Any]:
-        """List all CAN messages in loaded database file.
-
-        :return: Dictionary of message information
-        """
-        messages = []
-        for msg in self.db.messages:
-            messages.append(
-                {
-                    "id": f"0x{msg.frame_id:04x}",
-                    "name": msg.name,
-                    "length": msg.length,
-                    "signals": len(msg.signals),
-                }
-            )
-
-        return {"count": len(messages), "messages": messages}
-
-    @action("Convert Trace File", "Convert CAN log to Zelos trace format")
-    @action.text(
-        "input_path",
-        title="Input File Path",
-        description="Path to CAN log file (.asc, .blf, .trc, etc.)",
-        widget="file-picker",
-    )
-    @action.text(
-        "output_path",
-        required=False,
-        default="",
-        title="Output File Path",
-        description="Output .trz file path (optional, defaults to input name with .trz)",
-        placeholder="e.g., /path/to/output.trz",
-    )
-    @action.text(
-        "database_path",
-        required=False,
-        default="",
-        title="CAN Database File (.dbc)",
-        description="Override database file (optional, defaults to extension's configured file)",
-        placeholder="Leave empty to use extension's database",
-        widget="file-picker",
-    )
-    @action.boolean(
-        "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
-    )
-    @action.boolean(
-        "emit_all_schemas",
-        required=False,
-        default=True,
-        title="Emit all schemas",
-        description="Emit all schemas before processing. "
-        "Disable for faster startup with large databases.",
-        widget="toggle",
-    )
-    def convert_trace_file(
-        self,
-        input_path: str,
-        output_path: str = "",
-        database_path: str = "",
-        overwrite: bool = False,
-        emit_all_schemas: bool = True,
-    ) -> dict[str, Any]:
-        """Convert CAN trace file to Zelos format using CAN database file.
-
-        :param input_path: Path to CAN log file
-        :param output_path: Output .trz file path (optional)
-        :param database_path: Database file path (.dbc, .arxml, etc.) - defaults to extension's file
-        :param overwrite: Overwrite existing output file
-        :param emit_all_schemas: Pre-generate all schemas before processing
-        :return: Conversion result with statistics
-        """
-        from pathlib import Path
-
-        from .converter import convert_can_trace
-
-        try:
-            # Validate input path
-            input_file = Path(input_path).expanduser().resolve()
-            if not input_file.exists():
-                return {
-                    "status": "error",
-                    "message": f"Input file not found: {input_file}",
-                }
-
-            # Determine database file to use (parameter override or extension's configured file)
-            if database_path:
-                # User provided a database file path - handle it
-                database_file = Path(database_path).expanduser().resolve()
-                if not database_file.exists():
-                    return {
-                        "status": "error",
-                        "message": f"CAN database file not found: {database_file}",
-                    }
-                logger.info("Using user-specified database: %s", database_file)
-            else:
-                # Use extension's already-loaded database file path (already resolved)
-                if not hasattr(self, "database_file_path") or not self.database_file_path:
-                    return {
-                        "status": "error",
-                        "message": "No database file specified and extension has none configured",
-                    }
-                database_file = Path(self.database_file_path)
-                logger.info("Using extension's configured database: %s", database_file)
-
-            # Determine output path
-            if not output_path:
-                output_path = str(input_file.with_suffix(".trz"))
-
-            output_file = Path(output_path).expanduser().resolve()
-
-            # Ensure output always has .trz extension
-            if output_file.suffix.lower() != ".trz":
-                output_file = output_file.with_suffix(".trz")
-
-            # Safety check: prevent overwriting input file
-            if output_file == input_file:
-                return {
-                    "status": "error",
-                    "message": f"Output file cannot be the same as input file: {input_file}",
-                }
-
-            # Check if output exists
-            if output_file.exists():
-                if overwrite:
-                    logger.info("Removing existing file: %s", output_file)
-                    output_file.unlink()
-                else:
-                    return {
-                        "status": "error",
-                        "message": f"Output file '{output_file}' already exists. "
-                        "Enable 'Overwrite if exists' to replace it.",
-                    }
-
-            # Perform conversion
-            logger.info(
-                "Converting %s -> %s using database: %s", input_file, output_file, database_file
-            )
-            stats = convert_can_trace(
-                input_file,
-                database_file,
-                output_file,
-                emit_schemas_on_init=emit_all_schemas,
-            )
-
-            return {
-                "status": "success",
-                "input_file": str(input_file),
-                "database_file": str(database_file),
-                "output_file": str(output_file),
-                **stats.to_dict(),
-            }
-
-        except FileNotFoundError as e:
-            return {"status": "error", "message": f"File not found: {e}"}
-        except ValueError as e:
-            return {"status": "error", "message": f"Invalid input: {e}"}
-        except ImportError as e:
-            return {"status": "error", "message": f"Missing dependency: {e}"}
-        except Exception as e:
-            logger.exception("Conversion failed")
-            return {"status": "error", "message": f"Conversion failed: {e}"}
-
-    @action("Export Trace to Log", "Export raw CAN frames from TRZ to candump log format")
-    @action.text(
-        "input_path",
-        title="Input TRZ File",
-        description="Path to Zelos trace file (.trz) with raw CAN frames",
-        widget="file-picker",
-    )
-    @action.text(
-        "output_path",
-        required=False,
-        default="",
-        title="Output Log File",
-        description="Output .log file path (optional, defaults to input name with .log)",
-        placeholder="e.g., /path/to/output.log",
-    )
-    @action.boolean(
-        "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
-    )
-    def export_trace_to_log(
-        self,
-        input_path: str,
-        output_path: str = "",
-        overwrite: bool = False,
-    ) -> dict[str, Any]:
-        """Export raw CAN frames from TRZ trace to candump log format.
-
-        This extracts raw CAN frames from a Zelos trace file and writes them
-        in candump log format (.log), which can be replayed or re-converted
-        with a different DBC file.
-
-        Requirements: The source trace must have been recorded with
-        'Log Raw CAN Frames' enabled.
-
-        :param input_path: Path to TRZ trace file
-        :param output_path: Output .log file path (optional)
-        :param overwrite: Overwrite existing output file
-        :return: Export result with statistics
-        """
-        from pathlib import Path
-
-        from .cli.export import export_to_candump
-
-        try:
-            # Validate input path
-            input_file = Path(input_path).expanduser().resolve()
-            if not input_file.exists():
-                return {
-                    "status": "error",
-                    "message": f"Input file not found: {input_file}",
-                }
-
-            if input_file.suffix.lower() != ".trz":
-                return {
-                    "status": "error",
-                    "message": f"Input file must be a .trz file: {input_file}",
-                }
-
-            # Determine output path
-            if not output_path:
-                output_path = str(input_file.with_suffix(".log"))
-
-            output_file = Path(output_path).expanduser().resolve()
-
-            # Ensure output always has .log extension
-            if output_file.suffix.lower() != ".log":
-                output_file = output_file.with_suffix(".log")
-
-            # Safety check: prevent overwriting input file
-            if output_file == input_file:
-                return {
-                    "status": "error",
-                    "message": f"Output file cannot be the same as input file: {input_file}",
-                }
-
-            # Check if output exists
-            if output_file.exists():
-                if overwrite:
-                    logger.info("Removing existing file: %s", output_file)
-                    output_file.unlink()
-                else:
-                    return {
-                        "status": "error",
-                        "message": f"Output file '{output_file}' already exists. "
-                        "Enable 'Overwrite if exists' to replace it.",
-                    }
-
-            # Perform export
-            logger.info("Exporting %s -> %s", input_file, output_file)
-            stats = export_to_candump(input_file, output_file)
-
-            if stats["frame_count"] == 0:
-                return {
-                    "status": "warning",
-                    "message": "No raw CAN frames found in trace. "
-                    "Ensure 'Log Raw CAN Frames' was enabled when recording.",
-                    "input_file": str(input_file),
-                    "sources_found": stats["sources_found"],
-                }
-
-            return {
-                "status": "success",
-                "input_file": str(input_file),
-                "output_file": str(output_file),
-                "frame_count": stats["frame_count"],
-                "sources_exported": stats["sources_exported"],
-            }
-
-        except FileNotFoundError as e:
-            return {"status": "error", "message": f"File not found: {e}"}
-        except Exception as e:
-            logger.exception("Export failed")
-            return {"status": "error", "message": f"Export failed: {e}"}
