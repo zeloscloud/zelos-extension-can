@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import queue
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -19,6 +21,9 @@ from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_RX_QUEUE_SIZE = 65536
+_DEFAULT_RCVBUF_SIZE = 2 * 1024 * 1024  # 2 MB
+
 
 @dataclass(slots=True)
 class Metrics:
@@ -28,6 +33,7 @@ class Metrics:
     messages_decoded: int = 0
     decode_errors: int = 0
     unknown_messages: int = 0
+    rx_queue_drops: int = 0
 
 
 class TimestampMode(IntEnum):
@@ -163,6 +169,14 @@ class CanCodec(can.Listener):
         self.bus: Any = None
         self.periodic_tasks: dict[str, asyncio.Task] = {}
 
+        # Receive queue decouples the SocketCAN recv thread from processing.
+        # Without this, TraceWriter disk flushes block recv() and cause silent
+        # kernel-level frame drops.
+        self._rx_queue: queue.Queue[can.Message | None] = queue.Queue(
+            maxsize=config.get("rx_queue_size", _DEFAULT_RX_QUEUE_SIZE)
+        )
+        self._worker_thread: threading.Thread | None = None
+
     def _get_event_name(self, msg: cantools.database.can.Message) -> str:
         """Get event name for message (format: {frame_id:04x}_{name}).
 
@@ -264,7 +278,12 @@ class CanCodec(can.Listener):
         for attempt in range(max_retries):
             try:
                 self.bus = can.Bus(**bus_config)
+                self._set_rcvbuf()
                 self.running = True
+                self._worker_thread = threading.Thread(
+                    target=self._process_worker, name="can-codec-worker", daemon=True
+                )
+                self._worker_thread.start()
                 logger.info("CAN bus started successfully")
                 return
             except can.CanError as e:
@@ -293,6 +312,14 @@ class CanCodec(can.Listener):
         if self.bus:
             self.bus.shutdown()
             self.bus = None
+
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._rx_queue.put(None)
+            self._worker_thread.join(timeout=10.0)
+            self._worker_thread = None
+
+        if self.metrics.rx_queue_drops > 0:
+            logger.warning("Dropped %d frames due to full rx queue", self.metrics.rx_queue_drops)
 
     def run(self) -> None:
         """Run async message reception loop."""
@@ -343,15 +370,54 @@ class CanCodec(can.Listener):
             return False
 
     def on_message_received(self, message: can.Message) -> None:
-        """Handle CAN message directly from notifier (can.Listener interface).
+        """Handle CAN message from notifier (can.Listener interface).
 
-        This direct callback approach is more efficient than AsyncBufferedReader
-        as it eliminates buffering overhead and async context switching.
+        Enqueues the message for processing by a worker thread so the
+        SocketCAN recv thread is never blocked by decode or TraceWriter I/O.
 
         :param message: Received CAN message
         """
-        self._handle_message(message)
+        try:
+            self._rx_queue.put_nowait(message)
+        except queue.Full:
+            self.metrics.rx_queue_drops += 1
         self.last_message_time = time.time()
+
+    def _process_worker(self) -> None:
+        """Worker thread that processes queued CAN messages."""
+        while True:
+            try:
+                msg = self._rx_queue.get(timeout=1.0)
+            except queue.Empty:
+                if not self.running:
+                    break
+                continue
+            if msg is None:
+                break
+            self._handle_message(msg)
+
+    def _set_rcvbuf(self) -> None:
+        """Attempt to increase the kernel socket receive buffer.
+
+        Only applies to SocketCAN interfaces. Silently ignored on other
+        interfaces or when the socket is not accessible.
+        """
+        try:
+            raw_fd = getattr(self.bus, "_sock", None) or getattr(self.bus, "socket", None)
+            if raw_fd is None:
+                return
+            fd = raw_fd.fileno() if hasattr(raw_fd, "fileno") else raw_fd
+            sock = socket.socket(fileno=fd)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _DEFAULT_RCVBUF_SIZE)
+                actual = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+                logger.info(
+                    "SO_RCVBUF set to %d bytes (requested %d)", actual, _DEFAULT_RCVBUF_SIZE
+                )
+            finally:
+                sock.detach()
+        except Exception as e:
+            logger.debug("Could not set SO_RCVBUF: %s", e)
 
     def _check_notifier_health(self, notifier: can.Notifier) -> bool:
         """Check if notifier threads are alive.
@@ -937,6 +1003,8 @@ class CanCodec(can.Listener):
             "messages_decoded": self.metrics.messages_decoded,
             "decode_errors": self.metrics.decode_errors,
             "unknown_messages": self.metrics.unknown_messages,
+            "rx_queue_drops": self.metrics.rx_queue_drops,
+            "rx_queue_size": self._rx_queue.qsize(),
             "uptime_seconds": round(uptime, 2),
             "messages_per_second": round(messages_received / max(uptime, 1), 2),
             "decode_success_rate": round(
