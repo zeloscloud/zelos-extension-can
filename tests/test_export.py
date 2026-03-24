@@ -154,7 +154,7 @@ class TestExportIntegration:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         stats = export_to_candump(trz_file, log_file)
 
@@ -207,7 +207,7 @@ class TestExportIntegration:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         stats = export_to_candump(trz_file, log_file)
 
@@ -242,7 +242,7 @@ class TestExportIntegration:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         with caplog.at_level(logging.ERROR):
             stats = export_to_candump(trz_file, log_file)
@@ -312,7 +312,7 @@ class TestExportIntegration:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         stats = export_to_candump(trz_file, log_file)
 
@@ -405,7 +405,7 @@ class TestRoundtrip:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         # Export trz -> log
         stats = export_to_candump(trz_file, exported_log)

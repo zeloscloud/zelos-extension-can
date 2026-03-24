@@ -56,7 +56,7 @@ class J1939Handler(ProtocolHandler):
         self._active_dtcs: dict[int, dict] = {}  # SA -> latest DM1 info
 
         # Create trace events
-        source_prefix = f"{bus_name}_j1939" if bus_name else "j1939"
+        source_prefix = f"{bus_name}_j1939" if bus_name else "can_j1939"
         self._j1939_source = self._create_trace_source(source_prefix)
 
         self._pgn_meta_event = self._j1939_source.add_event(
