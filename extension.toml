@@ -16,8 +16,11 @@ readme = "README.md"
 changelog = "CHANGELOG.md"
 
 # Compatibility (optional, defaults to ^25.0.20)
+# 26.0.3 is required because this build wires the Rust-first
+# zelos-can hot path (zelos-virtual / zelos-socketcan) into the
+# extension; older app versions cannot drive those interfaces.
 [zelos]
-version = ">=25.0.22-0"
+version = ">=26.0.3"
 
 # Configuration schema (enables UI in Zelos App)
 [config]

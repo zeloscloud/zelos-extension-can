@@ -18,11 +18,13 @@
             "description": "CAN interface type (e.g. Linux: socketcan, macOS/Windows: pcan)",
             "enum": [
               "demo",
-              "virtual",
+              "zelos-socketcan",
               "socketcan",
               "pcan",
               "kvaser",
               "vector",
+              "virtual",
+              "zelos-virtual",
               "other"
             ]
           }
@@ -52,7 +54,8 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "virtual"
+                      "virtual",
+                      "zelos-virtual"
                     ]
                   },
                   "channel": {
@@ -104,7 +107,8 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "socketcan"
+                      "socketcan",
+                      "zelos-socketcan"
                     ]
                   },
                   "channel": {
