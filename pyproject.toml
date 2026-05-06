@@ -18,7 +18,8 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "zelos-sdk==0.0.9",
+    "zelos-sdk==0.0.10a3",
+    "zelos-can[python-can]==0.0.4",
     "python-can",
     "cantools",
     "rich-click>=1.8.0",

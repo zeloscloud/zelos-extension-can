@@ -78,6 +78,17 @@ class CanCodec(can.Listener):
         self.demo_mode = config.get("demo_mode", False)
         self.demo_task: asyncio.Task | None = None
 
+        # Native RX mode: when the selected interface has a zelos-can Rust-backed
+        # codec, let it own recv → DBC decode → trace emit end-to-end. The Python
+        # Listener hot path (_handle_message / _decode_and_emit_message / etc.)
+        # is skipped. Extension stays in charge of bus lifecycle, TX actions,
+        # reconnect supervision, and metrics aggregation.
+        self._use_native_rx = self.config.get("interface") in (
+            "zelos-socketcan",
+            "zelos-virtual",
+        )
+        self._native_codec: Any = None
+
         # Load and validate database file
         database_path = config["database_file"]
 
@@ -98,67 +109,81 @@ class CanCodec(can.Listener):
         source_name = self.bus_name if self.bus_name else "can_codec"
         raw_source_name = f"{self.bus_name}_raw" if self.bus_name else "can_raw"
 
-        # Create trace source (in isolated namespace if provided)
-        if self.namespace:
-            self.source = zelos_sdk.TraceSource(source_name, namespace=self.namespace)
-        else:
-            self.source = zelos_sdk.TraceSource(source_name)
-
-        # Create raw CAN frame event schema (for log_raw_frames feature)
-        if self.log_raw_frames:
-            if self.namespace:
-                self.raw_source = zelos_sdk.TraceSource(raw_source_name, namespace=self.namespace)
-            else:
-                self.raw_source = zelos_sdk.TraceSource(raw_source_name)
-
-            self.raw_event = self.raw_source.add_event(
-                "messages",
-                [
-                    zelos_sdk.TraceEventFieldMetadata(
-                        name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
-                    ),
-                    zelos_sdk.TraceEventFieldMetadata(
-                        name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
-                    ),
-                    zelos_sdk.TraceEventFieldMetadata(
-                        name="data", data_type=zelos_sdk.DataType.Binary, unit=None
-                    ),
-                ],
-            )
-        else:
-            self.raw_source = None
-            self.raw_event = None
-
-        # Build message lookup tables (handle duplicates permissively)
+        # When the native Rust codec owns the RX path it also owns schema
+        # registration and trace emission. Skip the Python-side trace source /
+        # event / schema wiring so we don't double-register or waste per-frame
+        # work in a listener that never runs.
         self.messages_by_id: dict[int, cantools.db.can.Message] = {}
         self.messages_by_name: dict[str, cantools.db.can.Message] = {}
-
         self._events: dict[int, Any] = {}
 
-        for msg in self.db.messages:
-            self.messages_by_id[msg.frame_id] = msg
-            # Only store first occurrence of duplicate names
-            if msg.name not in self.messages_by_name:
-                self.messages_by_name[msg.name] = msg
+        if self._use_native_rx:
+            self.source = None
+            self.raw_source = None
+            self.raw_event = None
+            logger.info(
+                "Native RX mode enabled (%s): zelos_can.CanCodec will own "
+                "recv, DBC decode, and trace emit",
+                self.config["interface"],
+            )
+        else:
+            # Create trace source (in isolated namespace if provided)
+            if self.namespace:
+                self.source = zelos_sdk.TraceSource(source_name, namespace=self.namespace)
             else:
-                logger.warning(
-                    f"Duplicate message name '{msg.name}' (ID {msg.frame_id}), "
-                    "access via message ID instead"
+                self.source = zelos_sdk.TraceSource(source_name)
+
+            # Create raw CAN frame event schema (for log_raw_frames feature)
+            if self.log_raw_frames:
+                if self.namespace:
+                    self.raw_source = zelos_sdk.TraceSource(
+                        raw_source_name, namespace=self.namespace
+                    )
+                else:
+                    self.raw_source = zelos_sdk.TraceSource(raw_source_name)
+
+                self.raw_event = self.raw_source.add_event(
+                    "messages",
+                    [
+                        zelos_sdk.TraceEventFieldMetadata(
+                            name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
+                        ),
+                        zelos_sdk.TraceEventFieldMetadata(
+                            name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
+                        ),
+                        zelos_sdk.TraceEventFieldMetadata(
+                            name="data", data_type=zelos_sdk.DataType.Binary, unit=None
+                        ),
+                    ],
+                )
+            else:
+                self.raw_source = None
+                self.raw_event = None
+
+            for msg in self.db.messages:
+                self.messages_by_id[msg.frame_id] = msg
+                # Only store first occurrence of duplicate names
+                if msg.name not in self.messages_by_name:
+                    self.messages_by_name[msg.name] = msg
+                else:
+                    logger.warning(
+                        f"Duplicate message name '{msg.name}' (ID {msg.frame_id}), "
+                        "access via message ID instead"
+                    )
+
+            if self.emit_schemas_on_init:
+                self._generate_all_schemas()
+                logger.info("Generated %d event schemas from database", len(self._events))
+            else:
+                logger.info(
+                    "Schema generation deferred - will emit schemas as messages are encountered"
                 )
 
-        if self.emit_schemas_on_init:
-            self._generate_all_schemas()
-            logger.info("Generated %d event schemas from database", len(self._events))
-        else:
-            logger.info(
-                "Schema generation deferred - will emit schemas as messages are encountered"
-            )
-
-        # Log raw frame configuration
-        if self.log_raw_frames:
-            logger.info(f"Raw CAN frame logging is ENABLED - logging to '{raw_source_name}'")
-        else:
-            logger.info("Raw CAN frame logging is DISABLED")
+            # Log raw frame configuration
+            if self.log_raw_frames:
+                logger.info(f"Raw CAN frame logging is ENABLED - logging to '{raw_source_name}'")
+            else:
+                logger.info("Raw CAN frame logging is DISABLED")
 
         self.bus: Any = None
         self.periodic_tasks: dict[str, asyncio.Task] = {}
@@ -266,6 +291,8 @@ class CanCodec(can.Listener):
                 self.bus = can.Bus(**bus_config)
                 self.running = True
                 logger.info("CAN bus started successfully")
+                if self._use_native_rx:
+                    self._start_native_codec()
                 return
             except can.CanError as e:
                 if attempt == max_retries - 1:
@@ -273,6 +300,37 @@ class CanCodec(can.Listener):
                     raise
                 logger.warning("Bus init failed (attempt %d/%d): %s", attempt + 1, max_retries, e)
                 time.sleep(1)
+
+    def _start_native_codec(self) -> None:
+        """Hand the RX hot path off to the Rust-native zelos_can.CanCodec.
+
+        For ``zelos-socketcan`` the native codec opens its own kernel socket on
+        the same channel as ``self.bus`` (both sockets get their own kernel copy
+        of each frame). For ``zelos-virtual`` we hand it the ``VirtualBus``
+        receiver out of ``self.bus._vbus``; the python-can wrapper keeps its TX
+        half, so ``send()`` / periodic transmit actions on ``self.bus`` still
+        work.
+        """
+        import zelos_can
+
+        interface = self.config["interface"]
+        codec_kwargs: dict[str, Any] = {
+            "database_file": self.database_file_path,
+            "source_name": self.bus_name or "can_codec",
+            "log_raw_frames": self.log_raw_frames,
+            "emit_schemas_on_init": self.emit_schemas_on_init,
+        }
+        if interface == "zelos-socketcan":
+            codec_kwargs["channel"] = self.config["channel"]
+            if "rcvbuf_size" in self.config and self.config["rcvbuf_size"] is not None:
+                codec_kwargs["rcvbuf_size"] = int(self.config["rcvbuf_size"])
+        else:
+            # zelos-virtual: reuse the underlying VirtualBus so the native codec
+            # and the python-can wrapper share the same channel.
+            codec_kwargs["bus"] = self.bus._vbus
+
+        self._native_codec = zelos_can.CanCodec(**codec_kwargs)
+        logger.info("zelos_can.CanCodec started (%s) - Python RX listener disabled", interface)
 
     def stop(self) -> None:
         """Stop CAN bus and periodic tasks."""
@@ -289,6 +347,13 @@ class CanCodec(can.Listener):
             task.cancel()
 
         self.periodic_tasks.clear()
+
+        if self._native_codec is not None:
+            try:
+                self._native_codec.stop()
+            except Exception as e:
+                logger.warning("Error stopping native codec: %s", e)
+            self._native_codec = None
 
         if self.bus:
             self.bus.shutdown()
@@ -307,12 +372,20 @@ class CanCodec(can.Listener):
             logger.debug("Bus health check: bus is None")
             return False
 
+        interface = self.config.get("interface")
+
         # For virtual/demo interfaces, just check if bus object exists
-        if self.config.get("interface") == "virtual" or self.demo_mode:
+        if interface in ("virtual", "zelos-virtual") or self.demo_mode:
             return True
 
-        # For hardware interfaces, check bus state
-        bus_state = self.bus.state
+        # For hardware interfaces, check bus state when available. Some
+        # bus implementations (e.g. zelos-socketcan) may not expose .state;
+        # fall back to "bus object exists" in that case.
+        try:
+            bus_state = self.bus.state
+        except AttributeError:
+            return True
+
         is_active = bus_state == can.BusState.ACTIVE
 
         if not is_active:
@@ -350,6 +423,11 @@ class CanCodec(can.Listener):
 
         :param message: Received CAN message
         """
+        if self._use_native_rx:
+            # Native RX (zelos-*) owns the hot path; trace source / raw event
+            # are intentionally None here. Silently drop anything a caller
+            # attached a Python Notifier for — metrics live on the native codec.
+            return
         self._handle_message(message)
         self.last_message_time = time.time()
 
@@ -409,12 +487,17 @@ class CanCodec(can.Listener):
 
         Message reception happens via on_message_received() callback, not in this loop.
         This approach is more efficient than AsyncBufferedReader + asyncio.wait_for().
+
+        In native RX mode (``zelos-socketcan`` / ``zelos-virtual``) the Rust
+        codec owns the recv loop entirely; we only supervise bus health here.
         """
         if not self.bus:
             logger.error("Bus not initialized, call start() first")
             return
 
-        notifier = can.Notifier(self.bus, [self])
+        notifier: can.Notifier | None = None
+        if not self._use_native_rx:
+            notifier = can.Notifier(self.bus, [self])
 
         if self.demo_mode:
             self.demo_task = asyncio.create_task(run_demo_ev_simulation(self.bus, self.db, self))
@@ -424,6 +507,17 @@ class CanCodec(can.Listener):
             logger.info("Starting CAN message rx loop")
             while self.running:
                 await asyncio.sleep(5.0)
+
+                if self._use_native_rx:
+                    # Rust codec owns recv; nothing to supervise on the Python
+                    # side beyond the bus socket itself. Reconnect policy for
+                    # the native codec is handled inside zelos_can.
+                    if not self._check_bus_health():
+                        logger.warning(
+                            "Bus health check failed in native RX mode; "
+                            "zelos_can.CanCodec handles reconnect internally"
+                        )
+                    continue
 
                 notifier_alive = self._check_notifier_health(notifier)
                 bus_healthy = self._check_bus_health()
@@ -436,7 +530,8 @@ class CanCodec(can.Listener):
         except Exception as e:
             logger.exception("Error in CAN reception loop: %s", e)
         finally:
-            notifier.stop()
+            if notifier is not None:
+                notifier.stop()
             logger.info("CAN reception stopped")
 
     def _update_receive_metrics(self, msg: can.Message) -> None:
@@ -930,6 +1025,25 @@ class CanCodec(can.Listener):
         :return: Performance metrics
         """
         uptime = time.time() - self.start_time
+
+        if self._native_codec is not None:
+            m = self._native_codec.metrics()
+            messages_received = int(m.messages_received)
+            messages_decoded = int(m.messages_decoded)
+            return {
+                "messages_received": messages_received,
+                "messages_decoded": messages_decoded,
+                "decode_errors": int(m.decode_errors),
+                "unknown_messages": int(m.unknown_messages),
+                "kernel_drops": int(m.kernel_drops),
+                "buffer_overflows": int(m.buffer_overflows),
+                "reconnections": int(m.reconnections),
+                "uptime_seconds": round(uptime, 2),
+                "messages_per_second": round(messages_received / max(uptime, 1), 2),
+                "decode_success_rate": round(messages_decoded / max(messages_received, 1), 4),
+                "source": "zelos_can.CanCodec",
+            }
+
         messages_received = self.metrics.messages_received
 
         return {
