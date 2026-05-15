@@ -530,6 +530,33 @@ class TestFileUtils:
         assert output_path.exists()
         assert output_path.read_text() == "test content"
 
+    def test_data_url_to_file_relative_is_content_addressed(self, tmp_path, monkeypatch):
+        """Relative paths land in $ZELOS_DATA_DIR with a content-addressed name."""
+        import base64
+
+        from zelos_extension_can.utils.file_utils import data_url_to_file
+
+        monkeypatch.setenv("ZELOS_DATA_DIR", str(tmp_path))
+
+        def url_for(content: bytes) -> str:
+            return f"data:application/octet-stream;base64,{base64.b64encode(content).decode()}"
+
+        a = url_for(b'VERSION ""\nbus a\n')
+        b = url_for(b'VERSION ""\nbus b\n')
+
+        path_a = data_url_to_file(a, ".uploaded", detect_extension=True)
+        path_b = data_url_to_file(b, ".uploaded", detect_extension=True)
+        path_a_again = data_url_to_file(a, ".uploaded", detect_extension=True)
+
+        # Distinct contents must not clobber each other.
+        assert path_a != path_b
+        # Identical contents dedupe to the same file (content-addressed).
+        assert path_a == path_a_again
+        # Files actually exist under the data dir with the .dbc suffix.
+        assert Path(path_a).parent == tmp_path
+        assert Path(path_a).suffix == ".dbc"
+        assert Path(path_b).suffix == ".dbc"
+
 
 class TestMultiBusSupport:
     """Test multi-bus configuration support."""

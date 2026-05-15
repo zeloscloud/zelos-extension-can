@@ -1,6 +1,7 @@
 """File utilities for handling data URLs and file conversions."""
 
 import base64
+import hashlib
 import os
 from pathlib import Path
 
@@ -30,7 +31,9 @@ def data_url_to_file(data_url: str, output_path: str, detect_extension: bool = F
 
     # For relative output paths, resolve into ZELOS_DATA_DIR — the runtime-provided
     # writable scratch directory. Writing into the extension's code dir is blocked
-    # by src modification safety checks.
+    # by src modification safety checks. Also content-address the file by hashing
+    # the bytes: multiple buses uploading different DBCs each get their own file,
+    # and identical uploads dedupe to the same path.
     output_path_obj = Path(output_path)
     if not output_path_obj.is_absolute():
         data_dir_env = os.environ.get("ZELOS_DATA_DIR")
@@ -39,7 +42,8 @@ def data_url_to_file(data_url: str, output_path: str, detect_extension: bool = F
 
         data_dir = Path(data_dir_env)
         data_dir.mkdir(parents=True, exist_ok=True)
-        output_path_obj = data_dir / output_path_obj.name
+        digest = hashlib.sha256(file_bytes).hexdigest()[:16]
+        output_path_obj = data_dir / f"{output_path_obj.name}_{digest}"
 
     if detect_extension:
         # Detect CAN database file format from content
