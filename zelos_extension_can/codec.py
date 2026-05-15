@@ -15,6 +15,7 @@ import zelos_sdk
 from zelos_sdk.actions import action
 
 from .demo.demo import run_demo_ev_simulation
+from .utils.file_utils import data_url_to_file
 from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
@@ -78,8 +79,14 @@ class CanCodec(can.Listener):
         self.demo_mode = config.get("demo_mode", False)
         self.demo_task: asyncio.Task | None = None
 
-        # Load and validate database file
-        database_path = config["database_file"]
+        # Load and validate database file (handle data-url or plain file path)
+        database_value = config["database_file"]
+
+        if database_value.startswith("data:"):
+            logger.info("Extracting uploaded database file from data-url")
+            database_path = data_url_to_file(database_value, ".uploaded", detect_extension=True)
+        else:
+            database_path = database_value
 
         if not Path(database_path).exists():
             raise FileNotFoundError(f"CAN database file not found: {database_path}")
@@ -1031,13 +1038,18 @@ class CanCodec(can.Listener):
 
             # Determine database file to use (parameter override or extension's configured file)
             if database_path:
-                # User provided a database file path - handle it
-                database_file = Path(database_path).expanduser().resolve()
-                if not database_file.exists():
-                    return {
-                        "status": "error",
-                        "message": f"CAN database file not found: {database_file}",
-                    }
+                # User provided a database file path or data URL - handle it
+                if database_path.startswith("data:"):
+                    database_file = Path(
+                        data_url_to_file(database_path, ".converter", detect_extension=True)
+                    )
+                else:
+                    database_file = Path(database_path).expanduser().resolve()
+                    if not database_file.exists():
+                        return {
+                            "status": "error",
+                            "message": f"CAN database file not found: {database_file}",
+                        }
                 logger.info("Using user-specified database: %s", database_file)
             else:
                 # Use extension's already-loaded database file path (already resolved)
