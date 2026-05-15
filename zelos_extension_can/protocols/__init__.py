@@ -20,7 +20,7 @@ def create_handler(
 
     :return: Protocol handler instance, or None when no protocol selected
     """
-    if config.get("j1939_enabled"):
+    if config.get("j1939"):
         from .j1939.handler import J1939Handler
 
         return J1939Handler(config, source, namespace, bus_name)

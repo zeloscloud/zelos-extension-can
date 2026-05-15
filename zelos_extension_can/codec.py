@@ -78,7 +78,7 @@ class CanCodec(can.Listener):
         self.demo_mode = config.get("demo_mode", False)
         self.demo_task: asyncio.Task | None = None
 
-        # Load and validate database file (optional — omit for pure J1939/CANopen setups)
+        # Load and validate database file (optional when protocol handler is active)
         database_path = config.get("database_file")
 
         if database_path:
@@ -159,18 +159,12 @@ class CanCodec(can.Listener):
 
         # For J1939 DBCs: build PGN-keyed lookup so frames from any source
         # address match the DBC entry (which has a fixed SA baked in).
-        # Only enabled when j1939_enabled=True; standard 29-bit DBCs use exact-match
-        # to avoid false positives from the SA byte stripping.
         # Bind the lookup function once to avoid per-frame conditionals.
-        pgn_lookup = (
-            {
-                cantools.j1939.pgn_from_frame_id(msg.frame_id): msg
-                for msg in self.db.messages
-                if msg.is_extended_frame
-            }
-            if config.get("j1939_enabled")
-            else {}
-        )
+        pgn_lookup = {
+            cantools.j1939.pgn_from_frame_id(msg.frame_id): msg
+            for msg in self.db.messages
+            if msg.is_extended_frame
+        }
         if pgn_lookup:
             _pgn_get = pgn_lookup.get
 

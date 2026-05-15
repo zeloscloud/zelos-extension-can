@@ -94,7 +94,7 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "j1939_enabled": {
+                  "j1939": {
                     "type": "boolean",
                     "title": "J1939 Protocol",
                     "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
@@ -104,7 +104,58 @@
                 },
                 "required": [
                   "channel"
-                ]
+                ],
+                "dependencies": {
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
               },
               {
                 "properties": {
@@ -138,6 +189,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
                   "receive_own_messages": {
                     "type": "boolean",
                     "title": "Receive Own Messages",
@@ -152,6 +214,11 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
@@ -159,32 +226,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "j1939_enabled": {
+                  "j1939": {
                     "type": "boolean",
                     "title": "J1939 Protocol",
                     "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
                     "default": false,
                     "ui:widget": "toggle"
-                  },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
-                  "channel"
+                  "channel",
+                  "database_file"
                 ],
                 "dependencies": {
                   "fd_mode": {
@@ -222,6 +274,55 @@
                         "required": [
                           "data_bitrate"
                         ]
+                      }
+                    ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
                       }
                     ]
                   }
@@ -271,6 +372,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
                   "receive_own_messages": {
                     "type": "boolean",
                     "title": "Receive Own Messages",
@@ -285,6 +397,11 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
@@ -292,32 +409,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "j1939_enabled": {
+                  "j1939": {
                     "type": "boolean",
                     "title": "J1939 Protocol",
                     "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
                     "default": false,
                     "ui:widget": "toggle"
-                  },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
                   "channel",
+                  "database_file",
                   "bitrate"
                 ],
                 "dependencies": {
@@ -356,6 +458,55 @@
                         "required": [
                           "data_bitrate"
                         ]
+                      }
+                    ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
                       }
                     ]
                   }
@@ -405,6 +556,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
                   "receive_own_messages": {
                     "type": "boolean",
                     "title": "Receive Own Messages",
@@ -419,6 +581,11 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
@@ -426,32 +593,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "j1939_enabled": {
+                  "j1939": {
                     "type": "boolean",
                     "title": "J1939 Protocol",
                     "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
                     "default": false,
                     "ui:widget": "toggle"
-                  },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
                   "channel",
+                  "database_file",
                   "bitrate"
                 ],
                 "dependencies": {
@@ -490,6 +642,55 @@
                         "required": [
                           "data_bitrate"
                         ]
+                      }
+                    ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
                       }
                     ]
                   }
@@ -539,6 +740,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Hardware timestamp handling mode",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
                   "receive_own_messages": {
                     "type": "boolean",
                     "title": "Receive Own Messages",
@@ -553,6 +765,11 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  },
                   "emit_schemas_on_init": {
                     "type": "boolean",
                     "title": "Emit Schemas On Init",
@@ -560,32 +777,17 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "j1939_enabled": {
+                  "j1939": {
                     "type": "boolean",
                     "title": "J1939 Protocol",
                     "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
                     "default": false,
                     "ui:widget": "toggle"
-                  },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "config_json": {
-                    "type": "string",
-                    "title": "Advanced Configuration (JSON)",
-                    "description": "Additional python-can Bus() kwargs as JSON object"
                   }
                 },
                 "required": [
                   "channel",
+                  "database_file",
                   "bitrate"
                 ],
                 "dependencies": {
@@ -626,6 +828,55 @@
                         ]
                       }
                     ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
                   }
                 }
               },
@@ -660,7 +911,7 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "j1939_enabled": {
+                  "j1939": {
                     "type": "boolean",
                     "title": "J1939 Protocol",
                     "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
@@ -669,8 +920,60 @@
                   }
                 },
                 "required": [
+                  "database_file",
                   "config_json"
-                ]
+                ],
+                "dependencies": {
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
               }
             ]
           }

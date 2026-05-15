@@ -18,7 +18,7 @@ def mock_source():
 
 @pytest.fixture
 def handler(mock_source):
-    config = {"j1939_enabled": True}
+    config = {"j1939": True}
     return J1939Handler(config, mock_source, namespace=None, bus_name=None)
 
 
@@ -101,7 +101,7 @@ class TestJ1939DBCDecode:
             "interface": "virtual",
             "channel": "vcan0",
             "database_file": j1939_dbc,
-            "j1939_enabled": True,
+            "j1939": True,
         }
         with patch("zelos_sdk.TraceSource"):
             return CanCodec(config)

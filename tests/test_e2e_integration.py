@@ -190,7 +190,7 @@ class TestJ1939ProtocolOnly:
         return {
             "interface": "virtual",
             "channel": "vcan0",
-            "j1939_enabled": True,
+            "j1939": True,
         }
 
     def test_j1939_handler_active(self, j1939_config):
@@ -296,10 +296,12 @@ class TestJ1939ProtocolOnly:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "j1939_enabled": True,
-            "track_source_addresses": False,
-            "decode_diagnostics": False,
-            "tp_timeout_ms": 5000,
+            "j1939": True,
+            "j1939_options": {
+                "track_source_addresses": False,
+                "decode_diagnostics": False,
+                "tp_timeout_ms": 5000,
+            },
         }
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
@@ -311,7 +313,7 @@ class TestJ1939ProtocolOnly:
 
     def test_tp_session_cleanup(self, j1939_config):
         """Stale TP sessions are cleaned up."""
-        config = {**j1939_config, "tp_timeout_ms": 0}
+        config = {**j1939_config, "j1939_options": {"tp_timeout_ms": 0}}
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
 
@@ -340,7 +342,7 @@ class TestJ1939WithDBC:
             "interface": "virtual",
             "channel": "vcan0",
             "database_file": J1939_DBC,
-            "j1939_enabled": True,
+            "j1939": True,
         }
 
     def test_pgn_lookup_table_built(self, j1939_dbc_config):
@@ -560,7 +562,6 @@ class TestCANopenHidden:
 
     def test_no_canopen_in_config_schema(self):
         """Config schema does not mention canopen."""
-
         schema_path = Path(__file__).parent.parent / "config.schema.json"
         schema_text = schema_path.read_text()
         assert "canopen" not in schema_text.lower()
@@ -605,7 +606,7 @@ class TestCANopenHidden:
                 {
                     "interface": "virtual",
                     "channel": "vcan0",
-                    "j1939_enabled": True,
+                    "j1939": True,
                 }
             )
         from zelos_extension_can.protocols.j1939.handler import J1939Handler
@@ -640,7 +641,7 @@ class TestMultiBus:
                     "interface": "virtual",
                     "channel": "vcan1",
                     "database_file": J1939_DBC,
-                    "j1939_enabled": True,
+                    "j1939": True,
                 },
                 bus_name="j1939",
             )
@@ -705,7 +706,7 @@ class TestMultiBus:
                     "interface": "virtual",
                     "channel": "vcan0",
                     "database_file": J1939_DBC,
-                    "j1939_enabled": True,
+                    "j1939": True,
                 },
             ]
         }
@@ -861,7 +862,7 @@ class TestConvertCommand:
                 {
                     "interface": "virtual",
                     "channel": "vcan0",
-                    "j1939_enabled": True,  # No database_file
+                    "j1939": True,  # No database_file
                 }
             )
         registry.register(bus, codec)
@@ -912,7 +913,7 @@ class TestFullLifecycle:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "j1939_enabled": True,
+            "j1939": True,
             "demo_mode": True,
             "demo_type": "j1939",
             "receive_own_messages": True,
@@ -937,7 +938,7 @@ class TestFullLifecycle:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "j1939_enabled": True,
+            "j1939": True,
             "demo_mode": True,
             "demo_type": "j1939",
             "receive_own_messages": True,

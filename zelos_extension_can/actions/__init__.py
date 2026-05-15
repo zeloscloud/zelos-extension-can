@@ -12,6 +12,6 @@ Usage in app.py::
     action_registry.register("powertrain", codec)
 
     # Conditionally import protocol actions (registers @action decorators)
-    if any(c.config.get("j1939_enabled") for c, _ in codec_pairs):
+    if any(c.config.get("j1939") for c, _ in codec_pairs):
         import zelos_extension_can.actions.j1939  # noqa: F401
 """

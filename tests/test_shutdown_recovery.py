@@ -139,7 +139,10 @@ class TestBusRecovery:
         old_notifier = MagicMock()
         codec.bus = MagicMock()
 
-        with patch.object(codec, "_reconnect_bus", return_value=True), patch("can.Notifier"):
+        with (
+            patch.object(codec, "_reconnect_bus", return_value=True),
+            patch("can.Notifier"),
+        ):
             asyncio.run(codec._handle_reconnection(old_notifier))
 
         old_notifier.stop.assert_called_once()

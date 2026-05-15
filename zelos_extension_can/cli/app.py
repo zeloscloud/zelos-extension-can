@@ -9,7 +9,6 @@ from pathlib import Path
 
 import zelos_sdk
 from zelos_sdk.extensions import load_config
-from zelos_sdk.extensions.config import ConfigValidationError
 
 from ..codec import CanCodec
 from .utils import setup_shutdown_handler
@@ -39,10 +38,6 @@ def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
         # Only set database_file for EV demo (J1939/CANopen don't need it)
         if demo_type not in ("j1939", "canopen"):
             config["database_file"] = str(demo_dbc_path)
-        if demo_type == "j1939":
-            config["j1939_enabled"] = True
-        elif demo_type == "canopen":
-            config["canopen"] = True
 
     # Handle "other" interface - merge config_json into main config
     if config.get("interface") == "other":
@@ -166,15 +161,8 @@ def run_app_mode(demo: str | bool | None, file: Path | None, demo_dbc_path: Path
     :param file: Optional output file for trace recording
     :param demo_dbc_path: Path to demo DBC file
     """
-    # Load and validate configuration.
-    # In demo mode, tolerate a missing or invalid saved config (e.g. no buses configured yet).
-    try:
-        config = load_config()
-    except ConfigValidationError:
-        if not demo:
-            raise
-        logger.debug("Saved config invalid, using empty config for demo mode")
-        config = {}
+    # Load and validate configuration
+    config = load_config()
 
     # Apply log level from config (global setting)
     log_level_str = config.get("log_level", "INFO")
@@ -195,6 +183,7 @@ def run_app_mode(demo: str | bool | None, file: Path | None, demo_dbc_path: Path
         demo_bus: dict = {"name": "demo", "interface": "demo"}
         if demo_type in ("j1939", "canopen"):
             demo_bus["demo_type"] = demo_type
+            demo_bus[demo_type] = True
 
         if not config.get("buses"):
             config["buses"] = [demo_bus]
@@ -227,7 +216,7 @@ def run_app_mode(demo: str | bool | None, file: Path | None, demo_dbc_path: Path
     import zelos_extension_can.actions.transmit  # noqa: F401
 
     # Conditionally load protocol-specific actions
-    if any(c.config.get("j1939_enabled") for c, _ in codec_pairs):
+    if any(c.config.get("j1939") for c, _ in codec_pairs):
         import zelos_extension_can.actions.j1939  # noqa: F401
 
     # Initialize SDK
