@@ -28,13 +28,16 @@ def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
 
     # Handle demo interface selection
     if config.get("interface") == "demo":
-        logger.info(f"[{bus_name}] Demo mode: using built-in EV simulator")
+        demo_type = config.get("demo_type", "ev")
+        logger.info(f"[{bus_name}] Demo mode ({demo_type}): using built-in simulator")
         config["demo_mode"] = True
         config["interface"] = "virtual"
         config["channel"] = "vcan0"
-        config["database_file"] = str(demo_dbc_path)
         config["receive_own_messages"] = True
         config["log_raw_frames"] = True
+        # Only set database_file for EV demo (J1939/CANopen don't need it)
+        if demo_type not in ("j1939", "canopen"):
+            config["database_file"] = str(demo_dbc_path)
 
     # Handle "other" interface - merge config_json into main config
     if config.get("interface") == "other":
@@ -151,10 +154,10 @@ async def _run_codecs_async(codecs: list[CanCodec]) -> None:
             codec.stop()
 
 
-def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
+def run_app_mode(demo: str | bool | None, file: Path | None, demo_dbc_path: Path) -> None:
     """Run CAN extension in app-based configuration mode.
 
-    :param demo: Enable demo mode (adds a demo bus if no buses configured)
+    :param demo: Demo mode type ("ev", "j1939", "canopen") or True/False
     :param file: Optional output file for trace recording
     :param demo_dbc_path: Path to demo DBC file
     """
@@ -173,12 +176,19 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
 
     # If demo flag is set and no buses configured, add a demo bus
     if demo:
-        logger.info("Demo mode enabled via --demo flag")
+        # Normalize demo type
+        demo_type = demo if isinstance(demo, str) else "ev"
+        logger.info(f"Demo mode enabled: {demo_type}")
+
+        demo_bus: dict = {"name": "demo", "interface": "demo"}
+        if demo_type in ("j1939", "canopen"):
+            demo_bus["demo_type"] = demo_type
+            demo_bus[demo_type] = True
+
         if not config.get("buses"):
-            config["buses"] = [{"name": "demo", "interface": "demo"}]
+            config["buses"] = [demo_bus]
         else:
-            # Add demo bus to existing buses
-            config["buses"].append({"name": "demo", "interface": "demo"})
+            config["buses"].append(demo_bus)
 
     # Determine output file if --file was specified
     output_file = None
@@ -194,9 +204,20 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     codec_pairs = _create_codecs(config, demo_dbc_path)
     codecs = [codec for codec, _ in codec_pairs]
 
-    # Register interactive actions for each codec
+    # Register codecs in global registry for action dynamic dropdowns
+    from ..actions import registry as action_registry
+
     for codec, action_name in codec_pairs:
-        zelos_sdk.actions_registry.register(codec, action_name)
+        action_registry.register(action_name, codec)
+
+    # Import free-standing action modules (auto-registers via @action decorator)
+    import zelos_extension_can.actions.conversion  # noqa: F401
+    import zelos_extension_can.actions.status  # noqa: F401
+    import zelos_extension_can.actions.transmit  # noqa: F401
+
+    # Conditionally load protocol-specific actions
+    if any(c.config.get("j1939") for c, _ in codec_pairs):
+        import zelos_extension_can.actions.j1939  # noqa: F401
 
     # Initialize SDK
     zelos_sdk.init(name="can", log_level="info", actions=True)

@@ -124,7 +124,6 @@ class TestExportIntegration:
         namespace = zelos_sdk.TraceNamespace("test_export")
 
         with zelos_sdk.TraceWriter(str(trz_file), namespace=namespace):
-            # Create a raw CAN source
             raw_source = zelos_sdk.TraceSource("can_raw", namespace=namespace)
             raw_event = raw_source.add_event(
                 "messages",
@@ -143,7 +142,6 @@ class TestExportIntegration:
                 ],
             )
 
-            # Log some test frames
             base_time = 1704067200000000000  # 2024-01-01 00:00:00 UTC in ns
             test_frames = [
                 (base_time, 0x100, 8, b"\x01\x02\x03\x04\x05\x06\x07\x08"),
@@ -154,15 +152,12 @@ class TestExportIntegration:
             for ts, arb_id, dlc, data in test_frames:
                 raw_event.log_at(ts, arbitration_id=arb_id, dlc=dlc, data=data)
 
-            # Small delay to ensure data is flushed
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
-        # Now export the TRZ to candump log
         stats = export_to_candump(trz_file, log_file)
 
-        # Verify export succeeded
         assert stats["frame_count"] == 3
         assert "can_raw" in stats["sources_found"]
         assert log_file.exists()
@@ -212,7 +207,7 @@ class TestExportIntegration:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         stats = export_to_candump(trz_file, log_file)
 
@@ -247,7 +242,7 @@ class TestExportIntegration:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         with caplog.at_level(logging.ERROR):
             stats = export_to_candump(trz_file, log_file)
@@ -317,7 +312,7 @@ class TestExportIntegration:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         stats = export_to_candump(trz_file, log_file)
 
@@ -399,7 +394,6 @@ class TestRoundtrip:
                 ],
             )
 
-            # Log frames matching the original log
             base_ns = 1704067200000000000
             raw_event.log_at(
                 base_ns, arbitration_id=0x100, dlc=8, data=b"\x01\x02\x03\x04\x05\x06\x07\x08"
@@ -411,7 +405,7 @@ class TestRoundtrip:
 
             import time
 
-            time.sleep(0.1)
+            time.sleep(0.5)
 
         # Export trz -> log
         stats = export_to_candump(trz_file, exported_log)

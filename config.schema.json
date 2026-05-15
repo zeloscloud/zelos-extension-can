@@ -93,12 +93,69 @@
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
-                  "channel",
-                  "database_file"
-                ]
+                  "channel"
+                ],
+                "dependencies": {
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
               },
               {
                 "properties": {
@@ -168,6 +225,13 @@
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
@@ -210,6 +274,55 @@
                         "required": [
                           "data_bitrate"
                         ]
+                      }
+                    ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
                       }
                     ]
                   }
@@ -295,6 +408,13 @@
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
@@ -338,6 +458,55 @@
                         "required": [
                           "data_bitrate"
                         ]
+                      }
+                    ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
                       }
                     ]
                   }
@@ -423,6 +592,13 @@
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
@@ -466,6 +642,55 @@
                         "required": [
                           "data_bitrate"
                         ]
+                      }
+                    ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
                       }
                     ]
                   }
@@ -551,6 +776,13 @@
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
@@ -596,6 +828,55 @@
                         ]
                       }
                     ]
+                  },
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
                   }
                 }
               },
@@ -629,12 +910,70 @@
                     "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
                     "default": false,
                     "ui:widget": "toggle"
+                  },
+                  "j1939": {
+                    "type": "boolean",
+                    "title": "J1939 Protocol",
+                    "description": "Enable J1939 PGN decoding, transport protocol reassembly, and diagnostics",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
                   "database_file",
                   "config_json"
-                ]
+                ],
+                "dependencies": {
+                  "j1939": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "j1939": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "j1939_options": {
+                            "type": "object",
+                            "title": "J1939 Options",
+                            "properties": {
+                              "track_source_addresses": {
+                                "type": "boolean",
+                                "title": "Track Source Addresses",
+                                "description": "Track J1939 source addresses and PGN activity",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "decode_diagnostics": {
+                                "type": "boolean",
+                                "title": "Decode Diagnostics",
+                                "description": "Decode DM1/DM2 diagnostic trouble codes",
+                                "default": true,
+                                "ui:widget": "toggle"
+                              },
+                              "tp_timeout_ms": {
+                                "type": "integer",
+                                "title": "TP Timeout (ms)",
+                                "description": "Transport protocol session timeout in milliseconds",
+                                "default": 1250,
+                                "minimum": 100
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
               }
             ]
           }

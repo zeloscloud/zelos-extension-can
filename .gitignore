@@ -252,3 +252,5 @@ __marimo__/
 # Zelos
 .last_config
 .uploaded.*
+
+.claude/
