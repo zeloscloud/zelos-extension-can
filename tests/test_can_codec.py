@@ -18,6 +18,13 @@ def test_dbc_path():
 
 
 @pytest.fixture
+def low_id_collision_dbc_path():
+    """Path to DBC with std/ext low-ID collision case."""
+    test_files_dir = Path(__file__).parent / "files"
+    return str(test_files_dir / "low_id_collision.dbc")
+
+
+@pytest.fixture
 def mock_config(test_dbc_path):
     """Mock configuration."""
     return {
@@ -70,11 +77,12 @@ class TestCanCodecInitialization:
         assert len(codec._events) == 0
 
         # Event should not exist before first message
-        assert 0x64 not in codec._events
+        assert (0x64, False) not in codec._events
 
         msg = can.Message(
             arbitration_id=0x64,
             data=bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            is_extended_id=False,
             timestamp=15.5,
         )
 
@@ -82,8 +90,8 @@ class TestCanCodecInitialization:
         codec._handle_message(msg)
 
         # Now the event should exist
-        assert 0x64 in codec._events
-        assert codec._events[0x64] is not None
+        assert (0x64, False) in codec._events
+        assert codec._events[(0x64, False)] is not None
 
         # Handling the same message again should not increase cache size
         cache_size_after_first = len(codec._events)
@@ -106,12 +114,13 @@ class TestCanCodecInitialization:
         assert len(codec._events) > 0
 
         # Specific event should exist
-        assert 0x64 in codec._events
-        assert codec._events[0x64] is not None
+        assert (0x64, False) in codec._events
+        assert codec._events[(0x64, False)] is not None
 
         msg = can.Message(
             arbitration_id=0x64,
             data=bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            is_extended_id=False,
             timestamp=15.5,
         )
 
@@ -196,6 +205,30 @@ class TestMessageDecoding:
             # Standard IDs (11-bit) use 4 hex chars, Extended IDs (29-bit) use 8 hex chars
             assert len(msg_id_hex) in [4, 8]
             assert int(msg_id_hex, 16) == msg.frame_id
+
+    def test_low_extended_id_does_not_collide_with_standard_id(self, low_id_collision_dbc_path):
+        """Test low-numbered extended IDs are decoded separately from standard IDs."""
+        config = {
+            "interface": "virtual",
+            "channel": "vcan0",
+            "bitrate": 500000,
+            "database_file": low_id_collision_dbc_path,
+        }
+
+        import can
+
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(config)
+
+        codec._handle_message(can.Message(arbitration_id=0x100, is_extended_id=False, data=b"\x12"))
+        codec._handle_message(can.Message(arbitration_id=0x100, is_extended_id=True, data=b"\x34"))
+
+        assert codec.metrics.messages_decoded == 2
+        assert codec.metrics.unknown_messages == 0
+        assert (0x100, False) in codec.messages_by_id
+        assert (0x100, True) in codec.messages_by_id
+        assert codec._events[(0x100, False)] is not None
+        assert codec._events[(0x100, True)] is not None
 
 
 class TestConfiguration:
@@ -352,6 +385,7 @@ class TestTimestampHandling:
             msg = can.Message(
                 arbitration_id=0x64,  # DUT_Status message ID from test.dbc
                 data=bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+                is_extended_id=False,
                 timestamp=15.5,  # Boot-relative: 15.5 seconds since boot
             )
 
@@ -367,6 +401,7 @@ class TestTimestampHandling:
             msg2 = can.Message(
                 arbitration_id=0x64,
                 data=bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+                is_extended_id=False,
                 timestamp=16.5,  # 1 second later
             )
 
@@ -396,6 +431,7 @@ class TestTimestampHandling:
             msg = can.Message(
                 arbitration_id=0x64,  # DUT_Status message ID
                 data=bytes([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+                is_extended_id=False,
                 timestamp=wall_clock_time,
             )
 

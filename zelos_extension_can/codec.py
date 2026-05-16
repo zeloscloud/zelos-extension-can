@@ -130,13 +130,13 @@ class CanCodec(can.Listener):
             self.raw_event = None
 
         # Build message lookup tables (handle duplicates permissively)
-        self.messages_by_id: dict[int, cantools.db.can.Message] = {}
+        self.messages_by_id: dict[tuple[int, bool], cantools.db.can.Message] = {}
         self.messages_by_name: dict[str, cantools.db.can.Message] = {}
 
-        self._events: dict[int, Any] = {}
+        self._events: dict[tuple[int, bool] | tuple[int, bool, int], Any] = {}
 
         for msg in self.db.messages:
-            self.messages_by_id[msg.frame_id] = msg
+            self.messages_by_id[self._message_key(msg.frame_id, msg.is_extended_frame)] = msg
             # Only store first occurrence of duplicate names
             if msg.name not in self.messages_by_name:
                 self.messages_by_name[msg.name] = msg
@@ -163,13 +163,18 @@ class CanCodec(can.Listener):
         self.bus: Any = None
         self.periodic_tasks: dict[str, asyncio.Task] = {}
 
+    def _message_key(self, frame_id: int, is_extended: bool) -> tuple[int, bool]:
+        """Build a stable message lookup key from CAN ID and frame format."""
+        return (frame_id, is_extended)
+
     def _get_event_name(self, msg: cantools.database.can.Message) -> str:
         """Get event name for message (format: {frame_id:04x}_{name}).
 
         :param msg: cantools message
         :return: Event name string
         """
-        return f"{msg.frame_id:04x}_{msg.name}"
+        width = 8 if msg.is_extended_frame else 4
+        return f"{msg.frame_id:0{width}x}_{msg.name}"
 
     def get_timestamp(self, hw_timestamp: float | None) -> int | None:
         """Get timestamp in nanoseconds for logging, handling boot-relative timestamps.
@@ -476,14 +481,17 @@ class CanCodec(can.Listener):
         :param timestamp_ns: Timestamp in nanoseconds
         """
         try:
-            decoded = self.db.decode_message(msg.arbitration_id, msg.data)
-            self.metrics.messages_decoded += 1
-
-            dbc_msg = self.messages_by_id.get(msg.arbitration_id)
+            key = self._message_key(msg.arbitration_id, msg.is_extended_id)
+            dbc_msg = self.messages_by_id.get(key)
             if not dbc_msg:
-                logger.debug("Unknown message ID: %04x", msg.arbitration_id)
+                logger.debug(
+                    "Unknown message ID: %04x (extended=%s)", msg.arbitration_id, msg.is_extended_id
+                )
                 self.metrics.unknown_messages += 1
                 return
+
+            decoded = dbc_msg.decode(msg.data)
+            self.metrics.messages_decoded += 1
 
             # Emit base signals (non-multiplexed signals + multiplexer signal if present)
             self._emit_base_signals(dbc_msg, decoded, timestamp_ns)
@@ -532,7 +540,7 @@ class CanCodec(can.Listener):
 
         :param dbc_msg: DBC message definition
         """
-        cache_key = dbc_msg.frame_id
+        cache_key = self._message_key(dbc_msg.frame_id, dbc_msg.is_extended_frame)
         event_name = self._get_event_name(dbc_msg)
         base_signals = [sig for sig in dbc_msg.signals if not sig.multiplexer_ids]
 
@@ -578,7 +586,7 @@ class CanCodec(can.Listener):
         if not mux_signal:
             return
 
-        cache_key = (dbc_msg.frame_id, mux_value_int)
+        cache_key = (dbc_msg.frame_id, dbc_msg.is_extended_frame, mux_value_int)
 
         # Skip if already generated
         if cache_key in self._events:
@@ -640,7 +648,7 @@ class CanCodec(can.Listener):
         :param decoded: Decoded signal values
         :param timestamp_ns: Timestamp in nanoseconds, or None
         """
-        cache_key = dbc_msg.frame_id
+        cache_key = self._message_key(dbc_msg.frame_id, dbc_msg.is_extended_frame)
         event = self._events.get(cache_key)
 
         # Generate schema lazily if not already present
@@ -678,7 +686,7 @@ class CanCodec(can.Listener):
             # NamedSignalValue - get integer representation
             mux_value_int = int(mux_signal.conversion.choice_to_number(mux_value))
 
-        cache_key = (dbc_msg.frame_id, mux_value_int)
+        cache_key = (dbc_msg.frame_id, dbc_msg.is_extended_frame, mux_value_int)
         event = self._events.get(cache_key)
 
         # Generate mux schema lazily if not already present
@@ -952,9 +960,10 @@ class CanCodec(can.Listener):
         """
         messages = []
         for msg in self.db.messages:
+            width = 8 if msg.is_extended_frame else 4
             messages.append(
                 {
-                    "id": f"0x{msg.frame_id:04x}",
+                    "id": f"0x{msg.frame_id:0{width}x}",
                     "name": msg.name,
                     "length": msg.length,
                     "signals": len(msg.signals),

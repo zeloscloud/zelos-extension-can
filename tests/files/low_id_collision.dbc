@@ -1,0 +1,11 @@
+VERSION ""
+
+NS_ :
+BS_:
+BU_: DUT DBG
+
+BO_ 256 StdMessage: 1 DUT
+ SG_ std_value : 0|8@1+ (1,0) [0|255] "" DBG
+
+BO_ 2147483904 ExtMessage: 1 DUT
+ SG_ ext_value : 0|8@1+ (1,0) [0|255] "" DBG
