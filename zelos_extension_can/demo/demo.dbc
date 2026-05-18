@@ -101,6 +101,21 @@ BO_ 771 Gateway_Diagnostics: 8 Gateway
  SG_ key_state : 40|2@1+ (1,0) [0|3] "" BMS,Motor
  SG_ parking_brake : 42|1@1+ (1,0) [0|1] "" Motor
 
+BO_ 2566783717 Diag_DTCStatus: 8 Gateway
+ SG_ active_dtc_count : 0|8@1+ (1,0) [0|255] "" BMS,Motor
+ SG_ pending_dtc_count : 8|8@1+ (1,0) [0|255] "" BMS,Motor
+ SG_ mil_status : 16|2@1+ (1,0) [0|3] "" BMS,Motor
+ SG_ readiness_flags : 18|6@1+ (1,0) [0|63] "" BMS,Motor
+ SG_ last_dtc_code : 24|16@1+ (1,0) [0|65535] "" BMS,Motor
+ SG_ last_dtc_status_byte : 40|8@1+ (1,0) [0|255] "" BMS,Motor
+
+BO_ 2632220928 Charger_EVSEStatus: 8 Gateway
+ SG_ evse_max_current : 0|16@1+ (0.1,0) [0|350] "A" BMS
+ SG_ evse_max_voltage : 16|16@1+ (0.1,0) [0|1000] "V" BMS
+ SG_ evse_temperature : 32|8@1- (1,-40) [-40|125] "C" BMS
+ SG_ session_energy : 40|16@1+ (0.01,0) [0|500] "kWh" BMS
+ SG_ session_status : 56|3@1+ (1,0) [0|7] "" BMS
+
 CM_ BU_ BMS "Battery Management System - monitors and controls the high-voltage battery pack";
 CM_ BU_ Motor "Motor Controller - controls the electric drive motor and inverter";
 CM_ BU_ Gateway "Gateway ECU - aggregates vehicle body controls and provides diagnostic data";
@@ -117,6 +132,8 @@ CM_ BO_ 768 "Vehicle speed and odometer information";
 CM_ BO_ 769 "Body control module status (doors, lights, HVAC)";
 CM_ BO_ 770 "Charging system status and parameters";
 CM_ BO_ 771 "System diagnostics and health monitoring";
+CM_ BO_ 2566783717 "Extended-ID J1939-style diagnostic trouble code status (29-bit)";
+CM_ BO_ 2632220928 "Extended-ID EVSE / charge station status (29-bit)";
 
 BA_DEF_ "BusType" STRING ;
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 10000;
@@ -138,6 +155,8 @@ BA_ "GenMsgCycleTime" BO_ 768 100;
 BA_ "GenMsgCycleTime" BO_ 769 200;
 BA_ "GenMsgCycleTime" BO_ 770 500;
 BA_ "GenMsgCycleTime" BO_ 771 1000;
+BA_ "GenMsgCycleTime" BO_ 2566783717 1000;
+BA_ "GenMsgCycleTime" BO_ 2632220928 500;
 
 VAL_ 260 bms_state 0 "INIT" 1 "IDLE" 2 "PRECHARGE" 3 "READY" 4 "CHARGING" 5 "FAULT" 6 "EMERGENCY";
 VAL_ 260 contactor_state 0 "OPEN" 1 "PRECHARGE" 2 "CLOSED" 3 "FAULT";
@@ -146,3 +165,5 @@ VAL_ 514 direction 0 "NEUTRAL" 1 "FORWARD" 2 "REVERSE";
 VAL_ 768 gear_position 0 "PARK" 1 "REVERSE" 2 "NEUTRAL" 3 "DRIVE" 4 "LOW" 5 "SPORT";
 VAL_ 769 wiper_status 0 "OFF" 1 "INTERMITTENT" 2 "LOW" 3 "HIGH";
 VAL_ 771 key_state 0 "OFF" 1 "ACC" 2 "ON" 3 "START";
+VAL_ 2566783717 mil_status 0 "OFF" 1 "ON" 2 "BLINK" 3 "INVALID";
+VAL_ 2632220928 session_status 0 "IDLE" 1 "CONNECTED" 2 "AUTHORIZED" 3 "CHARGING" 4 "PAUSED" 5 "COMPLETE" 6 "FAULT" 7 "INVALID";
