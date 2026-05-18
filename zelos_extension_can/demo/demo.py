@@ -130,10 +130,20 @@ async def run_demo_ev_simulation(
             sim.update(dt)
 
             try:
+
+                def send(msg_def: cantools.database.can.Message, signals: dict) -> None:
+                    bus.send(
+                        can.Message(
+                            arbitration_id=msg_def.frame_id,
+                            is_extended_id=msg_def.is_extended_frame,
+                            data=msg_def.encode(signals),
+                        )
+                    )
+
                 # BMS_BatteryStatus (100ms / iteration 2)
                 if iteration % 2 == 0:
-                    msg_def = db.get_message_by_name("BMS_BatteryStatus")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("BMS_BatteryStatus"),
                         {
                             "pack_voltage": sim.pack_voltage,
                             "pack_current": sim.pack_current,
@@ -141,28 +151,26 @@ async def run_demo_ev_simulation(
                             "pack_temperature": int(sim.pack_temp),
                             "max_cell_voltage": max(sim.cell_voltages),
                             "min_cell_voltage": min(sim.cell_voltages),
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # BMS_CellVoltages (1000ms / iteration 20)
                 if iteration % 20 == 0:
-                    msg_def = db.get_message_by_name("BMS_CellVoltages")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("BMS_CellVoltages"),
                         {
                             "cell_01_voltage": sim.cell_voltages[0],
                             "cell_02_voltage": sim.cell_voltages[1],
                             "cell_03_voltage": sim.cell_voltages[2],
                             "cell_04_voltage": sim.cell_voltages[3],
                             "cell_05_voltage": sim.cell_voltages[4],
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # BMS_Temperatures (500ms / iteration 10)
                 if iteration % 10 == 0:
-                    msg_def = db.get_message_by_name("BMS_Temperatures")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("BMS_Temperatures"),
                         {
                             "module_01_temp": int(sim.pack_temp),
                             "module_02_temp": int(sim.pack_temp + 2),
@@ -171,27 +179,25 @@ async def run_demo_ev_simulation(
                             "coolant_inlet_temp": int(sim.pack_temp - 5),
                             "coolant_outlet_temp": int(sim.pack_temp + 3),
                             "ambient_temp": 20,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # BMS_Limits (200ms / iteration 4)
                 if iteration % 4 == 0:
-                    msg_def = db.get_message_by_name("BMS_Limits")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("BMS_Limits"),
                         {
                             "max_charge_current": 200.0,
                             "max_discharge_current": 400.0,
                             "max_charge_power": 100.0,
                             "max_discharge_power": 200.0,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # BMS_Status (100ms / iteration 2)
                 if iteration % 2 == 0:
-                    msg_def = db.get_message_by_name("BMS_Status")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("BMS_Status"),
                         {
                             "bms_state": 3,  # READY
                             "contactor_state": 2,  # CLOSED
@@ -200,13 +206,12 @@ async def run_demo_ev_simulation(
                             "isolation_resistance": 5000,
                             "fault_code": 0,
                             "warning_code": 0,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # Motor_Status (50ms / iteration 1)
-                msg_def = db.get_message_by_name("Motor_Status")
-                data = msg_def.encode(
+                send(
+                    db.get_message_by_name("Motor_Status"),
                     {
                         "motor_speed": sim.motor_speed,
                         "motor_torque": sim.motor_torque,
@@ -215,55 +220,51 @@ async def run_demo_ev_simulation(
                         "motor_state": sim.motor_state,
                         "fault_active": 0,
                         "torque_limit_active": 0,
-                    }
+                    },
                 )
-                bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # Motor_Power (100ms / iteration 2)
                 if iteration % 2 == 0:
-                    msg_def = db.get_message_by_name("Motor_Power")
                     power_output = (sim.motor_torque * sim.motor_speed / 9550) / 1000
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("Motor_Power"),
                         {
                             "dc_voltage": sim.pack_voltage,
                             "dc_current": sim.pack_current,
                             "ac_current_rms": abs(sim.pack_current) * 0.8,
                             "power_output": power_output,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # Motor_Command (20ms but just use same values / iteration 1 with less frequency)
                 if iteration % 2 == 0:
-                    msg_def = db.get_message_by_name("Motor_Command")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("Motor_Command"),
                         {
                             "torque_request": sim.motor_torque,
                             "speed_limit": 10000,
                             "direction": 1,  # FORWARD
                             "enable": 1 if sim.speed > 0 else 0,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # Gateway_VehicleSpeed (100ms / iteration 2)
                 if iteration % 2 == 0:
-                    msg_def = db.get_message_by_name("Gateway_VehicleSpeed")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("Gateway_VehicleSpeed"),
                         {
                             "vehicle_speed": sim.speed,
                             "odometer": int(sim.uptime * 10),
                             "gear_position": 3,  # DRIVE
                             "brake_pedal": 1 if sim.brake_pedal else 0,
                             "accel_pedal_position": int(sim.accel_pedal),
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # Gateway_BodyControls (200ms / iteration 4)
                 if iteration % 4 == 0:
-                    msg_def = db.get_message_by_name("Gateway_BodyControls")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("Gateway_BodyControls"),
                         {
                             "door_driver_open": 0,
                             "door_passenger_open": 0,
@@ -278,14 +279,13 @@ async def run_demo_ev_simulation(
                             "wiper_status": 0,
                             "hvac_fan_speed": 5,
                             "hvac_temperature": 22.0,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # Gateway_ChargeStatus (500ms / iteration 10)
                 if iteration % 10 == 0:
-                    msg_def = db.get_message_by_name("Gateway_ChargeStatus")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("Gateway_ChargeStatus"),
                         {
                             "charge_port_open": 0,
                             "charge_cable_connected": 0,
@@ -293,22 +293,47 @@ async def run_demo_ev_simulation(
                             "charge_power_available": 0.0,
                             "estimated_time_to_full": 0,
                             "charge_current_limit": 32,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
 
                 # Gateway_Diagnostics (1000ms / iteration 20)
                 if iteration % 20 == 0:
-                    msg_def = db.get_message_by_name("Gateway_Diagnostics")
-                    data = msg_def.encode(
+                    send(
+                        db.get_message_by_name("Gateway_Diagnostics"),
                         {
                             "system_uptime": int(sim.uptime),
                             "battery_12v_voltage": 13.8,
                             "key_state": 2,  # ON
                             "parking_brake": 0,
-                        }
+                        },
                     )
-                    bus.send(can.Message(arbitration_id=msg_def.frame_id, data=data))
+
+                # Diag_DTCStatus — 29-bit extended ID (1000ms / iteration 20)
+                if iteration % 20 == 0:
+                    send(
+                        db.get_message_by_name("Diag_DTCStatus"),
+                        {
+                            "active_dtc_count": 0,
+                            "pending_dtc_count": 0,
+                            "mil_status": 0,  # OFF
+                            "readiness_flags": 0x3F,
+                            "last_dtc_code": 0x0420,  # P0420 catalyst-style code
+                            "last_dtc_status_byte": 0x08,
+                        },
+                    )
+
+                # Charger_EVSEStatus — 29-bit extended ID (500ms / iteration 10)
+                if iteration % 10 == 0:
+                    send(
+                        db.get_message_by_name("Charger_EVSEStatus"),
+                        {
+                            "evse_max_current": 32.0,
+                            "evse_max_voltage": 480.0,
+                            "evse_temperature": int(sim.pack_temp + 5),
+                            "session_energy": min(500.0, sim.uptime * 0.01),
+                            "session_status": 3 if sim.charging else 0,  # CHARGING / IDLE
+                        },
+                    )
 
                 # Log status every second
                 if iteration % 20 == 0:
