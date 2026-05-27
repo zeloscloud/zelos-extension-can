@@ -464,50 +464,8 @@ class TestTimestampHandling:
                 assert abs(original_delta - processed_delta) < 1000  # Within 1 microsecond
 
 
-class TestActions:
-    """Test action methods."""
-
-    def test_get_status(self, codec):
-        """Test get_status action returns expected fields."""
-        status = codec.get_status()
-        assert "running" in status
-        assert "interface" in status
-        assert "channel" in status
-        assert "bus_state" in status
-        assert "fd_mode" in status
-
-    def test_get_metrics(self, codec):
-        """Test get_metrics action."""
-        metrics = codec.get_metrics()
-        assert "messages_received" in metrics
-        assert "messages_decoded" in metrics
-        assert "decode_errors" in metrics
-        assert "unknown_messages" in metrics
-        assert "uptime_seconds" in metrics
-        assert "messages_per_second" in metrics
-        assert metrics["messages_received"] == 0
-
-    def test_list_periodic_tasks(self, codec):
-        """Test list_periodic_tasks action."""
-        result = codec.list_periodic_tasks()
-        assert "count" in result
-        assert "tasks" in result
-        assert result["count"] == 0
-
-    def test_list_messages(self, codec):
-        """Test list_messages action."""
-        result = codec.list_messages()
-        assert "count" in result
-        assert "messages" in result
-        assert result["count"] == 13
-        assert len(result["messages"]) == 13
-
-        # Check message format
-        first_msg = result["messages"][0]
-        assert "id" in first_msg
-        assert "name" in first_msg
-        assert "length" in first_msg
-        assert "signals" in first_msg
+# Action-surface tests for the codec live in `tests/test_can_codec_actions.py`.
+# This file covers codec construction / decode / timestamp / bus-init behavior.
 
 
 class TestErrorHandling:
@@ -537,16 +495,6 @@ class TestErrorHandling:
             patch("zelos_sdk.TraceSource"),
         ):
             CanCodec(config)
-
-    def test_send_message_with_extended_id(self, codec):
-        """Test sending message with extended ID validation."""
-        # Standard ID within range
-        result = codec.send_message(0x100, "01 02", extended_id=False)
-        assert "error" in result  # Bus not started
-
-        # Extended ID validation
-        result = codec.send_message(0x1FFFFFFF, "01 02", extended_id=True)
-        assert "error" in result  # Bus not started, but ID validated
 
 
 class TestFileUtils:
