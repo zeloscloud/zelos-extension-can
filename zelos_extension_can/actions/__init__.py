@@ -1,11 +1,9 @@
-"""Cross-bus action surface registered under the `can` namespace.
+"""Cross-bus action surface for the CAN extension.
 
-The per-codec `<bus>/...` actions on `CanCodec` predate the
-`actions.*` bridge in `web/app-extension-sdk` and stay registered for the
-existing desktop actions panel. This package adds the new `can/...` surface
-that the CAN Transmit app extension (and any future cross-bus consumer) speaks.
-
-See: features/CAN_TRANSMIT.md §5 Block D.
+The per-codec `<bus>/...` actions on `CanCodec` predate the cross-bus
+`actions.*` bridge in the Zelos host app and stay registered for the existing
+desktop actions panel. This package adds the new `can/tx/...` surface that the
+CAN Transmit marketplace app (and any future cross-bus consumer) speaks.
 """
 
 from .router import CanActionsRouter

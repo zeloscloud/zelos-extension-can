@@ -1,8 +1,8 @@
 """Cross-bus action router registered under the `tx` segment of the `can` SDK service.
 
-Mirrors `features/CAN_TRANSMIT.md` §5 Block D action contract. Action paths land
-as `{service}/{registry}/{method}` — the SDK init in `cli/app.py` uses
-`name="can"` and this router registers under `"tx"`, so the wire paths are:
+Action paths land as `{service}/{registry}/{method}` — the SDK init in
+`cli/app.py` uses `name="can"` and this router registers under `"tx"`, so the
+wire paths are:
 
     can/tx/get_tx_state           — single source of truth: buses + periodics + metrics
     can/tx/list_messages          — DBC catalog for a bus (from the already-loaded DBC)
@@ -67,7 +67,8 @@ def _task_id(bus: str, can_id: int, is_extended: bool, mux: str = "raw") -> str:
 
     Two periodics with the same key replace each other; this is the contract.
     Apps that want a sibling slot must pick a different mux or use a DBC message.
-    See CAN_TRANSMIT.md §2 decision 10 and Block E.
+    Matches the SocketCAN BCM kernel behavior (TX_SETUP on the same can_id
+    replaces the existing slot).
     """
     ext = "ext" if is_extended else "std"
     return f"{bus}:0x{can_id:x}:{ext}:{mux}"

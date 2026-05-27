@@ -201,10 +201,10 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         zelos_sdk.actions_registry.register(codec, action_name)
 
     # Register the cross-bus `can/tx/*` action surface used by the CAN Transmit
-    # marketplace app (CAN_TRANSMIT.md §5 Block D). Action paths land as
-    # `can/tx/get_tx_state`, `can/tx/send_raw`, etc. — the leading `can/` is the
-    # SDK service init name (init(name="can")) and `tx` is this router's
-    # registry segment so it doesn't double-prefix as `can/can/...`.
+    # marketplace app. Action paths land as `can/tx/get_tx_state`,
+    # `can/tx/send_raw`, etc. — the leading `can/` is the SDK service init name
+    # (init(name="can")) and `tx` is this router's registry segment so it
+    # doesn't double-prefix as `can/can/...`.
     router_codecs = {action_name: codec for codec, action_name in codec_pairs}
     can_router = CanActionsRouter(router_codecs)
     zelos_sdk.actions_registry.register(can_router, "tx")
