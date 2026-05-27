@@ -10,7 +10,6 @@ from pathlib import Path
 import zelos_sdk
 from zelos_sdk.extensions import load_config
 
-from ..actions import CanActionsRouter
 from ..codec import CanCodec
 from .utils import setup_shutdown_handler
 
@@ -195,28 +194,23 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     codec_pairs = _create_codecs(config, demo_dbc_path)
     codecs = [codec for codec, _ in codec_pairs]
 
-    # Register per-codec interactive actions (legacy <bus>/* surface — kept
-    # for the existing desktop actions panel).
+    # Register one action surface per bus. Paths land as `can/<bus>/<action>`
+    # — the leading `can/` is the SDK service init name (init(name="can")), the
+    # bus segment is the codec's registration name, and methods on `CanCodec`
+    # decorated with `@action` provide the rest. Standalone CLI usage:
+    #
+    #   zelos actions execute can/<bus>/send_raw --params '{"can_id":"0x100","data":"01 02"}'
+    #
+    # Web apps discover buses by inspecting `actions.list()` keys.
     for codec, action_name in codec_pairs:
         zelos_sdk.actions_registry.register(codec, action_name)
-
-    # Register the cross-bus `can/tx/*` action surface used by the CAN Transmit
-    # marketplace app. Action paths land as `can/tx/get_tx_state`,
-    # `can/tx/send_raw`, etc. — the leading `can/` is the SDK service init name
-    # (init(name="can")) and `tx` is this router's registry segment so it
-    # doesn't double-prefix as `can/can/...`.
-    router_codecs = {action_name: codec for codec, action_name in codec_pairs}
-    can_router = CanActionsRouter(router_codecs)
-    zelos_sdk.actions_registry.register(can_router, "tx")
 
     # Initialize SDK
     zelos_sdk.init(name="can", log_level="info", actions=True)
 
-    # Setup shutdown handler for all codecs; ensure router-owned periodics are
-    # also cancelled (each codec's own periodic_tasks are stopped in codec.stop()).
+    # Setup shutdown handler for all codecs.
     for codec in codecs:
         setup_shutdown_handler(codec)
-    setup_shutdown_handler(can_router)
 
     # Log startup info
     bus_count = len(codecs)

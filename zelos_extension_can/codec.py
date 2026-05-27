@@ -1,11 +1,13 @@
 """CAN bus codec with database decoding and transmission."""
 
 import asyncio
+import json
 import logging
 import threading
 import time
 from dataclasses import dataclass
 from enum import IntEnum
+from importlib import metadata as _metadata
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,122 @@ from .demo.demo import run_demo_ev_simulation
 from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
+
+# Marketplace-canonical identifier this extension self-declares in
+# `get_tx_state.extension.id`. Distinct from the `local.<name>` ID that
+# `zelos extensions install-local` assigns at install time.
+EXTENSION_ID = "zeloscloud.zelos-extension-can"
+
+
+def _extension_version() -> str:
+    try:
+        return _metadata.version("zelos-extension-can")
+    except _metadata.PackageNotFoundError:
+        return "unknown"
+
+
+# ─── Action-input parsers (module-level so tests hit them at the helper seam) ──
+
+
+def _parse_can_id(can_id: str) -> int:
+    """Accept `0x100`, `100`, or hex without prefix; always parse as hex."""
+    s = can_id.strip()
+    if s.lower().startswith("0x"):
+        return int(s, 16)
+    return int(s, 16)
+
+
+def _parse_data_hex(data: str) -> bytes:
+    return bytes.fromhex(data.replace(" ", "").replace(",", ""))
+
+
+def _validate_id_range(can_id: int, is_extended: bool) -> None:
+    max_id = 0x1FFFFFFF if is_extended else 0x7FF
+    if can_id < 0 or can_id > max_id:
+        kind = "extended" if is_extended else "standard"
+        raise ValueError(f"can_id 0x{can_id:x} out of range for {kind} ID (max 0x{max_id:x})")
+
+
+def _task_id(can_id: int, is_extended: bool, mux: str = "raw") -> str:
+    """Stable taskId within a single codec — arbitration ID + frame kind + discriminator.
+
+    Starting a periodic with the same key replaces the existing slot and signals
+    `replaced: True` to the caller. Matches the SocketCAN BCM kernel behavior
+    (TX_SETUP on the same can_id replaces the existing slot).
+    """
+    ext = "ext" if is_extended else "std"
+    return f"0x{can_id:x}:{ext}:{mux}"
+
+
+def _parse_signals_json(raw: str) -> dict[str, Any]:
+    if not raw.strip():
+        raise ValueError("signals_json must be a JSON object string")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"signals_json is not valid JSON: {e}") from e
+    if not isinstance(parsed, dict):
+        raise ValueError("signals_json must decode to a JSON object")
+    return parsed
+
+
+def _parse_mux(mux: str) -> int | str | None:
+    s = mux.strip()
+    if not s:
+        return None
+    try:
+        return int(s, 0)
+    except ValueError:
+        return s
+
+
+def _encode_dbc(
+    dbc_msg: cantools.database.can.Message,
+    signals: dict[str, Any],
+    mux_value: int | str | None,
+) -> bytes:
+    # cantools encode_message picks the right mux variant when the multiplexer
+    # signal is present in the input. If the caller passed a standalone `mux`
+    # field, inject it under the multiplexer signal name.
+    payload = dict(signals)
+    if mux_value is not None and dbc_msg.is_multiplexed():
+        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
+        if mux_signal is not None and mux_signal.name not in payload:
+            payload[mux_signal.name] = mux_value
+    return bytes(dbc_msg.encode(payload))
+
+
+def _describe_dbc_message(msg: cantools.database.can.Message) -> dict[str, Any]:
+    return {
+        "name": msg.name,
+        "canId": int(msg.frame_id),
+        "isExtended": bool(msg.is_extended_frame),
+        "dlc": int(msg.length),
+        "cycleTimeMs": msg.cycle_time,
+        "signals": [_describe_dbc_signal(sig) for sig in msg.signals],
+    }
+
+
+def _describe_dbc_signal(sig: cantools.database.can.Signal) -> dict[str, Any]:
+    # JSON requires string dict keys, and the wire encoder rejects Decimal —
+    # coerce scale/offset/min/max to float and value_table keys to str.
+    return {
+        "name": sig.name,
+        "startBit": int(sig.start),
+        "length": int(sig.length),
+        "byteOrder": "little" if sig.byte_order == "little_endian" else "big",
+        "isSigned": bool(sig.is_signed),
+        "scale": float(sig.scale) if sig.scale is not None else None,
+        "offset": float(sig.offset) if sig.offset is not None else None,
+        "min": float(sig.minimum) if sig.minimum is not None else None,
+        "max": float(sig.maximum) if sig.maximum is not None else None,
+        "unit": sig.unit,
+        "valueTable": {str(int(k)): str(v) for k, v in sig.choices.items()}
+        if sig.choices
+        else None,
+        "muxIndicator": bool(sig.is_multiplexer),
+        "muxValue": int(sig.multiplexer_ids[0]) if sig.multiplexer_ids else None,
+    }
 
 
 @dataclass(slots=True)
@@ -130,8 +248,8 @@ class CanCodec(can.Listener):
             self.raw_event = None
 
         # Build message lookup tables (handle duplicates permissively)
-        self.messages_by_id: dict[tuple[int, bool], cantools.db.can.Message] = {}
-        self.messages_by_name: dict[str, cantools.db.can.Message] = {}
+        self.messages_by_id: dict[tuple[int, bool], cantools.database.can.Message] = {}
+        self.messages_by_name: dict[str, cantools.database.can.Message] = {}
 
         self._events: dict[tuple[int, bool] | tuple[int, bool, int], Any] = {}
 
@@ -161,7 +279,14 @@ class CanCodec(can.Listener):
             logger.info("Raw CAN frame logging is DISABLED")
 
         self.bus: Any = None
-        self.periodic_tasks: dict[str, asyncio.Task] = {}
+        # python-can's CyclicSendTask. Owns its own thread, exposes `.stop()`
+        # and `.modify_data()`; we don't manage an asyncio loop here because
+        # action dispatch happens in worker threads where `asyncio.create_task`
+        # raises "no running event loop".
+        self._periodic_tasks: dict[str, can.broadcastmanager.CyclicSendTaskABC] = {}
+        # Slot metadata so get_tx_state can reconstruct what each task is
+        # sending without poking the task object's internals.
+        self._periodic_slots: dict[str, dict[str, Any]] = {}
 
     def _message_key(self, frame_id: int, is_extended: bool) -> tuple[int, bool]:
         """Build a stable message lookup key from CAN ID and frame format."""
@@ -289,11 +414,11 @@ class CanCodec(can.Listener):
             self.demo_task.cancel()
             self.demo_task = None
 
-        for task_name, task in self.periodic_tasks.items():
-            logger.info("Cancelling periodic task: %s", task_name)
-            task.cancel()
-
-        self.periodic_tasks.clear()
+        for tid, task in list(self._periodic_tasks.items()):
+            logger.info("Stopping periodic task: %s", tid)
+            task.stop()
+        self._periodic_tasks.clear()
+        self._periodic_slots.clear()
 
         if self.bus:
             self.bus.shutdown()
@@ -740,237 +865,233 @@ class CanCodec(can.Listener):
 
         return signals
 
-    async def _periodic_send_task(
-        self, msg_id: int, data: bytes, period: float, task_name: str, extended_id: bool = False
-    ) -> None:
-        """Periodic message transmission task.
+    # ─── Action surface (registered as can/<bus_name>/<method>) ────────────
 
-        :param msg_id: CAN message ID
-        :param data: Message data bytes
-        :param period: Period in seconds
-        :param task_name: Task identifier
-        :param extended_id: Use 29-bit extended ID
-        """
-        try:
-            logger.info(
-                "Starting periodic transmission: %s (ID: %04x, period: %ss, extended: %s)",
-                task_name,
-                msg_id,
-                period,
-                extended_id,
-            )
-
-            while self.running:
-                if not self.bus:
-                    logger.warning("Bus not available for periodic task %s", task_name)
-                    await asyncio.sleep(period)
-                    continue
-
-                try:
-                    msg = can.Message(
-                        arbitration_id=msg_id,
-                        data=data,
-                        is_extended_id=extended_id,
-                        is_fd=self.fd_mode,
-                    )
-                    self.bus.send(msg)
-                except can.CanError as e:
-                    logger.error("Failed to send periodic message %s: %s", task_name, e)
-                except Exception as e:
-                    logger.error("Unexpected error in periodic send %s: %s", task_name, e)
-
-                await asyncio.sleep(period)
-        except asyncio.CancelledError:
-            logger.info("Periodic task cancelled: %s", task_name)
-        except Exception as e:
-            logger.exception("Error in periodic task %s: %s", task_name, e)
-
-    @action("Get Status", "View CAN bus status")
-    def get_status(self) -> dict[str, Any]:
-        """Get current CAN bus status.
-
-        :return: Status information
-        """
-        bus_state = "not_initialized" if not self.bus else str(self.bus.state.name)
-
+    @action("Get TX State", "Stateless snapshot of this bus, its periodics, and bus-health metrics")
+    def get_tx_state(self) -> dict[str, Any]:
+        db_path = Path(self.database_file_path)
         return {
-            "bus_state": bus_state,
-            "running": self.running,
-            "interface": self.config["interface"],
-            "channel": self.config["channel"],
-            "fd_mode": self.fd_mode,
+            "capturedAtUnixMs": int(time.time() * 1000),
+            "extension": {
+                "id": EXTENSION_ID,
+                "version": _extension_version(),
+                "state": "running" if self.running and self.bus else "stopped",
+            },
+            "bus": {
+                "name": self.bus_name or "can_codec",
+                "interface": self.config.get("interface", "unknown"),
+                "channel": self.config.get("channel"),
+                "status": "active" if self.running and self.bus else "stopped",
+                "dbc": {
+                    "path": str(db_path),
+                    "name": db_path.name,
+                    "messageCount": len(self.db.messages),
+                },
+                "metrics": {
+                    # tx_errors / tx_overflows are not tracked yet — surface zero
+                    # so the wire shape stays stable; real counters land later.
+                    "txErrors": 0,
+                    "txOverflows": 0,
+                    "messagesReceived": self.metrics.messages_received,
+                    "messagesDecoded": self.metrics.messages_decoded,
+                    "unknownMessages": self.metrics.unknown_messages,
+                },
+                "periodics": [self._periodic_slots[tid] for tid in sorted(self._periodic_slots)],
+            },
         }
 
-    @action("Send Message", "Send a single CAN message")
-    @action.number("msg_id", minimum=0, maximum=0x1FFFFFFF, title="Message ID", default=0x100)
-    @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04", default="00")
-    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False, widget="toggle")
-    def send_message(self, msg_id: int, data: str, extended_id: bool = False) -> dict[str, Any]:
-        """Send a CAN message.
-
-        :param msg_id: CAN message ID (11-bit standard or 29-bit extended)
-        :param data: Hex data string (e.g., "01 02 03")
-        :param extended_id: Use 29-bit extended ID
-        :return: Confirmation message
-        """
-        if not self.bus:
-            return {"error": "CAN bus not started"}
-
-        # Validate ID range
-        max_id = 0x1FFFFFFF if extended_id else 0x7FF
-        if msg_id > max_id:
-            id_type = "extended" if extended_id else "standard"
-            return {"error": f"Message ID {msg_id:x} exceeds max for {id_type} ID ({max_id:x})"}
-
-        try:
-            data_bytes = bytes.fromhex(data.replace(" ", ""))
-            is_fd = self.fd_mode
-
-            msg = can.Message(
-                arbitration_id=msg_id, data=data_bytes, is_extended_id=extended_id, is_fd=is_fd
-            )
-            self.bus.send(msg)
-            logger.info(
-                f"Sent message: ID={msg_id:04x}, data={data_bytes.hex()}, extended={extended_id}"
-            )
-            return {
-                "status": "sent",
-                "id": f"0x{msg_id:04x}" if not extended_id else f"0x{msg_id:08x}",
-                "data": data_bytes.hex(),
-                "extended_id": extended_id,
-            }
-        except can.CanError as e:
-            logger.error("CAN error sending message: %s", e)
-            return {"error": f"CAN error: {e}"}
-        except Exception as e:
-            logger.error("Error sending message: %s", e)
-            return {"error": str(e)}
-
-    @action("Start Periodic Message", "Start periodic transmission of a CAN message")
-    @action.number("msg_id", minimum=0, maximum=0x1FFFFFFF, title="Message ID", default=0x100)
-    @action.text("data", title="Data (hex)", placeholder="01 02 03 04", default="00")
-    @action.number("period", minimum=0.001, maximum=10.0, title="Period (seconds)", default=0.1)
-    @action.boolean("extended_id", title="Extended ID (29-bit)", default=False, widget="toggle")
-    def start_periodic(
-        self, msg_id: int, data: str, period: float, extended_id: bool = False
-    ) -> dict[str, Any]:
-        """Start periodic transmission of a message.
-
-        :param msg_id: CAN message ID
-        :param data: Hex data string
-        :param period: Transmission period in seconds
-        :param extended_id: Use 29-bit extended ID
-        :return: Confirmation message
-        """
-        if not self.bus or not self.running:
-            return {"error": "CAN bus not running"}
-
-        # Validate ID range
-        max_id = 0x1FFFFFFF if extended_id else 0x7FF
-        if msg_id > max_id:
-            id_type = "extended" if extended_id else "standard"
-            return {"error": f"Message ID {msg_id:x} exceeds max for {id_type} ID ({max_id:x})"}
-
-        try:
-            data_bytes = bytes.fromhex(data.replace(" ", ""))
-            task_name = f"periodic_{msg_id:08x}" if extended_id else f"periodic_{msg_id:04x}"
-
-            # Cancel existing task if present
-            if task_name in self.periodic_tasks:
-                self.periodic_tasks[task_name].cancel()
-                logger.info("Cancelled existing periodic task: %s", task_name)
-
-            # Create new periodic task
-            task = asyncio.create_task(
-                self._periodic_send_task(msg_id, data_bytes, period, task_name, extended_id)
-            )
-            self.periodic_tasks[task_name] = task
-
-            return {
-                "status": "started",
-                "task_name": task_name,
-                "id": f"0x{msg_id:04x}" if not extended_id else f"0x{msg_id:08x}",
-                "period": period,
-                "extended_id": extended_id,
-            }
-        except Exception as e:
-            logger.error("Error starting periodic transmission: %s", e)
-            return {"error": str(e)}
-
-    @action("Stop Periodic Message", "Stop periodic transmission")
-    @action.text("task_name", title="Task Name", placeholder="periodic_0100")
-    def stop_periodic(self, task_name: str) -> dict[str, Any]:
-        """Stop periodic transmission of a message.
-
-        :param task_name: Task name (from list_periodic_tasks)
-        :return: Confirmation message
-        """
-        if task_name in self.periodic_tasks:
-            self.periodic_tasks[task_name].cancel()
-            del self.periodic_tasks[task_name]
-            logger.info("Stopped periodic task: %s", task_name)
-            return {"status": "stopped", "task_name": task_name}
-        else:
-            return {"error": f"No periodic task found: {task_name}"}
-
-    @action("List Periodic Tasks", "Show all active periodic transmissions")
-    def list_periodic_tasks(self) -> dict[str, Any]:
-        """List all active periodic transmission tasks.
-
-        :return: Dictionary of active tasks
-        """
-        tasks = []
-        for name, task in self.periodic_tasks.items():
-            tasks.append(
-                {
-                    "name": name,
-                    "running": not task.done(),
-                    "cancelled": task.cancelled(),
-                }
-            )
-
-        return {"count": len(tasks), "tasks": tasks}
-
-    @action("Get Metrics", "View performance metrics and statistics")
-    def get_metrics(self) -> dict[str, Any]:
-        """Get codec performance metrics.
-
-        :return: Performance metrics
-        """
-        uptime = time.time() - self.start_time
-        messages_received = self.metrics.messages_received
-
-        return {
-            "messages_received": self.metrics.messages_received,
-            "messages_decoded": self.metrics.messages_decoded,
-            "decode_errors": self.metrics.decode_errors,
-            "unknown_messages": self.metrics.unknown_messages,
-            "uptime_seconds": round(uptime, 2),
-            "messages_per_second": round(messages_received / max(uptime, 1), 2),
-            "decode_success_rate": round(
-                self.metrics.messages_decoded / max(messages_received, 1), 4
-            ),
-        }
-
-    @action("List Messages", "List all messages in database")
+    @action("List Messages", "DBC message + signal catalog for this bus (from the loaded DBC)")
     def list_messages(self) -> dict[str, Any]:
-        """List all CAN messages in loaded database file.
+        db_path = Path(self.database_file_path)
+        return {
+            "bus": self.bus_name or "can_codec",
+            "dbcName": db_path.name,
+            "messages": [_describe_dbc_message(msg) for msg in self.db.messages],
+        }
 
-        :return: Dictionary of message information
-        """
-        messages = []
-        for msg in self.db.messages:
-            width = 8 if msg.is_extended_frame else 4
-            messages.append(
-                {
-                    "id": f"0x{msg.frame_id:0{width}x}",
-                    "name": msg.name,
-                    "length": msg.length,
-                    "signals": len(msg.signals),
-                }
-            )
+    @action("Send Raw", "Send a one-shot raw CAN frame")
+    @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
+    @action.text(
+        "data", title="Data (hex bytes)", placeholder="01 02 03 04", required=False, default=""
+    )
+    @action.boolean(
+        "is_extended", title="Extended ID (29-bit)", required=False, default=False, widget="toggle"
+    )
+    @action.boolean("is_fd", title="CAN FD", required=False, default=False, widget="toggle")
+    def send_raw(
+        self,
+        can_id: str,
+        data: str,
+        is_extended: bool = False,
+        is_fd: bool = False,
+    ) -> dict[str, Any]:
+        self._require_running()
+        can_id_int = _parse_can_id(can_id)
+        _validate_id_range(can_id_int, is_extended)
+        data_bytes = _parse_data_hex(data)
+        msg = can.Message(
+            arbitration_id=can_id_int,
+            data=data_bytes,
+            is_extended_id=is_extended,
+            is_fd=is_fd,
+        )
+        self.bus.send(msg)
+        return {
+            "canId": can_id_int,
+            "canIdHex": f"0x{can_id_int:x}",
+            "dlc": len(data_bytes),
+            "dataHex": data_bytes.hex(),
+            "isExtended": is_extended,
+            "isFd": is_fd,
+        }
 
-        return {"count": len(messages), "messages": messages}
+    @action("Start Periodic Raw", "Start raw periodic transmission. Returns {task_id, replaced}.")
+    @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
+    @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04")
+    @action.number(
+        "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100
+    )
+    @action.boolean(
+        "is_extended", title="Extended ID", required=False, default=False, widget="toggle"
+    )
+    @action.boolean("is_fd", title="CAN FD", required=False, default=False, widget="toggle")
+    def start_periodic_raw(
+        self,
+        can_id: str,
+        data: str,
+        period_ms: int = 100,
+        is_extended: bool = False,
+        is_fd: bool = False,
+    ) -> dict[str, Any]:
+        self._require_running()
+        can_id_int = _parse_can_id(can_id)
+        _validate_id_range(can_id_int, is_extended)
+        data_bytes = _parse_data_hex(data)
+        tid = _task_id(can_id_int, is_extended, "raw")
+        replaced = self._stop_slot_if_present(tid)
+        msg = can.Message(
+            arbitration_id=can_id_int,
+            data=data_bytes,
+            is_extended_id=is_extended,
+            is_fd=is_fd,
+        )
+        self._spawn_periodic(tid, msg, period_ms / 1000.0, mode="raw")
+        self._periodic_slots[tid] = {
+            "taskId": tid,
+            "canId": can_id_int,
+            "isExtended": is_extended,
+            "isFd": is_fd,
+            "dlc": len(data_bytes),
+            "dataHex": data_bytes.hex(),
+            "periodMs": period_ms,
+            "mode": "raw",
+            "isActive": True,
+        }
+        return {"task_id": tid, "replaced": replaced}
+
+    @action("Send Message", "Send a one-shot DBC-encoded message")
+    @action.text("message", title="DBC message name")
+    @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
+    @action.text("mux", title="Multiplexer (optional)", required=False, default="")
+    def send_message(self, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
+        self._require_running()
+        signals = _parse_signals_json(signals_json)
+        dbc_msg = self._resolve_dbc_message(message)
+        mux_value = _parse_mux(mux)
+        data_bytes = _encode_dbc(dbc_msg, signals, mux_value)
+        msg = can.Message(
+            arbitration_id=dbc_msg.frame_id,
+            data=data_bytes,
+            is_extended_id=dbc_msg.is_extended_frame,
+        )
+        self.bus.send(msg)
+        return {
+            "message": message,
+            "canId": dbc_msg.frame_id,
+            "canIdHex": f"0x{dbc_msg.frame_id:x}",
+            "dlc": len(data_bytes),
+            "dataHex": data_bytes.hex(),
+            "mux": mux_value,
+        }
+
+    @action(
+        "Start Periodic Message",
+        "Start DBC-encoded periodic transmission. Returns {task_id, replaced}.",
+    )
+    @action.text("message", title="DBC message name")
+    @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
+    @action.number(
+        "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100
+    )
+    @action.text("mux", title="Multiplexer (optional)", required=False, default="")
+    def start_periodic_message(
+        self,
+        message: str,
+        signals_json: str,
+        period_ms: int = 100,
+        mux: str = "",
+    ) -> dict[str, Any]:
+        self._require_running()
+        signals = _parse_signals_json(signals_json)
+        dbc_msg = self._resolve_dbc_message(message)
+        mux_value = _parse_mux(mux)
+        data_bytes = _encode_dbc(dbc_msg, signals, mux_value)
+        mux_key = "dbc" if mux_value is None else f"mux={mux_value}"
+        tid = _task_id(dbc_msg.frame_id, dbc_msg.is_extended_frame, mux_key)
+        replaced = self._stop_slot_if_present(tid)
+        msg = can.Message(
+            arbitration_id=dbc_msg.frame_id,
+            data=data_bytes,
+            is_extended_id=dbc_msg.is_extended_frame,
+        )
+        self._spawn_periodic(tid, msg, period_ms / 1000.0, mode="dbc")
+        self._periodic_slots[tid] = {
+            "taskId": tid,
+            "canId": dbc_msg.frame_id,
+            "isExtended": dbc_msg.is_extended_frame,
+            "isFd": False,
+            "dlc": len(data_bytes),
+            "dataHex": data_bytes.hex(),
+            "periodMs": period_ms,
+            "mode": "dbc",
+            "isActive": True,
+            "message": {"name": message, "mux": mux_value, "signals": signals},
+        }
+        return {"task_id": tid, "replaced": replaced}
+
+    @action("Stop Periodic", "Stop a periodic task by its stable task_id (from start_periodic_*)")
+    @action.text("task_id", title="Task ID")
+    def stop_periodic(self, task_id: str) -> dict[str, Any]:
+        stopped = self._stop_slot_if_present(task_id)
+        return {"task_id": task_id, "stopped": stopped}
+
+    # ─── Internals shared by the action methods above ────────────────────
+
+    def _require_running(self) -> None:
+        if not self.running or not self.bus:
+            raise RuntimeError(f"bus '{self.bus_name or 'can_codec'}' is not running")
+
+    def _resolve_dbc_message(self, message: str) -> cantools.database.can.Message:
+        dbc_msg = self.messages_by_name.get(message)
+        if dbc_msg is None:
+            available = sorted(self.messages_by_name.keys())
+            preview = available[:20]
+            raise ValueError(f"unknown DBC message '{message}'. First 20 available: {preview}")
+        return dbc_msg
+
+    def _spawn_periodic(self, tid: str, msg: can.Message, period_s: float, mode: str) -> None:
+        task = self.bus.send_periodic(msg, period_s, autostart=True)
+        self._periodic_tasks[tid] = task
+        logger.info("started periodic %s mode=%s period=%.3fs", tid, mode, period_s)
+
+    def _stop_slot_if_present(self, tid: str) -> bool:
+        task = self._periodic_tasks.pop(tid, None)
+        self._periodic_slots.pop(tid, None)
+        if task is None:
+            return False
+        task.stop()
+        logger.info("stopped periodic %s", tid)
+        return True
 
     @action("Convert Trace File", "Convert CAN log to Zelos trace format")
     @action.text(
