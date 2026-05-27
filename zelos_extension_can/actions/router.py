@@ -1,22 +1,23 @@
-"""Cross-bus action router under the `can` namespace.
+"""Cross-bus action router registered under the `tx` segment of the `can` SDK service.
 
-Mirrors `features/CAN_TRANSMIT.md` §5 Block D action contract:
+Mirrors `features/CAN_TRANSMIT.md` §5 Block D action contract. Action paths land
+as `{service}/{registry}/{method}` — the SDK init in `cli/app.py` uses
+`name="can"` and this router registers under `"tx"`, so the wire paths are:
 
-    can/get_tx_state           — single source of truth: buses + periodics + metrics
-    can/list_messages          — DBC catalog for a bus (read from the already-loaded DBC)
-    can/send_raw               — one-shot raw frame
-    can/start_periodic_raw     — raw periodic; returns {task_id, replaced}
-    can/send_message           — one-shot DBC-encoded message
-    can/start_periodic_message — DBC periodic; returns {task_id, replaced}
-    can/stop_periodic          — stop by stable task_id
+    can/tx/get_tx_state           — single source of truth: buses + periodics + metrics
+    can/tx/list_messages          — DBC catalog for a bus (from the already-loaded DBC)
+    can/tx/send_raw               — one-shot raw frame
+    can/tx/start_periodic_raw     — raw periodic; returns {task_id, replaced}
+    can/tx/send_message           — one-shot DBC-encoded message
+    can/tx/start_periodic_message — DBC periodic; returns {task_id, replaced}
+    can/tx/stop_periodic          — stop by stable task_id
 
-The per-codec `<bus>/...` actions on `CanCodec` are unchanged so the existing
+The per-codec `can/<bus>/...` actions on `CanCodec` are unchanged so the existing
 desktop actions panel keeps working; this router is additive surface only.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -73,18 +74,22 @@ def _task_id(bus: str, can_id: int, is_extended: bool, mux: str = "raw") -> str:
 
 
 class CanActionsRouter:
-    """Routes the `can/...` action surface to per-bus :class:`CanCodec` instances.
+    """Routes the `can/tx/...` action surface to per-bus :class:`CanCodec` instances.
 
-    Holds a registry of stable taskId → asyncio.Task for periodics started
-    through this router. Coexists with each codec's own `periodic_tasks` dict
-    (used by the legacy `<bus>/start_periodic` action surface).
+    Holds a registry of stable taskId → :class:`can.broadcastmanager.CyclicSendTaskABC`
+    for periodics started through this router. Coexists with each codec's own
+    `periodic_tasks` dict (the legacy `can/<bus>/start_periodic` action surface).
     """
 
     def __init__(self, codecs: dict[str, CanCodec]) -> None:
         self._codecs = codecs
-        self._tasks: dict[str, asyncio.Task] = {}
+        # python-can's CyclicSendTask. Owns its own thread, exposes `.stop()`
+        # and `.modify_data()`; we don't need to manage an asyncio loop here,
+        # which matters because action dispatch happens in worker threads
+        # where `asyncio.create_task` raises "no running event loop".
+        self._tasks: dict[str, can.broadcastmanager.CyclicSendTaskABC] = {}
         # Slot metadata so get_tx_state can reconstruct what each task is sending
-        # without poking the asyncio.Task internals.
+        # without poking the task object's internals.
         self._slots: dict[str, dict[str, Any]] = {}
 
     # ─── Bus lookup helpers ─────────────────────────────────────────────
@@ -160,9 +165,13 @@ class CanActionsRouter:
     @action("Send Raw", "Send a one-shot raw CAN frame")
     @action.text("bus", title="Bus")
     @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
-    @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04", default="")
-    @action.boolean("is_extended", title="Extended ID (29-bit)", default=False, widget="toggle")
-    @action.boolean("is_fd", title="CAN FD", default=False, widget="toggle")
+    @action.text(
+        "data", title="Data (hex bytes)", placeholder="01 02 03 04", required=False, default=""
+    )
+    @action.boolean(
+        "is_extended", title="Extended ID (29-bit)", required=False, default=False, widget="toggle"
+    )
+    @action.boolean("is_fd", title="CAN FD", required=False, default=False, widget="toggle")
     def send_raw(
         self,
         bus: str,
@@ -193,9 +202,13 @@ class CanActionsRouter:
     @action.text("bus", title="Bus")
     @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
     @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04")
-    @action.number("period_ms", title="Period (ms)", minimum=1, maximum=60_000, default=100)
-    @action.boolean("is_extended", title="Extended ID", default=False, widget="toggle")
-    @action.boolean("is_fd", title="CAN FD", default=False, widget="toggle")
+    @action.number(
+        "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100
+    )
+    @action.boolean(
+        "is_extended", title="Extended ID", required=False, default=False, widget="toggle"
+    )
+    @action.boolean("is_fd", title="CAN FD", required=False, default=False, widget="toggle")
     def start_periodic_raw(
         self,
         bus: str,
@@ -267,7 +280,9 @@ class CanActionsRouter:
     @action.text("bus", title="Bus")
     @action.text("message", title="DBC message name")
     @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
-    @action.number("period_ms", title="Period (ms)", minimum=1, maximum=60_000, default=100)
+    @action.number(
+        "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100
+    )
     @action.text("mux", title="Multiplexer (optional)", required=False, default="")
     def start_periodic_message(
         self,
@@ -319,36 +334,23 @@ class CanActionsRouter:
     def _spawn_periodic(
         self, tid: str, codec: CanCodec, msg: can.Message, period_s: float, mode: str
     ) -> None:
-        task = asyncio.create_task(self._periodic_loop(tid, codec, msg, period_s))
+        task = codec.bus.send_periodic(msg, period_s, autostart=True)
         self._tasks[tid] = task
         logger.info("started periodic %s mode=%s period=%.3fs", tid, mode, period_s)
-
-    async def _periodic_loop(
-        self, tid: str, codec: CanCodec, msg: can.Message, period_s: float
-    ) -> None:
-        try:
-            while codec.running and codec.bus is not None:
-                try:
-                    codec.bus.send(msg)
-                except can.CanError as e:
-                    logger.warning("periodic %s send failed: %s", tid, e)
-                await asyncio.sleep(period_s)
-        except asyncio.CancelledError:
-            logger.info("periodic %s cancelled", tid)
 
     def _stop_slot_if_present(self, tid: str) -> bool:
         task = self._tasks.pop(tid, None)
         self._slots.pop(tid, None)
         if task is None:
             return False
-        task.cancel()
+        task.stop()
         return True
 
     def stop_all(self) -> None:
-        """Cancel every periodic this router owns. Used at extension shutdown."""
+        """Stop every periodic this router owns. Used at extension shutdown."""
         for tid, task in list(self._tasks.items()):
-            task.cancel()
-            logger.info("shutdown: cancelled periodic %s", tid)
+            task.stop()
+            logger.info("shutdown: stopped periodic %s", tid)
         self._tasks.clear()
         self._slots.clear()
 
@@ -418,18 +420,22 @@ def _describe_dbc_message(msg: cantools.db.can.Message) -> dict[str, Any]:
 
 
 def _describe_dbc_signal(sig: cantools.db.can.Signal) -> dict[str, Any]:
+    # JSON requires string dict keys, and the wire encoder rejects Decimal —
+    # coerce scale/offset/min/max to float and value_table keys to str.
     return {
         "name": sig.name,
-        "startBit": sig.start,
-        "length": sig.length,
+        "startBit": int(sig.start),
+        "length": int(sig.length),
         "byteOrder": "little" if sig.byte_order == "little_endian" else "big",
-        "isSigned": sig.is_signed,
-        "scale": sig.scale,
-        "offset": sig.offset,
-        "min": sig.minimum,
-        "max": sig.maximum,
+        "isSigned": bool(sig.is_signed),
+        "scale": float(sig.scale) if sig.scale is not None else None,
+        "offset": float(sig.offset) if sig.offset is not None else None,
+        "min": float(sig.minimum) if sig.minimum is not None else None,
+        "max": float(sig.maximum) if sig.maximum is not None else None,
         "unit": sig.unit,
-        "valueTable": {int(k): str(v) for k, v in sig.choices.items()} if sig.choices else None,
-        "muxIndicator": sig.is_multiplexer,
-        "muxValue": sig.multiplexer_ids[0] if sig.multiplexer_ids else None,
+        "valueTable": {str(int(k)): str(v) for k, v in sig.choices.items()}
+        if sig.choices
+        else None,
+        "muxIndicator": bool(sig.is_multiplexer),
+        "muxValue": int(sig.multiplexer_ids[0]) if sig.multiplexer_ids else None,
     }
