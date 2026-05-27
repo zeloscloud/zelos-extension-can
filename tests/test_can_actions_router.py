@@ -1,8 +1,7 @@
-"""Unit tests for the cross-bus `can/...` action router.
+"""Unit tests for the cross-bus `can/tx/...` action router.
 
-Covers CAN_TRANSMIT.md §7.1 test rows that exercise extension-side surface
-(T6, T6.5 partial, T7.6 duplicate-replace, T8 multi-bus isolation, T9 DBC
-encode parity, T9.6 list_messages).
+Covers raw + DBC send, duplicate-replace on periodics, multi-bus isolation,
+DBC encode parity vs cantools, and the list_messages catalog shape.
 """
 
 from __future__ import annotations
@@ -98,13 +97,14 @@ class TestPureHelpers:
             _validate_id_range(0x20000000, is_extended=True)
 
     def test_task_id_is_stable_across_payload_changes(self):
-        # CAN_TRANSMIT.md §2 decision 10: replace-on-duplicate via stable taskId
+        # Stable key → starting a periodic twice with the same bus/ID/frame-kind
+        # replaces the prior slot rather than spawning a sibling.
         a = _task_id("busA", 0x100, is_extended=False, mux="raw")
         b = _task_id("busA", 0x100, is_extended=False, mux="raw")
         assert a == b == "busA:0x100:std:raw"
 
     def test_task_id_distinguishes_std_vs_ext_and_buses(self):
-        # CAN_TRANSMIT.md §5 Block E: same arbitration ID on two buses must not collide
+        # Same arbitration ID on two buses must not collide into a single slot.
         assert _task_id("busA", 0x100, False) != _task_id("busB", 0x100, False)
         # Standard vs extended frames with the same numeric ID stay separate slots
         assert _task_id("busA", 0x100, False) != _task_id("busA", 0x100, True)
@@ -166,8 +166,9 @@ class TestStartPeriodicRaw:
 
         asyncio.run(go())
 
-    def test_duplicate_replaces_and_returns_replaced_true_T7_6(self, router):
-        # CAN_TRANSMIT.md T7.6: duplicate start_periodic_raw replaces with {replaced: true}
+    def test_duplicate_replaces_and_returns_replaced_true(self, router):
+        # Duplicate start_periodic_raw replaces the prior slot and signals
+        # `replaced: True` to the caller so it can update its UI.
         async def go():
             first = router.start_periodic_raw(bus="busA", can_id="0x100", data="01", period_ms=50)
             second = router.start_periodic_raw(bus="busA", can_id="0x100", data="02", period_ms=50)
@@ -178,8 +179,9 @@ class TestStartPeriodicRaw:
 
         asyncio.run(go())
 
-    def test_multi_bus_same_id_distinct_slots_T8(self, router, codec_a, codec_b):
-        # CAN_TRANSMIT.md T8: two buses with the same CAN ID get distinct task_ids
+    def test_multi_bus_same_id_distinct_slots(self, router, codec_a, codec_b):
+        # Two buses with the same CAN ID get distinct task_ids; stopping one
+        # leaves the other running.
         async def go():
             a = router.start_periodic_raw(bus="busA", can_id="0x100", data="aa", period_ms=50)
             b = router.start_periodic_raw(bus="busB", can_id="0x100", data="bb", period_ms=50)
@@ -223,8 +225,9 @@ class TestStopPeriodic:
 
 
 class TestListMessages:
-    def test_returns_dbc_catalog_for_bus_T9_6(self, router):
-        # CAN_TRANSMIT.md T9.6: list_messages returns the bus's already-loaded DBC
+    def test_returns_dbc_catalog_for_bus(self, router):
+        # list_messages reads from the bus's already-loaded DBC; the app never
+        # parses its own copy.
         result = router.list_messages(bus="busA")
         assert result["bus"] == "busA"
         assert result["dbcName"] == "test.dbc"
@@ -238,8 +241,9 @@ class TestListMessages:
 
 
 class TestSendMessage:
-    def test_dbc_encode_matches_cantools_T9(self, router, codec_a, test_dbc):
-        # CAN_TRANSMIT.md T9: send_message bytes match cantools fixture
+    def test_dbc_encode_matches_cantools(self, router, codec_a, test_dbc):
+        # send_message bytes must match what cantools itself would encode for
+        # the same message + signal dict.
         signals = {"state_request": 5}
         result = router.send_message(
             bus="busA", message="DUT_Command", signals_json=json.dumps(signals)
