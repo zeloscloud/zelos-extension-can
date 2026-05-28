@@ -108,10 +108,10 @@ def _encode_dbc(
 def _describe_dbc_message(msg: cantools.database.can.Message) -> dict[str, Any]:
     return {
         "name": msg.name,
-        "canId": int(msg.frame_id),
-        "isExtended": bool(msg.is_extended_frame),
+        "can_id": int(msg.frame_id),
+        "is_extended": bool(msg.is_extended_frame),
         "dlc": int(msg.length),
-        "cycleTimeMs": msg.cycle_time,
+        "cycle_time_ms": msg.cycle_time,
         "signals": [_describe_dbc_signal(sig) for sig in msg.signals],
     }
 
@@ -121,20 +121,20 @@ def _describe_dbc_signal(sig: cantools.database.can.Signal) -> dict[str, Any]:
     # coerce scale/offset/min/max to float and value_table keys to str.
     return {
         "name": sig.name,
-        "startBit": int(sig.start),
+        "start_bit": int(sig.start),
         "length": int(sig.length),
-        "byteOrder": "little" if sig.byte_order == "little_endian" else "big",
-        "isSigned": bool(sig.is_signed),
+        "byte_order": "little" if sig.byte_order == "little_endian" else "big",
+        "is_signed": bool(sig.is_signed),
         "scale": float(sig.scale) if sig.scale is not None else None,
         "offset": float(sig.offset) if sig.offset is not None else None,
         "min": float(sig.minimum) if sig.minimum is not None else None,
         "max": float(sig.maximum) if sig.maximum is not None else None,
         "unit": sig.unit,
-        "valueTable": {str(int(k)): str(v) for k, v in sig.choices.items()}
+        "value_table": {str(int(k)): str(v) for k, v in sig.choices.items()}
         if sig.choices
         else None,
-        "muxIndicator": bool(sig.is_multiplexer),
-        "muxValue": int(sig.multiplexer_ids[0]) if sig.multiplexer_ids else None,
+        "mux_indicator": bool(sig.is_multiplexer),
+        "mux_value": int(sig.multiplexer_ids[0]) if sig.multiplexer_ids else None,
     }
 
 
@@ -871,7 +871,7 @@ class CanCodec(can.Listener):
     def get_tx_state(self) -> dict[str, Any]:
         db_path = Path(self.database_file_path)
         return {
-            "capturedAtUnixMs": int(time.time() * 1000),
+            "captured_at_unix_ms": int(time.time() * 1000),
             "extension": {
                 "id": EXTENSION_ID,
                 "version": _extension_version(),
@@ -885,16 +885,16 @@ class CanCodec(can.Listener):
                 "dbc": {
                     "path": str(db_path),
                     "name": db_path.name,
-                    "messageCount": len(self.db.messages),
+                    "message_count": len(self.db.messages),
                 },
                 "metrics": {
                     # tx_errors / tx_overflows are not tracked yet — surface zero
                     # so the wire shape stays stable; real counters land later.
-                    "txErrors": 0,
-                    "txOverflows": 0,
-                    "messagesReceived": self.metrics.messages_received,
-                    "messagesDecoded": self.metrics.messages_decoded,
-                    "unknownMessages": self.metrics.unknown_messages,
+                    "tx_errors": 0,
+                    "tx_overflows": 0,
+                    "messages_received": self.metrics.messages_received,
+                    "messages_decoded": self.metrics.messages_decoded,
+                    "unknown_messages": self.metrics.unknown_messages,
                 },
                 "periodics": [self._periodic_slots[tid] for tid in sorted(self._periodic_slots)],
             },
@@ -905,7 +905,7 @@ class CanCodec(can.Listener):
         db_path = Path(self.database_file_path)
         return {
             "bus": self.bus_name or "can_codec",
-            "dbcName": db_path.name,
+            "dbc_name": db_path.name,
             "messages": [_describe_dbc_message(msg) for msg in self.db.messages],
         }
 
@@ -937,12 +937,12 @@ class CanCodec(can.Listener):
         )
         self.bus.send(msg)
         return {
-            "canId": can_id_int,
-            "canIdHex": f"0x{can_id_int:x}",
+            "can_id": can_id_int,
+            "can_id_hex": f"0x{can_id_int:x}",
             "dlc": len(data_bytes),
-            "dataHex": data_bytes.hex(),
-            "isExtended": is_extended,
-            "isFd": is_fd,
+            "data_hex": data_bytes.hex(),
+            "is_extended": is_extended,
+            "is_fd": is_fd,
         }
 
     @action("Start Periodic Raw", "Start raw periodic transmission. Returns {task_id, replaced}.")
@@ -977,15 +977,15 @@ class CanCodec(can.Listener):
         )
         self._spawn_periodic(tid, msg, period_ms / 1000.0, mode="raw")
         self._periodic_slots[tid] = {
-            "taskId": tid,
-            "canId": can_id_int,
-            "isExtended": is_extended,
-            "isFd": is_fd,
+            "task_id": tid,
+            "can_id": can_id_int,
+            "is_extended": is_extended,
+            "is_fd": is_fd,
             "dlc": len(data_bytes),
-            "dataHex": data_bytes.hex(),
-            "periodMs": period_ms,
+            "data_hex": data_bytes.hex(),
+            "period_ms": period_ms,
             "mode": "raw",
-            "isActive": True,
+            "is_active": True,
         }
         return {"task_id": tid, "replaced": replaced}
 
@@ -1007,10 +1007,10 @@ class CanCodec(can.Listener):
         self.bus.send(msg)
         return {
             "message": message,
-            "canId": dbc_msg.frame_id,
-            "canIdHex": f"0x{dbc_msg.frame_id:x}",
+            "can_id": dbc_msg.frame_id,
+            "can_id_hex": f"0x{dbc_msg.frame_id:x}",
             "dlc": len(data_bytes),
-            "dataHex": data_bytes.hex(),
+            "data_hex": data_bytes.hex(),
             "mux": mux_value,
         }
 
@@ -1046,15 +1046,15 @@ class CanCodec(can.Listener):
         )
         self._spawn_periodic(tid, msg, period_ms / 1000.0, mode="dbc")
         self._periodic_slots[tid] = {
-            "taskId": tid,
-            "canId": dbc_msg.frame_id,
-            "isExtended": dbc_msg.is_extended_frame,
-            "isFd": False,
+            "task_id": tid,
+            "can_id": dbc_msg.frame_id,
+            "is_extended": dbc_msg.is_extended_frame,
+            "is_fd": False,
             "dlc": len(data_bytes),
-            "dataHex": data_bytes.hex(),
-            "periodMs": period_ms,
+            "data_hex": data_bytes.hex(),
+            "period_ms": period_ms,
             "mode": "dbc",
-            "isActive": True,
+            "is_active": True,
             "message": {"name": message, "mux": mux_value, "signals": signals},
         }
         return {"task_id": tid, "replaced": replaced}

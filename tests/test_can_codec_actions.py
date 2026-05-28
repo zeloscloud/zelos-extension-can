@@ -124,9 +124,9 @@ class TestSendRaw:
         assert sent_msg.arbitration_id == 0x123
         assert sent_msg.data == b"\xde\xad\xbe\xef"
         assert sent_msg.is_extended_id is False
-        assert result["canId"] == 0x123
+        assert result["can_id"] == 0x123
         assert result["dlc"] == 4
-        assert result["dataHex"] == "deadbeef"
+        assert result["data_hex"] == "deadbeef"
 
     def test_rejects_invalid_id_for_standard_frame(self, codec):
         with pytest.raises(ValueError, match="out of range for standard"):
@@ -181,7 +181,7 @@ class TestStopPeriodic:
         started = codec.start_periodic_raw(can_id="0x200", data="ff", period_ms=50)
         stopped = codec.stop_periodic(task_id=started["task_id"])
         assert stopped == {"task_id": started["task_id"], "stopped": True}
-        tids = {p["taskId"] for p in codec.get_tx_state()["bus"]["periodics"]}
+        tids = {p["task_id"] for p in codec.get_tx_state()["bus"]["periodics"]}
         assert started["task_id"] not in tids
 
 
@@ -189,7 +189,7 @@ class TestListMessages:
     def test_returns_dbc_catalog(self, codec):
         result = codec.list_messages()
         assert result["bus"] == "busA"
-        assert result["dbcName"] == "test.dbc"
+        assert result["dbc_name"] == "test.dbc"
         names = {m["name"] for m in result["messages"]}
         assert {"DUT_Status", "DUT_Command", "DUT_Logging"} <= names
         status = next(m for m in result["messages"] if m["name"] == "DUT_Status")
@@ -205,7 +205,7 @@ class TestSendMessage:
         expected = bytes(test_dbc.get_message_by_name("DUT_Command").encode(signals))
         sent_msg: can.Message = codec.bus.send.call_args.args[0]
         assert bytes(sent_msg.data) == expected
-        assert result["dataHex"] == expected.hex()
+        assert result["data_hex"] == expected.hex()
 
     def test_multiplexed_message_routes_mux_into_signals(self, codec, test_dbc):
         signals = {"logging_signal0": 1, "no_mux_logging_signal": 0}
@@ -236,18 +236,18 @@ class TestStartPeriodicMessage:
 class TestGetTxState:
     def test_snapshot_shape_matches_wire_contract(self, codec):
         snap = codec.get_tx_state()
-        assert set(snap.keys()) >= {"capturedAtUnixMs", "extension", "bus"}
+        assert set(snap.keys()) >= {"captured_at_unix_ms", "extension", "bus"}
         assert snap["extension"]["id"] == "zeloscloud.zelos-extension-can"
         bus = snap["bus"]
         assert bus["name"] == "busA"
         assert bus["status"] == "active"
         assert "metrics" in bus
         for key in (
-            "txErrors",
-            "txOverflows",
-            "messagesReceived",
-            "messagesDecoded",
-            "unknownMessages",
+            "tx_errors",
+            "tx_overflows",
+            "messages_received",
+            "messages_decoded",
+            "unknown_messages",
         ):
             assert key in bus["metrics"]
         assert bus["dbc"]["name"] == "test.dbc"
@@ -255,7 +255,7 @@ class TestGetTxState:
 
     def test_periodics_appear_in_snapshot(self, codec):
         started = codec.start_periodic_raw(can_id="0x300", data="aa", period_ms=50)
-        tids = {p["taskId"] for p in codec.get_tx_state()["bus"]["periodics"]}
+        tids = {p["task_id"] for p in codec.get_tx_state()["bus"]["periodics"]}
         assert started["task_id"] in tids
 
 
