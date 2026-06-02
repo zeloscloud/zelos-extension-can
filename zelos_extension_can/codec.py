@@ -116,6 +116,28 @@ def _describe_dbc_message(msg: cantools.database.can.Message) -> dict[str, Any]:
     }
 
 
+def _derive_bus_status(running: bool, bus: Any) -> str:
+    """Map (running, python-can BusState) to one of the four wire-contract
+    statuses the app expects: active / stopped / error / unknown.
+
+    Virtual / fake / file backends often raise on `bus.state` or don't
+    return a real `can.BusState` enum; on those we trust `running` and
+    fall back to "active"."""
+    if not running or bus is None:
+        return "stopped"
+    try:
+        state = bus.state
+    except Exception:
+        return "active"
+    if not isinstance(state, can.BusState):
+        return "active"
+    if state == can.BusState.ACTIVE:
+        return "active"
+    if state in {can.BusState.ERROR, can.BusState.PASSIVE}:
+        return "error"
+    return "unknown"
+
+
 def _describe_dbc_signal(sig: cantools.database.can.Signal) -> dict[str, Any]:
     # JSON requires string dict keys, and the wire encoder rejects Decimal —
     # coerce scale/offset/min/max to float and value_table keys to str.
@@ -146,6 +168,14 @@ class Metrics:
     messages_decoded: int = 0
     decode_errors: int = 0
     unknown_messages: int = 0
+    # Counts CanError raised by the synchronous bus.send() in one-shot
+    # send_raw / send_message paths. Periodics go through python-can's
+    # CyclicSendTask which runs its own thread and swallows errors
+    # internally — tracking those is out of scope until we wrap the task.
+    tx_errors: int = 0
+    # Reserved for future BCM queue-overflow tracking; currently always 0.
+    # The shape is kept stable so the app's wire contract doesn't churn.
+    tx_overflows: int = 0
 
 
 class TimestampMode(IntEnum):
@@ -423,6 +453,21 @@ class CanCodec(can.Listener):
         if self.bus:
             self.bus.shutdown()
             self.bus = None
+
+        # Best-effort drain so any frames still buffered in the TraceSource
+        # batcher land in the trace before we go quiet. flush() may not exist
+        # on older zelos-sdk; swallow that so a missing helper never blocks
+        # shutdown.
+        for src in (self.source, getattr(self, "raw_source", None)):
+            if src is None:
+                continue
+            flush = getattr(src, "flush", None)
+            if not callable(flush):
+                continue
+            try:
+                flush()
+            except Exception as e:
+                logger.debug("%sTraceSource.flush() raised during stop: %s", bus_id, e)
 
     def run(self) -> None:
         """Run async message reception loop."""
@@ -881,17 +926,15 @@ class CanCodec(can.Listener):
                 "name": self.bus_name or "can_codec",
                 "interface": self.config.get("interface", "unknown"),
                 "channel": self.config.get("channel"),
-                "status": "active" if self.running and self.bus else "stopped",
+                "status": _derive_bus_status(self.running, self.bus),
                 "dbc": {
                     "path": str(db_path),
                     "name": db_path.name,
                     "message_count": len(self.db.messages),
                 },
                 "metrics": {
-                    # tx_errors / tx_overflows are not tracked yet — surface zero
-                    # so the wire shape stays stable; real counters land later.
-                    "tx_errors": 0,
-                    "tx_overflows": 0,
+                    "tx_errors": self.metrics.tx_errors,
+                    "tx_overflows": self.metrics.tx_overflows,
                     "messages_received": self.metrics.messages_received,
                     "messages_decoded": self.metrics.messages_decoded,
                     "unknown_messages": self.metrics.unknown_messages,
@@ -935,7 +978,7 @@ class CanCodec(can.Listener):
             is_extended_id=is_extended,
             is_fd=is_fd,
         )
-        self.bus.send(msg)
+        self._send_or_count(msg)
         return {
             "can_id": can_id_int,
             "can_id_hex": f"0x{can_id_int:x}",
@@ -1004,7 +1047,29 @@ class CanCodec(can.Listener):
             data=data_bytes,
             is_extended_id=dbc_msg.is_extended_frame,
         )
-        self.bus.send(msg)
+        self._send_or_count(msg)
+        return {
+            "message": message,
+            "can_id": dbc_msg.frame_id,
+            "can_id_hex": f"0x{dbc_msg.frame_id:x}",
+            "dlc": len(data_bytes),
+            "data_hex": data_bytes.hex(),
+            "mux": mux_value,
+        }
+
+    @action(
+        "Encode Preview",
+        "Encode a DBC message without transmitting. Returns the bytes "
+        "that send_message would emit.",
+    )
+    @action.text("message", title="DBC message name")
+    @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
+    @action.text("mux", title="Multiplexer (optional)", required=False, default="")
+    def encode_preview(self, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
+        signals = _parse_signals_json(signals_json)
+        dbc_msg = self._resolve_dbc_message(message)
+        mux_value = _parse_mux(mux)
+        data_bytes = _encode_dbc(dbc_msg, signals, mux_value)
         return {
             "message": message,
             "can_id": dbc_msg.frame_id,
@@ -1092,6 +1157,18 @@ class CanCodec(can.Listener):
         task.stop()
         logger.info("stopped periodic %s", tid)
         return True
+
+    def _send_or_count(self, msg: can.Message) -> None:
+        """Wrapper around bus.send() that counts CanError as tx_errors and
+        re-raises with a friendlier message. Used by the one-shot send_raw /
+        send_message paths (periodics go through python-can's CyclicSendTask
+        which runs its own thread and doesn't surface errors back to us)."""
+        try:
+            self.bus.send(msg)
+        except can.CanError as e:
+            self.metrics.tx_errors += 1
+            bus_name = self.bus_name or "can_codec"
+            raise RuntimeError(f"send failed on bus '{bus_name}': {e}") from e
 
     @action("Convert Trace File", "Convert CAN log to Zelos trace format")
     @action.text(
