@@ -19,6 +19,7 @@ import pytest
 
 from zelos_extension_can.codec import (
     CanCodec,
+    _derive_bus_status,
     _encode_dbc,
     _parse_can_id,
     _parse_data_hex,
@@ -257,6 +258,79 @@ class TestGetTxState:
         started = codec.start_periodic_raw(can_id="0x300", data="aa", period_ms=50)
         tids = {p["task_id"] for p in codec.get_tx_state()["bus"]["periodics"]}
         assert started["task_id"] in tids
+
+
+class TestDeriveBusStatus:
+    """Tests the pure helper at its seam (memory: feedback_test_at_helper_seam)."""
+
+    def test_returns_stopped_when_not_running(self):
+        assert _derive_bus_status(False, object()) == "stopped"
+
+    def test_returns_stopped_when_bus_is_none(self):
+        assert _derive_bus_status(True, None) == "stopped"
+
+    def test_returns_active_for_real_active_state(self):
+        class FakeBus:
+            state = can.BusState.ACTIVE
+
+        assert _derive_bus_status(True, FakeBus()) == "active"
+
+    def test_returns_error_for_error_state(self):
+        class FakeBus:
+            state = can.BusState.ERROR
+
+        assert _derive_bus_status(True, FakeBus()) == "error"
+
+    def test_falls_back_to_active_when_state_raises(self):
+        class FakeBus:
+            @property
+            def state(self):
+                raise NotImplementedError("virtual backend doesn't track state")
+
+        assert _derive_bus_status(True, FakeBus()) == "active"
+
+    def test_falls_back_to_active_when_state_isnt_bus_state(self):
+        class FakeBus:
+            state = "not-an-enum"  # mocked / unusual backend
+
+        assert _derive_bus_status(True, FakeBus()) == "active"
+
+
+class TestSendErrorCounter:
+    def test_can_error_on_send_raw_increments_tx_errors_and_reraises(self, codec):
+        codec.bus.send.side_effect = can.CanError("link down")
+        assert codec.metrics.tx_errors == 0
+        with pytest.raises(RuntimeError, match="send failed on bus 'busA'"):
+            codec.send_raw(can_id="0x100", data="01")
+        assert codec.metrics.tx_errors == 1
+
+    def test_successful_send_does_not_touch_tx_errors(self, codec):
+        codec.send_raw(can_id="0x100", data="01")
+        assert codec.metrics.tx_errors == 0
+
+    def test_tx_errors_surfaces_in_snapshot(self, codec):
+        codec.bus.send.side_effect = can.CanError("bus off")
+        with pytest.raises(RuntimeError):
+            codec.send_raw(can_id="0x200", data="00")
+        assert codec.get_tx_state()["bus"]["metrics"]["tx_errors"] == 1
+
+
+class TestEncodePreview:
+    def test_returns_encoded_bytes_without_calling_send(self, codec):
+        result = codec.encode_preview(
+            message="DUT_Command",
+            signals_json=json.dumps({"state_request": 3}),
+        )
+        codec.bus.send.assert_not_called()
+        assert result["message"] == "DUT_Command"
+        assert "can_id_hex" in result
+        assert "data_hex" in result
+        assert isinstance(result["dlc"], int)
+        assert result["dlc"] == len(bytes.fromhex(result["data_hex"]))
+
+    def test_unknown_message_raises(self, codec):
+        with pytest.raises(ValueError, match="unknown DBC message"):
+            codec.encode_preview(message="DoesNotExist", signals_json="{}")
 
 
 class TestEncodeHelper:
