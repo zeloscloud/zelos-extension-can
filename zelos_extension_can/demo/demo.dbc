@@ -44,6 +44,21 @@ BO_ 260 BMS_Status: 8 BMS
  SG_ fault_code : 24|8@1+ (1,0) [0|255] "" Gateway
  SG_ warning_code : 32|8@1+ (1,0) [0|255] "" Gateway
 
+BO_ 261 BMS_CellDetail: 8 BMS
+ SG_ cell_group M : 0|4@1+ (1,0) [0|15] "" Gateway
+ SG_ cell_a_voltage m0 : 4|12@1+ (0.001,0) [0|5] "V" Gateway
+ SG_ cell_b_voltage m0 : 16|12@1+ (0.001,0) [0|5] "V" Gateway
+ SG_ cell_c_voltage m0 : 28|12@1+ (0.001,0) [0|5] "V" Gateway
+ SG_ cell_d_voltage m0 : 40|12@1+ (0.001,0) [0|5] "V" Gateway
+ SG_ cell_a_temp m1 : 4|8@1- (1,-40) [-40|125] "C" Gateway
+ SG_ cell_b_temp m1 : 12|8@1- (1,-40) [-40|125] "C" Gateway
+ SG_ cell_c_temp m1 : 20|8@1- (1,-40) [-40|125] "C" Gateway
+ SG_ cell_d_temp m1 : 28|8@1- (1,-40) [-40|125] "C" Gateway
+ SG_ balancing_target_cell m2 : 4|4@1+ (1,0) [0|15] "" Gateway
+ SG_ balancing_target_voltage m2 : 8|12@1+ (0.001,0) [0|5] "V" Gateway
+ SG_ balancing_active_mask m2 : 20|16@1+ (1,0) [0|65535] "" Gateway
+ SG_ frame_counter : 56|8@1+ (1,0) [0|255] "" Gateway
+
 BO_ 512 Motor_Status: 8 Motor
  SG_ motor_speed : 0|16@1- (1,-10000) [-10000|10000] "rpm" Gateway,BMS
  SG_ motor_torque : 16|16@1- (0.1,0) [-500|500] "Nm" Gateway,BMS
@@ -148,6 +163,7 @@ BA_ "GenMsgCycleTime" BO_ 257 1000;
 BA_ "GenMsgCycleTime" BO_ 258 500;
 BA_ "GenMsgCycleTime" BO_ 259 200;
 BA_ "GenMsgCycleTime" BO_ 260 100;
+BA_ "GenMsgCycleTime" BO_ 261 250;
 BA_ "GenMsgCycleTime" BO_ 512 50;
 BA_ "GenMsgCycleTime" BO_ 513 100;
 BA_ "GenMsgCycleTime" BO_ 514 20;
@@ -160,6 +176,17 @@ BA_ "GenMsgCycleTime" BO_ 2632220928 500;
 
 VAL_ 260 bms_state 0 "INIT" 1 "IDLE" 2 "PRECHARGE" 3 "READY" 4 "CHARGING" 5 "FAULT" 6 "EMERGENCY";
 VAL_ 260 contactor_state 0 "OPEN" 1 "PRECHARGE" 2 "CLOSED" 3 "FAULT";
+VAL_ 261 cell_group 0 "VOLTAGES_1_4" 1 "TEMPERATURES_1_4" 2 "BALANCING";
+VAL_ 257 cell_01_voltage 4095 "SNA";
+VAL_ 257 cell_02_voltage 4095 "SNA";
+VAL_ 257 cell_03_voltage 4095 "SNA";
+VAL_ 257 cell_04_voltage 4095 "SNA";
+VAL_ 257 cell_05_voltage 4095 "SNA";
+VAL_ 261 cell_a_voltage 4095 "SNA";
+VAL_ 261 cell_b_voltage 4095 "SNA";
+VAL_ 261 cell_c_voltage 4095 "SNA";
+VAL_ 261 cell_d_voltage 4095 "SNA";
+VAL_ 261 balancing_target_voltage 4095 "SNA";
 VAL_ 512 motor_state 0 "OFF" 1 "IDLE" 2 "READY" 3 "RUNNING" 4 "REGEN" 5 "FAULT";
 VAL_ 514 direction 0 "NEUTRAL" 1 "FORWARD" 2 "REVERSE";
 VAL_ 768 gear_position 0 "PARK" 1 "REVERSE" 2 "NEUTRAL" 3 "DRIVE" 4 "LOW" 5 "SPORT";

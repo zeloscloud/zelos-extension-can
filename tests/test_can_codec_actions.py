@@ -20,13 +20,17 @@ import pytest
 from zelos_extension_can.codec import (
     CanCodec,
     _derive_bus_status,
+    _describe_dbc_signal,
     _encode_dbc,
+    _hash_dbc_file,
     _parse_can_id,
     _parse_data_hex,
     _parse_mux,
     _parse_signals_json,
+    _scale_precision,
     _task_id,
     _validate_id_range,
+    _value_table_for_trace,
 )
 
 DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
@@ -187,16 +191,38 @@ class TestStopPeriodic:
 
 
 class TestListMessages:
-    def test_returns_dbc_catalog(self, codec):
+    """list_messages is the lightweight summary call — names + identifiers
+    only. Per-signal detail moved to describe_message (see below)."""
+
+    def test_returns_summary_catalog(self, codec):
         result = codec.list_messages()
         assert result["bus"] == "busA"
         assert result["dbc_name"] == "test.dbc"
         names = {m["name"] for m in result["messages"]}
         assert {"DUT_Status", "DUT_Command", "DUT_Logging"} <= names
         status = next(m for m in result["messages"] if m["name"] == "DUT_Status")
-        signal_names = {s["name"] for s in status["signals"]}
+        # Summary shape — identifiers only.
+        assert set(status.keys()) == {"name", "can_id", "is_extended", "dlc", "cycle_time_ms"}
+        assert "signals" not in status
+
+
+class TestDescribeMessage:
+    def test_returns_full_signal_detail(self, codec):
+        result = codec.describe_message(message="DUT_Status")
+        assert result["bus"] == "busA"
+        assert result["dbc_name"] == "test.dbc"
+        msg = result["message"]
+        assert msg["name"] == "DUT_Status"
+        # Summary fields are still here, plus signals.
+        for key in ("can_id", "is_extended", "dlc", "cycle_time_ms", "signals"):
+            assert key in msg
+        signal_names = {s["name"] for s in msg["signals"]}
         assert "state" in signal_names
         assert "SOC_signal" in signal_names
+
+    def test_unknown_message_raises(self, codec):
+        with pytest.raises(ValueError, match="unknown DBC message"):
+            codec.describe_message(message="DoesNotExist")
 
 
 class TestSendMessage:
@@ -258,6 +284,233 @@ class TestGetTxState:
         started = codec.start_periodic_raw(can_id="0x300", data="aa", period_ms=50)
         tids = {p["task_id"] for p in codec.get_tx_state()["bus"]["periodics"]}
         assert started["task_id"] in tids
+
+    def test_snapshot_exposes_dbc_hash(self, codec):
+        # Hash is a 16-char hex string so the webapp can key its
+        # list_messages cache on it. Stable across snapshots of the same load.
+        h1 = codec.get_tx_state()["bus"]["dbc"]["hash"]
+        h2 = codec.get_tx_state()["bus"]["dbc"]["hash"]
+        assert isinstance(h1, str) and len(h1) == 16
+        assert h1 == h2
+
+
+class TestDescribeDbcSignalValueTable:
+    """value_table keys must be in PHYSICAL units, not raw — so a 12-bit
+    unsigned signal with scale 0.001 and a VAL_ entry for raw 4095 surfaces
+    as `{"4.095": "SNA"}` to the webapp, matching what the form sends."""
+
+    def test_integer_scaled_signal_keeps_int_keys(self, test_dbc):
+        # DUT_Command.state_request is integer-scaled — keys stay as raw ints.
+        sig = next(s for s in test_dbc.get_message_by_name("DUT_Command").signals if s.choices)
+        out = _describe_dbc_signal(sig)
+        for k in out["value_table"]:
+            assert k == str(int(k)), f"expected int key, got {k!r}"
+
+    def test_floating_scaled_signal_uses_physical_keys(self, tmp_path):
+        # Mini DBC with a scaled signal + VAL_ entry on raw 4095.
+        dbc = tmp_path / "scaled.dbc"
+        dbc.write_text(
+            'VERSION ""\nNS_:\nBS_:\nBU_:\n'
+            "BO_ 100 Cell: 8 BMS\n"
+            ' SG_ voltage : 0|12@1+ (0.001,0) [0|5] "V" Receiver\n'
+            'VAL_ 100 voltage 4095 "SNA";\n'
+        )
+        db = cantools.database.load_file(str(dbc))
+        sig = next(s for s in db.get_message_by_name("Cell").signals if s.name == "voltage")
+        out = _describe_dbc_signal(sig)
+        assert out["value_table"] == {"4.095": "SNA"}
+
+    def test_offset_signal_uses_physical_keys(self, tmp_path):
+        # Temp signal with offset -40 — raw 215 → physical 175 °C SNA.
+        dbc = tmp_path / "offset.dbc"
+        dbc.write_text(
+            'VERSION ""\nNS_:\nBS_:\nBU_:\n'
+            "BO_ 100 Pack: 8 BMS\n"
+            ' SG_ temp : 0|8@1+ (1,-40) [-40|125] "C" Receiver\n'
+            'VAL_ 100 temp 215 "SNA";\n'
+        )
+        db = cantools.database.load_file(str(dbc))
+        sig = next(s for s in db.get_message_by_name("Pack").signals if s.name == "temp")
+        out = _describe_dbc_signal(sig)
+        assert out["value_table"] == {"175": "SNA"}
+
+
+class TestScalePrecision:
+    """Decimal places implied by a signal's scale — used to trim fp64 noise
+    from decoded values so they string-match value_table keys."""
+
+    def test_thousandths_scale(self):
+        assert _scale_precision(0.001) == 3
+
+    def test_tenths_scale(self):
+        assert _scale_precision(0.1) == 1
+
+    def test_unity_scale(self):
+        assert _scale_precision(1.0) == 0
+
+    def test_integer_scale(self):
+        # scale >= 1 has no fractional precision to preserve.
+        assert _scale_precision(10.0) == 0
+        assert _scale_precision(100.0) == 0
+
+    def test_zero_or_negative_scale_defensive(self):
+        assert _scale_precision(0.0) == 0
+        assert _scale_precision(-0.1) == 0
+
+    def test_tiny_scale(self):
+        assert _scale_precision(1e-6) == 6
+
+
+class TestConvertSignalsRounding:
+    """End-to-end: a scaled signal whose decoded value lands at fp64 noise
+    (e.g. 1234 * 0.001 = 1.2340000000000002) should be rounded to the
+    scale's precision so the trace shows a clean number AND the webapp's
+    value_table lookup hits."""
+
+    def test_thousandths_rounding_clears_fp_noise(self, codec, test_dbc):
+        msg = test_dbc.get_message_by_name("DUT_Logging")
+        # Fabricate decoded dict with deliberate fp noise
+        decoded = {"logging_mux": 0, "logging_signal0": 1.2340000000000002}
+        out = codec._convert_signals(msg, decoded, base_only=False, mux_value=0)
+        # logging_signal0 has scale=1 in test.dbc → no rounding, value passes through
+        assert out["logging_signal0"] == 1.2340000000000002
+
+    def test_rounding_applied_for_scaled_signal(self, codec):
+        # Use BMS_CellVoltages-style synthetic via local helper
+        import cantools
+
+        db = cantools.database.load_string(
+            'VERSION ""\nNS_:\nBS_:\nBU_:\n'
+            "BO_ 100 X: 8 BMS\n"
+            ' SG_ v : 0|12@1+ (0.001,0) [0|5] "V" Receiver\n'
+        )
+        msg = db.get_message_by_name("X")
+        noisy = 1.2340000000000002
+        out = codec._convert_signals(msg, {"v": noisy}, base_only=False, mux_value=None)
+        # scale=0.001 → 3 decimal places → exact 1.234
+        assert out["v"] == 1.234
+
+
+class TestScaledSignalPrecisionEndToEnd:
+    """Pins the 4.095 -> 4.09499979 regression. fp32 can't faithfully store
+    decimal-like values; a 12-bit signal with scale 0.001 storing 4.095 as
+    fp32 surfaces 4.094999790191650... ("4.09499979" when formatted), which
+    breaks the value-table string lookup and gives users misleading trace
+    values. The fix is Float64 trace storage for scaled signals.
+
+    Splits the precision audit by stack layer so a future regression points
+    at the exact layer that broke."""
+
+    DBC_SOURCE = (
+        'VERSION ""\nNS_:\nBS_:\nBU_:\n'
+        "BO_ 100 X: 8 BMS\n"
+        ' SG_ v : 0|12@1+ (0.001,0) [0|5] "V" Receiver\n'
+        'VAL_ 100 v 4095 "SNA";\n'
+    )
+
+    def test_tx_pipeline_preserves_4_095(self):
+        # Layer 1: JSON encode/decode (webapp -> agent) round-trips 4.095 cleanly.
+        # JS's JSON.stringify uses "shortest unambiguous" formatting, Python's
+        # json.loads round-trips fp64. So 4.095 in -> 4.095 out.
+        roundtripped = json.loads(json.dumps({"v": 4.095}))
+        assert roundtripped["v"] == 4.095
+
+    def test_tx_cantools_encode_lands_on_raw_4095(self):
+        # Layer 2: cantools encode of physical 4.095 (scale=0.001) produces
+        # raw int 4095 on the wire. No precision loss here either.
+        db = cantools.database.load_string(self.DBC_SOURCE)
+        msg = db.get_message_by_name("X")
+        raw = msg.encode({"v": 4.095}, strict=False)
+        # Raw 4095 = 0x0FFF, little-endian in first 12 bits: byte0=0xFF, byte1=0x0F
+        assert raw[0] == 0xFF
+        assert raw[1] & 0x0F == 0x0F
+
+    def test_rx_cantools_decode_returns_fp64_4_095(self):
+        # Layer 3: cantools decode of raw 4095 returns a Python float that
+        # round-trips to "4.095" via repr/.10g. The fp64 representation is
+        # 4.0949999999999998 but format(4.095, '.10g') == '4.095'.
+        db = cantools.database.load_string(self.DBC_SOURCE)
+        msg = db.get_message_by_name("X")
+        raw = bytes([0xFF, 0x0F, 0, 0, 0, 0, 0, 0])
+        decoded = msg.decode(raw, decode_choices=False, scaling=True)
+        assert format(decoded["v"], ".10g") == "4.095"
+
+    def test_rx_convert_signals_rounds_to_scale_precision(self, codec):
+        # Layer 4: _convert_signals rounds to scale's precision so the value
+        # we emit to the trace is a clean fp64 4.095 (not 4.0949999...) and
+        # the string-keyed value-table lookup in the UI succeeds.
+        db = cantools.database.load_string(self.DBC_SOURCE)
+        msg = db.get_message_by_name("X")
+        out = codec._convert_signals(msg, {"v": 4.094999999999999}, base_only=False, mux_value=None)
+        assert out["v"] == 4.095
+        # Round-trip-safe string representation.
+        assert format(out["v"], ".10g") == "4.095"
+
+    def test_rx_trace_data_type_is_float64_for_scaled_signals(self):
+        # Layer 5: schema setup picks Float64, NOT Float32. fp32's closest
+        # rep of 4.095 is 4.0949997901916504 — formatting that with .10g
+        # gives "4.09499979" (the user-visible regression). Float64 carries
+        # enough decimal precision that the formatter rounds back to "4.095".
+        db = cantools.database.load_string(self.DBC_SOURCE)
+        sig = db.get_message_by_name("X").signals[0]
+        # Pin the exact type so a future "smallest-type" optimization can't
+        # silently regress this back to Float32.
+        import zelos_sdk
+
+        from zelos_extension_can.utils.schema_utils import cantools_signal_to_trace_type
+
+        assert cantools_signal_to_trace_type(sig) == zelos_sdk.DataType.Float64
+
+
+class TestValueTableForTrace:
+    """zelos-sdk's add_value_table requires the keys to match the type the
+    signal will be emitted as. Scaled signals are emitted as Float64; their
+    value table must be float-keyed. Enum signals (identity conversion) are
+    emitted as the smallest int that fits; their value table stays int-keyed."""
+
+    def test_int_keyed_for_identity_conversion(self, test_dbc):
+        sig = next(s for s in test_dbc.get_message_by_name("DUT_Command").signals if s.choices)
+        out = _value_table_for_trace(sig)
+        assert out is not None
+        for k in out:
+            assert isinstance(k, int), f"expected int key for identity-conv signal, got {type(k)}"
+
+    def test_float_keyed_for_scaled_signal(self, tmp_path):
+        dbc = tmp_path / "scaled.dbc"
+        dbc.write_text(
+            'VERSION ""\nNS_:\nBS_:\nBU_:\n'
+            "BO_ 100 X: 8 BMS\n"
+            ' SG_ v : 0|12@1+ (0.001,0) [0|5] "V" Receiver\n'
+            'VAL_ 100 v 4095 "SNA";\n'
+        )
+        db = cantools.database.load_file(str(dbc))
+        sig = db.get_message_by_name("X").signals[0]
+        out = _value_table_for_trace(sig)
+        assert out == {4.095: "SNA"}
+        # Float key must equal what the rounding path emits, so the SDK's
+        # lookup succeeds. Both are the same fp64 representation.
+        from zelos_extension_can.codec import _scale_precision
+
+        precision = _scale_precision(0.001)
+        emitted = round(4095 * 0.001, precision)
+        assert emitted in out  # dict lookup uses float equality
+
+
+class TestHashDbcFile:
+    def test_same_file_same_hash(self):
+        assert _hash_dbc_file(DBC_PATH) == _hash_dbc_file(DBC_PATH)
+
+    def test_different_contents_different_hash(self, tmp_path):
+        a = tmp_path / "a.dbc"
+        b = tmp_path / "b.dbc"
+        a.write_bytes(b'VERSION "a"\n')
+        b.write_bytes(b'VERSION "b"\n')
+        assert _hash_dbc_file(a) != _hash_dbc_file(b)
+
+    def test_returns_16_hex_chars(self):
+        h = _hash_dbc_file(DBC_PATH)
+        assert len(h) == 16
+        assert all(c in "0123456789abcdef" for c in h)
 
 
 class TestDeriveBusStatus:
