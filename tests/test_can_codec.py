@@ -160,15 +160,17 @@ class TestSchemaUtils:
     """Test DBC to SDK type mapping."""
 
     def test_float_signal_mapping(self, codec):
-        """Test float signal maps to Float32/Float64."""
-        # Use real signal from DBC
+        """Float and scaled signals always map to Float64. fp32 can't faithfully
+        store decimal-like physical values (a 12-bit scale=0.001 signal stores
+        4.095 as 4.09499979); Float64 has enough decimal precision to keep
+        value-table lookups string-matching."""
         msg = codec.db.get_message_by_name("DUT_Status")
         float_signal = msg.get_signal_by_name("float_signal")
 
         from zelos_sdk import DataType
 
         result = cantools_signal_to_trace_type(float_signal)
-        assert result == DataType.Float32
+        assert result == DataType.Float64
 
     def test_integer_signal_mapping(self, codec):
         """Test integer signal maps correctly."""

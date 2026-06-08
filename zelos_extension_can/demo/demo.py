@@ -209,6 +209,47 @@ async def run_demo_ev_simulation(
                         },
                     )
 
+                # BMS_CellDetail (250ms / iteration 5, rotates through 3 mux
+                # groups so a listener sees each variant ~once per 750 ms).
+                if iteration % 5 == 0:
+                    cell_group = (iteration // 5) % 3
+                    if cell_group == 0:
+                        send(
+                            db.get_message_by_name("BMS_CellDetail"),
+                            {
+                                "cell_group": 0,
+                                "cell_a_voltage": sim.cell_voltages[0],
+                                "cell_b_voltage": sim.cell_voltages[1],
+                                "cell_c_voltage": sim.cell_voltages[2],
+                                "cell_d_voltage": sim.cell_voltages[3],
+                                "frame_counter": iteration & 0xFF,
+                            },
+                        )
+                    elif cell_group == 1:
+                        base = int(sim.pack_temp)
+                        send(
+                            db.get_message_by_name("BMS_CellDetail"),
+                            {
+                                "cell_group": 1,
+                                "cell_a_temp": base,
+                                "cell_b_temp": base + 1,
+                                "cell_c_temp": base - 1,
+                                "cell_d_temp": base + 2,
+                                "frame_counter": iteration & 0xFF,
+                            },
+                        )
+                    else:
+                        send(
+                            db.get_message_by_name("BMS_CellDetail"),
+                            {
+                                "cell_group": 2,
+                                "balancing_target_cell": 0,
+                                "balancing_target_voltage": min(sim.cell_voltages),
+                                "balancing_active_mask": 0,
+                                "frame_counter": iteration & 0xFF,
+                            },
+                        )
+
                 # Motor_Status (50ms / iteration 1)
                 send(
                     db.get_message_by_name("Motor_Status"),

@@ -1,8 +1,10 @@
 """CAN bus codec with database decoding and transmission."""
 
 import asyncio
+import hashlib
 import json
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -102,18 +104,42 @@ def _encode_dbc(
         mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
         if mux_signal is not None and mux_signal.name not in payload:
             payload[mux_signal.name] = mux_value
-    return bytes(dbc_msg.encode(payload))
+    # strict=False lets authors send sentinel / SNA values that fall outside
+    # the DBC's declared [min|max] but still fit the signal's bit field
+    # (common pattern: raw 0xFF on an 8-bit field to mark "signal not
+    # available"). The bit-field range itself is still enforced by cantools;
+    # the webapp does an additional pre-flight check against the bit-field
+    # range so out-of-bits values are caught before they reach us.
+    return bytes(dbc_msg.encode(payload, strict=False))
 
 
-def _describe_dbc_message(msg: cantools.database.can.Message) -> dict[str, Any]:
+def _describe_dbc_message_summary(msg: cantools.database.can.Message) -> dict[str, Any]:
+    """Lightweight identifier-only shape returned by list_messages. Drops the
+    signal array so the catalog fetch stays cheap even on multi-thousand-
+    message DBCs. The webapp fetches per-message detail via describe_message
+    when a specific message is picked."""
     return {
         "name": msg.name,
         "can_id": int(msg.frame_id),
         "is_extended": bool(msg.is_extended_frame),
         "dlc": int(msg.length),
         "cycle_time_ms": msg.cycle_time,
+    }
+
+
+def _describe_dbc_message(msg: cantools.database.can.Message) -> dict[str, Any]:
+    return {
+        **_describe_dbc_message_summary(msg),
         "signals": [_describe_dbc_signal(sig) for sig in msg.signals],
     }
+
+
+def _hash_dbc_file(path: str | Path) -> str:
+    """Cache-busting fingerprint for a DBC file. The webapp keys its
+    list_messages React Query by this so any post-reload change forces a
+    re-fetch. SHA1 truncated to 16 hex chars — collision risk is irrelevant
+    here, the field is purely a same-vs-different signal."""
+    return hashlib.sha1(Path(path).read_bytes()).hexdigest()[:16]
 
 
 def _derive_bus_status(running: bool, bus: Any) -> str:
@@ -141,23 +167,76 @@ def _derive_bus_status(running: bool, bus: Any) -> str:
 def _describe_dbc_signal(sig: cantools.database.can.Signal) -> dict[str, Any]:
     # JSON requires string dict keys, and the wire encoder rejects Decimal —
     # coerce scale/offset/min/max to float and value_table keys to str.
+    scale = float(sig.scale) if sig.scale is not None else 1.0
+    offset = float(sig.offset) if sig.offset is not None else 0.0
     return {
         "name": sig.name,
         "start_bit": int(sig.start),
         "length": int(sig.length),
         "byte_order": "little" if sig.byte_order == "little_endian" else "big",
         "is_signed": bool(sig.is_signed),
-        "scale": float(sig.scale) if sig.scale is not None else None,
-        "offset": float(sig.offset) if sig.offset is not None else None,
+        "scale": scale,
+        "offset": offset,
         "min": float(sig.minimum) if sig.minimum is not None else None,
         "max": float(sig.maximum) if sig.maximum is not None else None,
         "unit": sig.unit,
-        "value_table": {str(int(k)): str(v) for k, v in sig.choices.items()}
-        if sig.choices
-        else None,
+        "value_table": _physical_value_table(sig, scale, offset),
         "mux_indicator": bool(sig.is_multiplexer),
         "mux_value": int(sig.multiplexer_ids[0]) if sig.multiplexer_ids else None,
     }
+
+
+def _scale_precision(scale: float) -> int:
+    """Decimal places implied by a signal's scale. scale=0.001 → 3,
+    scale=0.1 → 1, scale=1 → 0, scale=10 → 0 (no fractional precision).
+    Used to trim fp64 noise out of decoded physical values so they
+    string-match the value_table keys produced by `_physical_value_table`
+    and so the trace shows the same precision the wire actually carries."""
+    if not scale or scale <= 0 or scale >= 1:
+        return 0
+    return max(0, -math.floor(math.log10(scale)))
+
+
+def _physical_value_table(
+    sig: cantools.database.can.Signal, scale: float, offset: float
+) -> dict[str, str] | None:
+    """JSON-wire form of the physical value table, used by describe_message.
+
+    See `_value_table_for_trace` for the in-process float/int dict form used
+    by zelos-sdk's `add_value_table`. Both must agree on the physical key so
+    a value emitted to the trace matches the value-table entry exactly."""
+    numeric = _value_table_for_trace(sig)
+    if numeric is None:
+        return None
+    return {format(k, ".10g") if isinstance(k, float) else str(k): v for k, v in numeric.items()}
+
+
+def _value_table_for_trace(
+    sig: cantools.database.can.Signal,
+) -> dict[int | float, str] | None:
+    """Build a value table keyed on the physical (scaled+offset) value, so
+    trace consumers' lookups match the values we actually emit.
+
+    DBC `VAL_` entries map RAW integer values to labels by convention. For
+    enum signals (scale=1, offset=0) the raw int IS the physical value, so
+    we use int keys. For scaled signals (e.g. cell_voltage with scale 0.001)
+    the physical value is float; we convert and round to the scale's
+    precision so the key matches the value `_convert_signals` will emit
+    (which is also `round(decoded, precision)`)."""
+    if not sig.choices:
+        return None
+    scale = float(sig.scale) if sig.scale is not None else 1.0
+    offset = float(sig.offset) if sig.offset is not None else 0.0
+    precision = _scale_precision(scale)
+    out: dict[int | float, str] = {}
+    for raw_int, label in sig.choices.items():
+        if scale == 1.0 and offset == 0.0:
+            out[int(raw_int)] = str(label)
+        else:
+            physical = int(raw_int) * scale + offset
+            key = round(physical, precision) if precision > 0 else physical
+            out[key] = str(label)
+    return out
 
 
 @dataclass(slots=True)
@@ -241,6 +320,11 @@ class CanCodec(can.Listener):
             logger.info("Loaded %d messages from database", len(self.db.messages))
         except Exception as e:
             raise ValueError(f"Failed to load database file: {e}") from e
+
+        # SHA1 of the file bytes, truncated for wire compactness. The webapp
+        # uses this as a cache key for list_messages — any change to the file
+        # (after a reload/restart) flips the hash and forces a re-fetch.
+        self.dbc_hash = _hash_dbc_file(database_path)
 
         # Determine trace source name (use exact bus_name for multi-bus)
         source_name = self.bus_name if self.bus_name else "can_codec"
@@ -660,7 +744,13 @@ class CanCodec(can.Listener):
                 self.metrics.unknown_messages += 1
                 return
 
-            decoded = dbc_msg.decode(msg.data)
+            # decode_choices=False so a value-table hit doesn't replace the
+            # scaled physical value with a NamedSignalValue wrapper that
+            # carries the raw int. The trace consistently sees the physical
+            # value (e.g. 4.095 V for a raw 4095 / scale 0.001 SNA reading);
+            # value-table label lookup is a UI concern, served by
+            # describe_message's physical-keyed value_table.
+            decoded = dbc_msg.decode(msg.data, decode_choices=False)
             self.metrics.messages_decoded += 1
 
             # Emit base signals (non-multiplexed signals + multiplexer signal if present)
@@ -719,8 +809,8 @@ class CanCodec(can.Listener):
             event = self.source.add_event(event_name, fields)
 
             for sig in base_signals:
-                if sig.choices:
-                    value_table = {int(k): str(v) for k, v in sig.choices.items()}
+                value_table = _value_table_for_trace(sig)
+                if value_table:
                     self.source.add_value_table(event_name, sig.name, value_table)
 
             self._events[cache_key] = event
@@ -778,8 +868,8 @@ class CanCodec(can.Listener):
             event = self.source.add_event(event_name, fields)
 
             for sig in mux_signals:
-                if sig.choices:
-                    value_table = {int(k): str(v) for k, v in sig.choices.items()}
+                value_table = _value_table_for_trace(sig)
+                if value_table:
                     self.source.add_value_table(event_name, sig.name, value_table)
 
             self._events[cache_key] = event
@@ -903,9 +993,20 @@ class CanCodec(can.Listener):
                 continue
 
             if isinstance(value, int | float):
-                signals[signal_name] = value
+                # Trim fp64 noise to scale precision so 1234*0.001 ==
+                # 1.2340000000000002 rounds to 1.234. Without this, the
+                # webapp's string-based value-table lookup misses entries
+                # like "1.234": "SNA", and the trace shows misleading
+                # sub-scale noise.
+                scale = float(signal_def.scale) if signal_def.scale is not None else 1.0
+                precision = _scale_precision(scale)
+                signals[signal_name] = round(value, precision) if precision > 0 else value
             else:
-                # NamedSignalValue - convert to integer
+                # Defensive fallback. With decode_choices=False set on the
+                # decode() call, cantools should never hand us a
+                # NamedSignalValue here — but if it does (cantools internals
+                # change), fall back to the raw int so we still emit
+                # *something* numeric to the trace.
                 signals[signal_name] = int(signal_def.conversion.choice_to_number(value))
 
         return signals
@@ -930,6 +1031,7 @@ class CanCodec(can.Listener):
                 "dbc": {
                     "path": str(db_path),
                     "name": db_path.name,
+                    "hash": self.dbc_hash,
                     "message_count": len(self.db.messages),
                 },
                 "metrics": {
@@ -943,13 +1045,33 @@ class CanCodec(can.Listener):
             },
         }
 
-    @action("List Messages", "DBC message + signal catalog for this bus (from the loaded DBC)")
+    @action(
+        "List Messages",
+        "DBC message summary list for this bus — names + identifiers only, no "
+        "per-signal metadata. Use describe_message to fetch a specific message's "
+        "full signal detail on demand.",
+    )
     def list_messages(self) -> dict[str, Any]:
         db_path = Path(self.database_file_path)
         return {
             "bus": self.bus_name or "can_codec",
             "dbc_name": db_path.name,
-            "messages": [_describe_dbc_message(msg) for msg in self.db.messages],
+            "messages": [_describe_dbc_message_summary(msg) for msg in self.db.messages],
+        }
+
+    @action(
+        "Describe Message",
+        "Full signal-level detail for a single DBC message (units, ranges, "
+        "value tables, mux structure).",
+    )
+    @action.text("message", title="DBC message name")
+    def describe_message(self, message: str) -> dict[str, Any]:
+        dbc_msg = self._resolve_dbc_message(message)
+        db_path = Path(self.database_file_path)
+        return {
+            "bus": self.bus_name or "can_codec",
+            "dbc_name": db_path.name,
+            "message": _describe_dbc_message(dbc_msg),
         }
 
     @action("Send Raw", "Send a one-shot raw CAN frame")
