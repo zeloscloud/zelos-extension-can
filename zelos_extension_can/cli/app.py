@@ -10,6 +10,7 @@ from pathlib import Path
 import zelos_sdk
 from zelos_sdk.extensions import load_config
 
+from .. import actions as can_actions
 from ..codec import CanCodec
 from .utils import setup_shutdown_handler
 
@@ -194,16 +195,23 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     codec_pairs = _create_codecs(config, demo_dbc_path)
     codecs = [codec for codec, _ in codec_pairs]
 
-    # Register one action surface per bus. Paths land as `can/<bus>/<action>`
-    # — the leading `can/` is the SDK service init name (init(name="can")), the
-    # bus segment is the codec's registration name, and methods on `CanCodec`
-    # decorated with `@action` provide the rest. Standalone CLI usage:
+    # Populate the shared codec registry that `actions.py` reads from. The
+    # action surface is a single global namespace — `can/send_message`,
+    # `can/get_tx_state`, etc. — with a `codec` parameter that selects which
+    # bus to operate on. CLI usage:
     #
-    #   zelos actions execute can/<bus>/send_raw --params '{"can_id":"0x100","data":"01 02"}'
+    #   zelos actions execute can/send_raw \
+    #       --params '{"codec":"busA","can_id":"0x100","data":"01 02"}'
     #
-    # Web apps discover buses by inspecting `actions.list()` keys.
-    for codec, action_name in codec_pairs:
-        zelos_sdk.actions_registry.register(codec, action_name)
+    # Web apps discover the bus list by calling `can/list_codecs`.
+    # Codec-name uniqueness is already enforced inside _create_codecs (multi-bus
+    # path) and trivially satisfied in the single-bus path.
+    for codec, codec_name in codec_pairs:
+        can_actions.CAN_CODECS[codec_name] = codec
+
+    # Register the actions module once. The `can/` prefix is supplied by
+    # `init(name="can", actions=True)` below.
+    can_actions.register_actions(zelos_sdk.actions_registry)
 
     # Initialize SDK
     zelos_sdk.init(name="can", log_level="info", actions=True)

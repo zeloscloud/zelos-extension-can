@@ -9,31 +9,17 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import IntEnum
-from importlib import metadata as _metadata
 from pathlib import Path
 from typing import Any
 
 import can
 import cantools
 import zelos_sdk
-from zelos_sdk.actions import action
 
 from .demo.demo import run_demo_ev_simulation
 from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
-
-# Marketplace-canonical identifier this extension self-declares in
-# `get_tx_state.extension.id`. Distinct from the `local.<name>` ID that
-# `zelos extensions install-local` assigns at install time.
-EXTENSION_ID = "zeloscloud.zelos-extension-can"
-
-
-def _extension_version() -> str:
-    try:
-        return _metadata.version("zelos-extension-can")
-    except _metadata.PackageNotFoundError:
-        return "unknown"
 
 
 # ─── Action-input parsers (module-level so tests hit them at the helper seam) ──
@@ -41,10 +27,7 @@ def _extension_version() -> str:
 
 def _parse_can_id(can_id: str) -> int:
     """Accept `0x100`, `100`, or hex without prefix; always parse as hex."""
-    s = can_id.strip()
-    if s.lower().startswith("0x"):
-        return int(s, 16)
-    return int(s, 16)
+    return int(can_id.strip(), 16)
 
 
 def _parse_data_hex(data: str) -> bytes:
@@ -495,8 +478,6 @@ class CanCodec(can.Listener):
         # Merge additional config_json (advanced interface-specific options)
         if "config_json" in self.config and self.config["config_json"]:
             try:
-                import json
-
                 additional_config = json.loads(self.config["config_json"])
                 logger.info("Merging additional config: %s", list(additional_config.keys()))
                 bus_config.update(additional_config)
@@ -1011,18 +992,20 @@ class CanCodec(can.Listener):
 
         return signals
 
-    # ─── Action surface (registered as can/<bus_name>/<method>) ────────────
+    # ─── Operations exposed by the free-floating actions module ────────────
+    #
+    # These methods are the implementation backing the global `can/<name>`
+    # action surface defined in `zelos_extension_can.actions`. They're kept as
+    # plain methods (no @action decorators) so `actions.py` can hold the
+    # decorator stack and `choices=_available_codecs` lives at module scope.
 
-    @action("Get TX State", "Stateless snapshot of this bus, its periodics, and bus-health metrics")
     def get_tx_state(self) -> dict[str, Any]:
+        # Extension id/version/state intentionally NOT included — that info
+        # is canonical at the `extensions.list` bridge surface and the webapp
+        # consumes it from there, not from this 1 Hz polled action.
         db_path = Path(self.database_file_path)
         return {
             "captured_at_unix_ms": int(time.time() * 1000),
-            "extension": {
-                "id": EXTENSION_ID,
-                "version": _extension_version(),
-                "state": "running" if self.running and self.bus else "stopped",
-            },
             "bus": {
                 "name": self.bus_name or "can_codec",
                 "interface": self.config.get("interface", "unknown"),
@@ -1045,12 +1028,6 @@ class CanCodec(can.Listener):
             },
         }
 
-    @action(
-        "List Messages",
-        "DBC message summary list for this bus — names + identifiers only, no "
-        "per-signal metadata. Use describe_message to fetch a specific message's "
-        "full signal detail on demand.",
-    )
     def list_messages(self) -> dict[str, Any]:
         db_path = Path(self.database_file_path)
         return {
@@ -1059,12 +1036,6 @@ class CanCodec(can.Listener):
             "messages": [_describe_dbc_message_summary(msg) for msg in self.db.messages],
         }
 
-    @action(
-        "Describe Message",
-        "Full signal-level detail for a single DBC message (units, ranges, "
-        "value tables, mux structure).",
-    )
-    @action.text("message", title="DBC message name")
     def describe_message(self, message: str) -> dict[str, Any]:
         dbc_msg = self._resolve_dbc_message(message)
         db_path = Path(self.database_file_path)
@@ -1074,15 +1045,6 @@ class CanCodec(can.Listener):
             "message": _describe_dbc_message(dbc_msg),
         }
 
-    @action("Send Raw", "Send a one-shot raw CAN frame")
-    @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
-    @action.text(
-        "data", title="Data (hex bytes)", placeholder="01 02 03 04", required=False, default=""
-    )
-    @action.boolean(
-        "is_extended", title="Extended ID (29-bit)", required=False, default=False, widget="toggle"
-    )
-    @action.boolean("is_fd", title="CAN FD", required=False, default=False, widget="toggle")
     def send_raw(
         self,
         can_id: str,
@@ -1110,16 +1072,6 @@ class CanCodec(can.Listener):
             "is_fd": is_fd,
         }
 
-    @action("Start Periodic Raw", "Start raw periodic transmission. Returns {task_id, replaced}.")
-    @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
-    @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04")
-    @action.number(
-        "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100
-    )
-    @action.boolean(
-        "is_extended", title="Extended ID", required=False, default=False, widget="toggle"
-    )
-    @action.boolean("is_fd", title="CAN FD", required=False, default=False, widget="toggle")
     def start_periodic_raw(
         self,
         can_id: str,
@@ -1154,10 +1106,6 @@ class CanCodec(can.Listener):
         }
         return {"task_id": tid, "replaced": replaced}
 
-    @action("Send Message", "Send a one-shot DBC-encoded message")
-    @action.text("message", title="DBC message name")
-    @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
-    @action.text("mux", title="Multiplexer (optional)", required=False, default="")
     def send_message(self, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
         self._require_running()
         signals = _parse_signals_json(signals_json)
@@ -1179,14 +1127,6 @@ class CanCodec(can.Listener):
             "mux": mux_value,
         }
 
-    @action(
-        "Encode Preview",
-        "Encode a DBC message without transmitting. Returns the bytes "
-        "that send_message would emit.",
-    )
-    @action.text("message", title="DBC message name")
-    @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
-    @action.text("mux", title="Multiplexer (optional)", required=False, default="")
     def encode_preview(self, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
         signals = _parse_signals_json(signals_json)
         dbc_msg = self._resolve_dbc_message(message)
@@ -1201,16 +1141,6 @@ class CanCodec(can.Listener):
             "mux": mux_value,
         }
 
-    @action(
-        "Start Periodic Message",
-        "Start DBC-encoded periodic transmission. Returns {task_id, replaced}.",
-    )
-    @action.text("message", title="DBC message name")
-    @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
-    @action.number(
-        "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100
-    )
-    @action.text("mux", title="Multiplexer (optional)", required=False, default="")
     def start_periodic_message(
         self,
         message: str,
@@ -1246,8 +1176,6 @@ class CanCodec(can.Listener):
         }
         return {"task_id": tid, "replaced": replaced}
 
-    @action("Stop Periodic", "Stop a periodic task by its stable task_id (from start_periodic_*)")
-    @action.text("task_id", title="Task ID")
     def stop_periodic(self, task_id: str) -> dict[str, Any]:
         stopped = self._stop_slot_if_present(task_id)
         return {"task_id": task_id, "stopped": stopped}
@@ -1291,260 +1219,3 @@ class CanCodec(can.Listener):
             self.metrics.tx_errors += 1
             bus_name = self.bus_name or "can_codec"
             raise RuntimeError(f"send failed on bus '{bus_name}': {e}") from e
-
-    @action("Convert Trace File", "Convert CAN log to Zelos trace format")
-    @action.text(
-        "input_path",
-        title="Input File Path",
-        description="Path to CAN log file (.asc, .blf, .trc, etc.)",
-        widget="file-picker",
-    )
-    @action.text(
-        "output_path",
-        required=False,
-        default="",
-        title="Output File Path",
-        description="Output .trz file path (optional, defaults to input name with .trz)",
-        placeholder="e.g., /path/to/output.trz",
-    )
-    @action.text(
-        "database_path",
-        required=False,
-        default="",
-        title="CAN Database File (.dbc)",
-        description="Override database file (optional, defaults to extension's configured file)",
-        placeholder="Leave empty to use extension's database",
-        widget="file-picker",
-    )
-    @action.boolean(
-        "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
-    )
-    @action.boolean(
-        "emit_all_schemas",
-        required=False,
-        default=True,
-        title="Emit all schemas",
-        description="Emit all schemas before processing. "
-        "Disable for faster startup with large databases.",
-        widget="toggle",
-    )
-    def convert_trace_file(
-        self,
-        input_path: str,
-        output_path: str = "",
-        database_path: str = "",
-        overwrite: bool = False,
-        emit_all_schemas: bool = True,
-    ) -> dict[str, Any]:
-        """Convert CAN trace file to Zelos format using CAN database file.
-
-        :param input_path: Path to CAN log file
-        :param output_path: Output .trz file path (optional)
-        :param database_path: Database file path (.dbc, .arxml, etc.) - defaults to extension's file
-        :param overwrite: Overwrite existing output file
-        :param emit_all_schemas: Pre-generate all schemas before processing
-        :return: Conversion result with statistics
-        """
-        from pathlib import Path
-
-        from .converter import convert_can_trace
-
-        try:
-            # Validate input path
-            input_file = Path(input_path).expanduser().resolve()
-            if not input_file.exists():
-                return {
-                    "status": "error",
-                    "message": f"Input file not found: {input_file}",
-                }
-
-            # Determine database file to use (parameter override or extension's configured file)
-            if database_path:
-                # User provided a database file path - handle it
-                database_file = Path(database_path).expanduser().resolve()
-                if not database_file.exists():
-                    return {
-                        "status": "error",
-                        "message": f"CAN database file not found: {database_file}",
-                    }
-                logger.info("Using user-specified database: %s", database_file)
-            else:
-                # Use extension's already-loaded database file path (already resolved)
-                if not hasattr(self, "database_file_path") or not self.database_file_path:
-                    return {
-                        "status": "error",
-                        "message": "No database file specified and extension has none configured",
-                    }
-                database_file = Path(self.database_file_path)
-                logger.info("Using extension's configured database: %s", database_file)
-
-            # Determine output path
-            if not output_path:
-                output_path = str(input_file.with_suffix(".trz"))
-
-            output_file = Path(output_path).expanduser().resolve()
-
-            # Ensure output always has .trz extension
-            if output_file.suffix.lower() != ".trz":
-                output_file = output_file.with_suffix(".trz")
-
-            # Safety check: prevent overwriting input file
-            if output_file == input_file:
-                return {
-                    "status": "error",
-                    "message": f"Output file cannot be the same as input file: {input_file}",
-                }
-
-            # Check if output exists
-            if output_file.exists():
-                if overwrite:
-                    logger.info("Removing existing file: %s", output_file)
-                    output_file.unlink()
-                else:
-                    return {
-                        "status": "error",
-                        "message": f"Output file '{output_file}' already exists. "
-                        "Enable 'Overwrite if exists' to replace it.",
-                    }
-
-            # Perform conversion
-            logger.info(
-                "Converting %s -> %s using database: %s", input_file, output_file, database_file
-            )
-            stats = convert_can_trace(
-                input_file,
-                database_file,
-                output_file,
-                emit_schemas_on_init=emit_all_schemas,
-            )
-
-            return {
-                "status": "success",
-                "input_file": str(input_file),
-                "database_file": str(database_file),
-                "output_file": str(output_file),
-                **stats.to_dict(),
-            }
-
-        except FileNotFoundError as e:
-            return {"status": "error", "message": f"File not found: {e}"}
-        except ValueError as e:
-            return {"status": "error", "message": f"Invalid input: {e}"}
-        except ImportError as e:
-            return {"status": "error", "message": f"Missing dependency: {e}"}
-        except Exception as e:
-            logger.exception("Conversion failed")
-            return {"status": "error", "message": f"Conversion failed: {e}"}
-
-    @action("Export Trace to Log", "Export raw CAN frames from TRZ to candump log format")
-    @action.text(
-        "input_path",
-        title="Input TRZ File",
-        description="Path to Zelos trace file (.trz) with raw CAN frames",
-        widget="file-picker",
-    )
-    @action.text(
-        "output_path",
-        required=False,
-        default="",
-        title="Output Log File",
-        description="Output .log file path (optional, defaults to input name with .log)",
-        placeholder="e.g., /path/to/output.log",
-    )
-    @action.boolean(
-        "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
-    )
-    def export_trace_to_log(
-        self,
-        input_path: str,
-        output_path: str = "",
-        overwrite: bool = False,
-    ) -> dict[str, Any]:
-        """Export raw CAN frames from TRZ trace to candump log format.
-
-        This extracts raw CAN frames from a Zelos trace file and writes them
-        in candump log format (.log), which can be replayed or re-converted
-        with a different DBC file.
-
-        Requirements: The source trace must have been recorded with
-        'Log Raw CAN Frames' enabled.
-
-        :param input_path: Path to TRZ trace file
-        :param output_path: Output .log file path (optional)
-        :param overwrite: Overwrite existing output file
-        :return: Export result with statistics
-        """
-        from pathlib import Path
-
-        from .cli.export import export_to_candump
-
-        try:
-            # Validate input path
-            input_file = Path(input_path).expanduser().resolve()
-            if not input_file.exists():
-                return {
-                    "status": "error",
-                    "message": f"Input file not found: {input_file}",
-                }
-
-            if input_file.suffix.lower() != ".trz":
-                return {
-                    "status": "error",
-                    "message": f"Input file must be a .trz file: {input_file}",
-                }
-
-            # Determine output path
-            if not output_path:
-                output_path = str(input_file.with_suffix(".log"))
-
-            output_file = Path(output_path).expanduser().resolve()
-
-            # Ensure output always has .log extension
-            if output_file.suffix.lower() != ".log":
-                output_file = output_file.with_suffix(".log")
-
-            # Safety check: prevent overwriting input file
-            if output_file == input_file:
-                return {
-                    "status": "error",
-                    "message": f"Output file cannot be the same as input file: {input_file}",
-                }
-
-            # Check if output exists
-            if output_file.exists():
-                if overwrite:
-                    logger.info("Removing existing file: %s", output_file)
-                    output_file.unlink()
-                else:
-                    return {
-                        "status": "error",
-                        "message": f"Output file '{output_file}' already exists. "
-                        "Enable 'Overwrite if exists' to replace it.",
-                    }
-
-            # Perform export
-            logger.info("Exporting %s -> %s", input_file, output_file)
-            stats = export_to_candump(input_file, output_file)
-
-            if stats["frame_count"] == 0:
-                return {
-                    "status": "warning",
-                    "message": "No raw CAN frames found in trace. "
-                    "Ensure 'Log Raw CAN Frames' was enabled when recording.",
-                    "input_file": str(input_file),
-                    "sources_found": stats["sources_found"],
-                }
-
-            return {
-                "status": "success",
-                "input_file": str(input_file),
-                "output_file": str(output_file),
-                "frame_count": stats["frame_count"],
-                "sources_exported": stats["sources_exported"],
-            }
-
-        except FileNotFoundError as e:
-            return {"status": "error", "message": f"File not found: {e}"}
-        except Exception as e:
-            logger.exception("Export failed")
-            return {"status": "error", "message": f"Export failed: {e}"}

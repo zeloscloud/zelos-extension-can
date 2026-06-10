@@ -1,10 +1,17 @@
-"""Unit tests for the CAN codec's action surface.
+"""Unit tests for the CAN codec's operations (the methods that back the
+free-floating action surface in ``zelos_extension_can.actions``).
 
-Each registered codec exposes its actions under ``can/<bus_name>/<method>`` on
-the agent. These tests exercise the methods directly on a ``CanCodec`` instance
-with a mocked python-can bus, covering raw + DBC send, duplicate-replace on
-periodics, multi-bus isolation (two codecs share nothing), DBC encode parity
-vs cantools, and the list_messages catalog shape.
+The on-wire action surface is a single global namespace:
+
+    can/list_codecs
+    can/get_tx_state           (codec=<bus>)
+    can/send_message           (codec=<bus>, message=..., signals_json=..., mux=...)
+    ...
+
+These tests exercise the methods directly on a ``CanCodec`` instance with a
+mocked python-can bus — that's the implementation layer the free functions in
+``actions.py`` delegate to. Round-trip coverage of the actions module itself
+lives in ``test_actions.py``.
 """
 
 from __future__ import annotations
@@ -263,8 +270,10 @@ class TestStartPeriodicMessage:
 class TestGetTxState:
     def test_snapshot_shape_matches_wire_contract(self, codec):
         snap = codec.get_tx_state()
-        assert set(snap.keys()) >= {"captured_at_unix_ms", "extension", "bus"}
-        assert snap["extension"]["id"] == "zeloscloud.zelos-extension-can"
+        # extension id/version/state intentionally NOT in this snapshot —
+        # that info is canonical at extensions.list.
+        assert set(snap.keys()) >= {"captured_at_unix_ms", "bus"}
+        assert "extension" not in snap
         bus = snap["bus"]
         assert bus["name"] == "busA"
         assert bus["status"] == "active"
