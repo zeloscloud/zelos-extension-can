@@ -15,8 +15,9 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface type (e.g. Linux: socketcan, macOS/Windows: pcan)",
+            "description": "CAN interface type. zelos-socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan is the python-can implementation. macOS/Windows: pcan/kvaser/vector.",
             "enum": [
+              "zelos-socketcan",
               "demo",
               "virtual",
               "socketcan",
@@ -104,7 +105,8 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "socketcan"
+                      "socketcan",
+                      "zelos-socketcan"
                     ]
                   },
                   "channel": {

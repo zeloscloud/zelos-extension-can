@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -270,6 +271,15 @@ class CanCodec(can.Listener):
         self.last_message_time = time.time()
         self.start_time = time.time()
 
+        # zelos-socketcan runs the full recv -> DBC decode -> trace pipeline in
+        # Rust (zelos_can.CanCodec): no python-can Notifier, no cantools, and no
+        # per-frame Python on RX. self._native holds that codec while running.
+        # TX actions still go through self.bus (a python-can compat bus on the
+        # same channel) so the bus-based action layer below is reused as-is.
+        self._use_native = config.get("interface") == "zelos-socketcan"
+        self._native: Any = None
+        self._native_metrics: dict[str, int] | None = None
+
         # Timestamp handling - use enum for fast comparison
         timestamp_mode_str = config.get("timestamp_mode", "auto").upper()
         self.timestamp_mode = TimestampMode[timestamp_mode_str]
@@ -326,19 +336,26 @@ class CanCodec(can.Listener):
             else:
                 self.raw_source = zelos_sdk.TraceSource(raw_source_name)
 
-            self.raw_event = self.raw_source.add_event(
-                "messages",
-                [
-                    zelos_sdk.TraceEventFieldMetadata(
-                        name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
-                    ),
-                    zelos_sdk.TraceEventFieldMetadata(
-                        name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
-                    ),
-                    zelos_sdk.TraceEventFieldMetadata(
-                        name="data", data_type=zelos_sdk.DataType.Binary, unit=None
-                    ),
-                ],
+            # On the native path the Rust codec owns the raw-frame schema and
+            # emit; create the TraceSource (so it lands in the right namespace
+            # and is handed to the codec) but don't register an event here.
+            self.raw_event = (
+                None
+                if self._use_native
+                else self.raw_source.add_event(
+                    "messages",
+                    [
+                        zelos_sdk.TraceEventFieldMetadata(
+                            name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
+                        ),
+                        zelos_sdk.TraceEventFieldMetadata(
+                            name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
+                        ),
+                        zelos_sdk.TraceEventFieldMetadata(
+                            name="data", data_type=zelos_sdk.DataType.Binary, unit=None
+                        ),
+                    ],
+                )
             )
         else:
             self.raw_source = None
@@ -361,7 +378,9 @@ class CanCodec(can.Listener):
                     "access via message ID instead"
                 )
 
-        if self.emit_schemas_on_init:
+        # On the native path the Rust codec generates/emits schemas itself
+        # (gated by its own emit_schemas_on_init); don't double-register here.
+        if self.emit_schemas_on_init and not self._use_native:
             self._generate_all_schemas()
             logger.info("Generated %d event schemas from database", len(self._events))
         else:
@@ -450,6 +469,10 @@ class CanCodec(can.Listener):
         wall_clock_timestamp = hw_timestamp + self.hw_timestamp_offset
         return int(wall_clock_timestamp * 1e9)
 
+    # Extension timestamp modes -> zelos_can.CanCodec modes. "absolute" maps to
+    # "hardware" (kernel SO_TIMESTAMPNS, wall-clock on SocketCAN).
+    _NATIVE_TIMESTAMP_MODE = {"AUTO": "auto", "ABSOLUTE": "hardware", "IGNORE": "ignore"}
+
     def start(self) -> None:
         """Initialize CAN bus connection with retry logic."""
         bus_id = f"[{self.bus_name}] " if self.bus_name else ""
@@ -457,6 +480,17 @@ class CanCodec(can.Listener):
             f"{bus_id}Starting CAN bus: interface={self.config['interface']}, "
             f"channel={self.config['channel']}"
         )
+
+        if self.config["interface"] == "zelos-socketcan" and sys.platform != "linux":
+            raise can.CanInterfaceNotImplementedError(
+                "The 'zelos-socketcan' interface is Linux-only (it wraps the Rust "
+                "zelos-can SocketCAN bus). Use 'socketcan' on Linux, or 'pcan'/"
+                "'kvaser'/'vector' on macOS/Windows."
+            )
+
+        if self._use_native:
+            self._start_native()
+            return
 
         bus_config = {
             "interface": self.config["interface"],
@@ -499,6 +533,44 @@ class CanCodec(can.Listener):
                 logger.warning("Bus init failed (attempt %d/%d): %s", attempt + 1, max_retries, e)
                 time.sleep(1)
 
+    def _start_native(self) -> None:
+        """Start the Rust-first pipeline for zelos-socketcan.
+
+        zelos_can.CanCodec owns recv -> DBC decode -> trace entirely in Rust
+        (no python-can Notifier, no cantools, no per-frame Python) and begins
+        receiving on construction. A python-can compat bus is opened on the
+        same channel purely for the TX action layer; it is never polled for RX,
+        and TX frames are still traced because the Rust RX socket receives them
+        via local loopback.
+        """
+        import zelos_can
+
+        source_name = self.bus_name if self.bus_name else "can_codec"
+        kwargs: dict[str, Any] = {
+            "database_file": self.database_file_path,
+            "source_name": source_name,
+            "source": self.source,
+            "channel": self.config["channel"],
+            "log_raw_frames": self.log_raw_frames,
+            "emit_schemas_on_init": self.emit_schemas_on_init,
+            "timestamp_mode": self._NATIVE_TIMESTAMP_MODE.get(self.timestamp_mode.name, "auto"),
+            "fd": self.fd_mode,
+        }
+        if self.log_raw_frames:
+            kwargs["raw_source"] = self.raw_source
+        if self.config.get("rcvbuf_size") is not None:
+            kwargs["rcvbuf_size"] = self.config["rcvbuf_size"]
+        self._native = zelos_can.CanCodec(**kwargs)
+
+        # TX-only python-can compat bus on the same channel; no Notifier is
+        # attached so it does no RX work. The bus-based TX action layer
+        # (send_raw / send_message / periodics) reuses this unchanged.
+        self.bus = can.Bus(
+            interface="zelos-socketcan", channel=self.config["channel"], fd=self.fd_mode
+        )
+        self.running = True
+        logger.info("zelos-socketcan native codec started on %s", self.config["channel"])
+
     def stop(self) -> None:
         """Stop CAN bus and periodic tasks."""
         bus_id = f"[{self.bus_name}] " if self.bus_name else ""
@@ -514,6 +586,12 @@ class CanCodec(can.Listener):
             task.stop()
         self._periodic_tasks.clear()
         self._periodic_slots.clear()
+
+        if self._native is not None:
+            # Snapshot RX counters before tearing down — the native handle goes away.
+            self._native_metrics = self._native_rx_counts()
+            self._native.stop()
+            self._native = None
 
         if self.bus:
             self.bus.shutdown()
@@ -650,6 +728,18 @@ class CanCodec(can.Listener):
         Message reception happens via on_message_received() callback, not in this loop.
         This approach is more efficient than AsyncBufferedReader + asyncio.wait_for().
         """
+        # Native path: zelos_can.CanCodec runs its own Rust recv/decode/trace
+        # loop and auto-reconnects internally. No python-can Notifier, no health
+        # supervisor, no per-frame Python — just idle until stopped.
+        if self._use_native:
+            logger.info("Starting CAN rx (native zelos-socketcan pipeline)")
+            try:
+                while self.running:
+                    await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                logger.info("CAN reader cancelled")
+            return
+
         if not self.bus:
             logger.error("Bus not initialized, call start() first")
             return
@@ -999,11 +1089,35 @@ class CanCodec(can.Listener):
     # plain methods (no @action decorators) so `actions.py` can hold the
     # decorator stack and `choices=_available_codecs` lives at module scope.
 
+    def _native_rx_counts(self) -> dict[str, int]:
+        """RX counters for the native path, from the live Rust codec or the
+        snapshot taken at stop. Counters are 0 before start."""
+        if self._native is not None:
+            m = self._native.metrics()
+            return {
+                "messages_received": m.messages_received,
+                "messages_decoded": m.messages_decoded,
+                "unknown_messages": m.unknown_messages,
+            }
+        if self._native_metrics is not None:
+            return self._native_metrics
+        return {"messages_received": 0, "messages_decoded": 0, "unknown_messages": 0}
+
     def get_tx_state(self) -> dict[str, Any]:
         # Extension id/version/state intentionally NOT included — that info
         # is canonical at the `extensions.list` bridge surface and the webapp
         # consumes it from there, not from this 1 Hz polled action.
         db_path = Path(self.database_file_path)
+        # On the native path RX counters live in the Rust codec; TX counters
+        # (tx_errors/tx_overflows) still come from self.metrics via the bus.
+        if self._use_native:
+            rx = self._native_rx_counts()
+        else:
+            rx = {
+                "messages_received": self.metrics.messages_received,
+                "messages_decoded": self.metrics.messages_decoded,
+                "unknown_messages": self.metrics.unknown_messages,
+            }
         return {
             "captured_at_unix_ms": int(time.time() * 1000),
             "bus": {
@@ -1020,9 +1134,7 @@ class CanCodec(can.Listener):
                 "metrics": {
                     "tx_errors": self.metrics.tx_errors,
                     "tx_overflows": self.metrics.tx_overflows,
-                    "messages_received": self.metrics.messages_received,
-                    "messages_decoded": self.metrics.messages_decoded,
-                    "unknown_messages": self.metrics.unknown_messages,
+                    **rx,
                 },
                 "periodics": [self._periodic_slots[tid] for tid in sorted(self._periodic_slots)],
             },
