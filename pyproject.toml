@@ -18,11 +18,16 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "zelos-sdk==0.0.9",
+    # Bumped from 0.0.9 to satisfy zelos-can's `zelos-sdk>=0.0.10a5` floor;
+    # without this the zelos-can dependency below can't resolve on Linux.
+    "zelos-sdk>=0.0.10a5",
     "python-can",
     "cantools",
     "rich-click>=1.8.0",
     "pyarrow>=14.0.0",
+    # Rust-backed SocketCAN interface (registers the 'zelos-socketcan'
+    # python-can plugin). Linux-only; not installed on macOS/Windows.
+    "zelos-can[python-can]>=0.0.5; sys_platform == 'linux'",
 ]
 
 [project.scripts]

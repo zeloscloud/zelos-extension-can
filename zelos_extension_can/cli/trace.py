@@ -78,7 +78,7 @@ def trace(
         "channel": channel,
         "database_file": str(database_file),
         "bitrate": bitrate,
-        "fd": fd,
+        "fd_mode": fd,
         "log_raw_frames": True,  # Enable raw logging in CLI mode
         "emit_schemas_on_init": True,  # Emit all schemas upfront in CLI mode
     }

@@ -22,7 +22,7 @@ All configuration is managed through the Zelos App settings interface.
 
 ### Required Settings
 - **Database File**: Upload your CAN database file (`.dbc`, `.arxml`, `.kcd`, or `.sym` format)
-- **Interface**: Choose your CAN adapter type (socketcan, pcan, kvaser, vector, virtual, or demo)
+- **Interface**: Choose your CAN adapter type (zelos-socketcan, socketcan, pcan, kvaser, vector, virtual, or demo). On Linux, `zelos-socketcan` is the recommended SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture.
 - **Channel**: Specify the CAN channel/device name
 
 ### Optional Settings
