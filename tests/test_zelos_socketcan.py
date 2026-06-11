@@ -106,10 +106,14 @@ def test_zelos_socketcan_decodes_received_frames(zelos_codec):
     and surface through get_tx_state."""
     sender = can.Bus(interface="socketcan", channel=IFACE)
     try:
-        for _ in range(3):
-            sender.send(can.Message(arbitration_id=WIRE_ID, data=bytes(8), is_extended_id=False))
-        deadline = time.time() + 2.0
+        # Send continuously rather than a one-shot burst: the Rust recv task
+        # spins up asynchronously after start(), so a single burst fired in
+        # that startup window can race it. Continuous traffic (realistic usage)
+        # is received reliably once the task is up.
+        msg = can.Message(arbitration_id=WIRE_ID, data=bytes(8), is_extended_id=False)
+        deadline = time.time() + 3.0
         while _rx_metrics(zelos_codec)["messages_received"] == 0 and time.time() < deadline:
+            sender.send(msg)
             time.sleep(0.02)
         m = _rx_metrics(zelos_codec)
         assert m["messages_received"] >= 1, m

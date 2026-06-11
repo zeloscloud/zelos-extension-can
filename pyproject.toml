@@ -27,7 +27,7 @@ dependencies = [
     "pyarrow>=14.0.0",
     # Rust-backed SocketCAN interface (registers the 'zelos-socketcan'
     # python-can plugin). Linux-only; not installed on macOS/Windows.
-    "zelos-can[python-can]>=0.0.5; sys_platform == 'linux'",
+    "zelos-can[python-can]>=0.0.6; sys_platform == 'linux'",
 ]
 
 [project.scripts]
