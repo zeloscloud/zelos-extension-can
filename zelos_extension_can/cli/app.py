@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,6 +68,19 @@ def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
             logger.error(f"[{bus_name}] Invalid JSON in config_json: {e}")
             sys.exit(1)
 
+    # Handle ssh-socketcan - synthesize the "[user@]host:iface" channel the
+    # transport parses from the user-facing remote_host / ssh_user /
+    # remote_channel fields.
+    if config.get("interface") == "ssh-socketcan":
+        host = config.get("remote_host")
+        if not host:
+            logger.error(f"[{bus_name}] 'ssh-socketcan' interface requires 'remote_host'")
+            sys.exit(1)
+        user = config.get("ssh_user")
+        iface = config.get("remote_channel", "can0")
+        config["channel"] = f"{user}@{host}:{iface}" if user else f"{host}:{iface}"
+        logger.info(f"[{bus_name}] ssh-socketcan channel: {config['channel']}")
+
     return config
 
 
@@ -99,8 +113,13 @@ def _create_codecs(config: dict, demo_dbc_path: Path) -> list[tuple[CanCodec, st
             # User provided an explicit name
             bus_name = config_name
         elif is_multi_bus:
-            # Multi-bus with no explicit name: use channel to avoid collisions
-            bus_name = prepared_config.get("channel", f"bus{i}")
+            # Multi-bus with no explicit name: derive from channel to avoid
+            # collisions. Channels can contain '.', '@', ':' (ssh-socketcan's
+            # "user@host:iface"), which are catalog PATH SEPARATORS in Zelos
+            # trace sources and would break catalog / `latest` lookups (and the
+            # inherited "{name}_raw" source). Sanitize them to '_'.
+            raw_name = prepared_config.get("channel", f"bus{i}")
+            bus_name = re.sub(r"[.@:]", "_", raw_name)
         else:
             # Single bus, no name: use None for backward compat ("can_codec")
             bus_name = None
@@ -135,20 +154,24 @@ async def _run_codecs_async(codecs: list[CanCodec]) -> None:
 
     :param codecs: List of CanCodec instances to run
     """
-    # Start all buses
-    for codec in codecs:
-        codec.start()
-
-    # Run all codecs concurrently using their async run method
-    tasks = [asyncio.create_task(codec._run_async()) for codec in codecs]
-
+    # Start buses inside the try so that if one start() raises, the finally
+    # stops the buses already started. Otherwise an already-started bus owning
+    # non-daemon ssh threads (with a live remote candump session) is never torn
+    # down and the process hangs forever.
+    started: list[CanCodec] = []
     try:
+        for codec in codecs:
+            codec.start()
+            started.append(codec)
+
+        # Run all codecs concurrently using their async run method
+        tasks = [asyncio.create_task(codec._run_async()) for codec in codecs]
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         logger.info("Codec tasks cancelled")
     finally:
-        # Ensure all buses are stopped
-        for codec in codecs:
+        # Ensure every bus we started is stopped (in reverse start order).
+        for codec in reversed(started):
             codec.stop()
 
 
