@@ -271,14 +271,33 @@ class CanCodec(can.Listener):
         self.last_message_time = time.time()
         self.start_time = time.time()
 
-        # zelos-socketcan runs the full recv -> DBC decode -> trace pipeline in
-        # Rust (zelos_can.CanCodec): no python-can Notifier, no cantools, and no
-        # per-frame Python on RX. self._native holds that codec while running.
-        # TX actions still go through self.bus (a python-can compat bus on the
-        # same channel) so the bus-based action layer below is reused as-is.
+        # zelos-socketcan and ssh-socketcan both run the full recv -> DBC decode
+        # -> trace pipeline in Rust (zelos_can.CanCodec): no python-can Notifier,
+        # no cantools, and no per-frame Python on RX. self._native holds that
+        # codec while running. TX actions still go through self.bus (a python-can
+        # compat bus for zelos-socketcan, or a CodecTxAdapter over the Rust codec
+        # for ssh-socketcan) so the bus-based action layer below is reused as-is.
+        #
+        #   - zelos-socketcan: Rust owns a real SocketCAN socket (Linux-only) and
+        #     self-heals its recv loop internally.
+        #   - ssh-socketcan: Rust decodes frames shuttled over ssh by a disposable
+        #     SshTransport feeding a durable zelos_can.ExternalBus (any OS); the
+        #     Python health supervisor rebuilds the transport on failure.
+        #
+        # self._use_rust unifies the "Rust owns RX/decode/schema/metrics" seams so
+        # the native path stays byte-identical while ssh shares them.
         self._use_native = config.get("interface") == "zelos-socketcan"
+        self._use_ssh = config.get("interface") == "ssh-socketcan"
+        self._use_rust = self._use_native or self._use_ssh
         self._native: Any = None
+        # RX and TX counter snapshots taken at stop(), before the Rust handle is
+        # dropped, so get_tx_state keeps reporting the final values afterward.
         self._native_metrics: dict[str, int] | None = None
+        self._native_tx_metrics: dict[str, int] | None = None
+        # ssh-socketcan only: the durable ExternalBus and the disposable
+        # SshTransport (rebuilt on reconnect). None on every other interface.
+        self._ebus: Any = None
+        self._transport: Any = None
 
         # Timestamp handling - use enum for fast comparison
         timestamp_mode_str = config.get("timestamp_mode", "auto").upper()
@@ -336,12 +355,13 @@ class CanCodec(can.Listener):
             else:
                 self.raw_source = zelos_sdk.TraceSource(raw_source_name)
 
-            # On the native path the Rust codec owns the raw-frame schema and
-            # emit; create the TraceSource (so it lands in the right namespace
-            # and is handed to the codec) but don't register an event here.
+            # On the Rust paths (zelos-socketcan / ssh-socketcan) the Rust codec
+            # owns the raw-frame schema and emit; create the TraceSource (so it
+            # lands in the right namespace and is handed to the codec) but don't
+            # register an event here.
             self.raw_event = (
                 None
-                if self._use_native
+                if self._use_rust
                 else self.raw_source.add_event(
                     "messages",
                     [
@@ -378,9 +398,10 @@ class CanCodec(can.Listener):
                     "access via message ID instead"
                 )
 
-        # On the native path the Rust codec generates/emits schemas itself
-        # (gated by its own emit_schemas_on_init); don't double-register here.
-        if self.emit_schemas_on_init and not self._use_native:
+        # On the Rust paths (zelos-socketcan / ssh-socketcan) the Rust codec
+        # generates/emits schemas itself (gated by its own emit_schemas_on_init);
+        # don't double-register here.
+        if self.emit_schemas_on_init and not self._use_rust:
             self._generate_all_schemas()
             logger.info("Generated %d event schemas from database", len(self._events))
         else:
@@ -492,6 +513,10 @@ class CanCodec(can.Listener):
             self._start_native()
             return
 
+        if self._use_ssh:
+            self._start_ssh()
+            return
+
         bus_config = {
             "interface": self.config["interface"],
             "channel": self.config["channel"],
@@ -571,6 +596,59 @@ class CanCodec(can.Listener):
         self.running = True
         logger.info("zelos-socketcan native codec started on %s", self.config["channel"])
 
+    def _start_ssh(self) -> None:
+        """Start the Rust-first pipeline for ssh-socketcan.
+
+        Bridges a remote edge device's SocketCAN bus over ``ssh`` using the
+        edge's own ``can-utils`` — nothing is deployed on the edge, so this runs
+        on Linux/macOS/Windows. ``zelos_can.CanCodec`` owns decode -> trace -> TX
+        channel -> periodics -> metrics entirely in Rust, fed by a durable
+        ``zelos_can.ExternalBus``; an :class:`SshTransport` shuttles raw frames
+        across two ssh procs (``candump`` RX, ``cansend`` TX). The transport is
+        disposable and is rebuilt on reconnect while the codec, ExternalBus, and
+        armed periodics survive (see ``_reconnect_bus``).
+
+        Mirrors ``_start_native`` but drives the codec through the ExternalBus
+        seam instead of a SocketCAN socket: the ``channel``/``rcvbuf_size`` kwargs
+        are SocketCAN-only and are replaced by ``bus=self._ebus`` (frame format
+        flows per-frame through ``inject``). ``fd`` is passed through for parity
+        with ``_start_native`` so the codec applies CAN-FD decode semantics.
+        ``self._native`` is reused so metrics / get_tx_state / stop need no extra
+        code. TX actions go through a ``CodecTxAdapter`` presenting the small
+        python-can-shaped surface the action layer touches.
+        """
+        import zelos_can
+
+        from .ssh_socketcan import CodecTxAdapter, SshTransport
+
+        source_name = self.bus_name if self.bus_name else "can_codec"
+        self._ebus = zelos_can.ExternalBus()
+        kwargs: dict[str, Any] = {
+            "database_file": self.database_file_path,
+            "source_name": source_name,
+            "source": self.source,
+            "log_raw_frames": self.log_raw_frames,
+            "emit_schemas_on_init": self.emit_schemas_on_init,
+            "timestamp_mode": self._NATIVE_TIMESTAMP_MODE.get(self.timestamp_mode.name, "auto"),
+            "fd": self.fd_mode,
+            "bus": self._ebus,
+        }
+        if self.log_raw_frames:
+            kwargs["raw_source"] = self.raw_source
+        self._native = zelos_can.CanCodec(**kwargs)
+
+        self._transport = SshTransport(
+            self._ebus,
+            self.config["channel"],
+            ssh_port=self.config.get("ssh_port", 22),
+            ssh_key_path=self.config.get("ssh_key_path"),
+            ssh_extra_opts=self.config.get("ssh_extra_opts"),
+            fd_mode=self.fd_mode,
+        )
+        self.bus = CodecTxAdapter(self._native, self._transport, self.config["channel"])
+        self.running = True
+        logger.info("ssh-socketcan codec started on %s", self.config["channel"])
+
     def stop(self) -> None:
         """Stop CAN bus and periodic tasks."""
         bus_id = f"[{self.bus_name}] " if self.bus_name else ""
@@ -588,8 +666,10 @@ class CanCodec(can.Listener):
         self._periodic_slots.clear()
 
         if self._native is not None:
-            # Snapshot RX counters before tearing down — the native handle goes away.
+            # Snapshot RX + TX counters before tearing down — the native handle
+            # goes away and get_tx_state must keep reporting the final values.
             self._native_metrics = self._native_rx_counts()
+            self._native_tx_metrics = self._native_tx_counts()
             self._native.stop()
             self._native = None
 
@@ -644,6 +724,17 @@ class CanCodec(can.Listener):
         :return: True if reconnection successful
         """
         logger.debug("Attempting bus reconnection...")
+
+        # ssh-socketcan: the Rust codec, the ExternalBus, and armed periodics are
+        # DURABLE — only the SshTransport is disposable. Reconnect rebuilds the
+        # transport ONLY and must NEVER run the generic rebuild below: that path
+        # would build a second ExternalBus + CanCodec against the SAME trace
+        # source (double-emitting every frame), orphan the live transport, and
+        # reset RX counters. The blocking teardown + Popen spawns run off the
+        # event loop so a wedged transport can't stall other buses' supervisors.
+        if self._use_ssh:
+            return await asyncio.to_thread(self._rebuild_ssh_transport)
+
         try:
             if self.bus:
                 logger.debug("Shutting down existing bus object...")
@@ -658,6 +749,59 @@ class CanCodec(can.Listener):
             return True
         except Exception as e:
             logger.error("Bus reconnection failed: %s", e)
+            return False
+
+    def _rebuild_ssh_transport(self) -> bool:
+        """Rebuild ONLY the ssh transport; codec + ExternalBus + periodics survive.
+
+        Runs off the event loop (via ``asyncio.to_thread``): the teardown joins
+        two threads and waits on two procs (~8 s worst case) then spawns two fresh
+        ssh procs. Returns True on a clean rebuild, False on any failure — on
+        failure the codec, its ``self.bus`` object identity, the ExternalBus, and
+        armed periodics are left untouched and the supervisor retries next tick.
+        Never touches ``self._native`` / ``self._ebus`` / ``self.bus`` identity.
+        """
+        if not self.running:
+            return False
+        if self._native is None or self._ebus is None or self._transport is None:
+            logger.error(
+                "ssh reconnect: codec/port not initialized "
+                "(native=%s ebus=%s transport=%s); cannot rebuild transport",
+                self._native is not None,
+                self._ebus is not None,
+                self._transport is not None,
+            )
+            return False
+
+        from .ssh_socketcan import SshTransport
+
+        # Reap the dead procs/threads first (idempotent + total).
+        try:
+            self._transport.teardown()
+        except Exception:
+            logger.exception("ssh reconnect: transport teardown raised (continuing)")
+
+        # stop() may have raced us during the blocking teardown — bail before we
+        # resurrect a transport on a codec that is shutting down.
+        if not self.running:
+            return False
+
+        try:
+            # Discard stale periodic backlog queued while the link was down.
+            self._ebus.drain_tx()
+            self._transport = SshTransport(
+                self._ebus,
+                self.config["channel"],
+                ssh_port=self.config.get("ssh_port", 22),
+                ssh_key_path=self.config.get("ssh_key_path"),
+                ssh_extra_opts=self.config.get("ssh_extra_opts"),
+                fd_mode=self.fd_mode,
+            )
+            self.bus.transport = self._transport
+            logger.info("ssh transport rebuilt, codec preserved")
+            return True
+        except Exception as e:
+            logger.warning("ssh transport rebuild failed, retrying next tick: %s", e)
             return False
 
     def on_message_received(self, message: can.Message) -> None:
@@ -738,6 +882,37 @@ class CanCodec(can.Listener):
                     await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 logger.info("CAN reader cancelled")
+            return
+
+        # ssh-socketcan path: the Rust codec owns RX/decode/trace/metrics (fed by
+        # the ExternalBus), so there is no python-can Notifier. Unlike the native
+        # SocketCAN codec (which self-heals internally), the ssh procs live in
+        # Python, so a lightweight 5 s supervisor watches transport health via the
+        # adapter's bus.state and rebuilds only the transport on failure — codec,
+        # ExternalBus, and armed periodics survive the rebuild.
+        if self._use_ssh:
+            logger.info("Starting CAN rx (ssh-socketcan pipeline)")
+            # Capped backoff so a long edge outage doesn't spam thousands of
+            # rebuild/log cycles: probe every 5 s when healthy; on a failed
+            # rebuild grow the interval (5 s → cap 60 s), reset to 5 s on success.
+            healthy_interval = 5.0
+            max_interval = 60.0
+            interval = healthy_interval
+            try:
+                while self.running:
+                    await asyncio.sleep(interval)
+                    if self._check_bus_health():
+                        interval = healthy_interval
+                        continue
+                    logger.error("Reconnection triggered: ssh transport unhealthy")
+                    if await self._reconnect_bus():
+                        interval = healthy_interval
+                    else:
+                        interval = min(interval * 2, max_interval)
+            except asyncio.CancelledError:
+                logger.info("CAN reader cancelled")
+            except Exception as e:
+                logger.exception("Error in ssh-socketcan supervision loop: %s", e)
             return
 
         if not self.bus:
@@ -1103,15 +1278,36 @@ class CanCodec(can.Listener):
             return self._native_metrics
         return {"messages_received": 0, "messages_decoded": 0, "unknown_messages": 0}
 
+    def _native_tx_counts(self) -> dict[str, int]:
+        """TX counters for the Rust path, from the live codec or the stop-time
+        snapshot. A stalled ssh transport surfaces here (the Rust codec's TX
+        channel/outlet), not in the Python-side self.metrics. Counters are 0
+        before start."""
+        if self._native is not None:
+            m = self._native.metrics()
+            return {"tx_errors": m.tx_errors, "tx_overflows": m.tx_overflows}
+        if self._native_tx_metrics is not None:
+            return self._native_tx_metrics
+        return {"tx_errors": 0, "tx_overflows": 0}
+
     def get_tx_state(self) -> dict[str, Any]:
         # Extension id/version/state intentionally NOT included — that info
         # is canonical at the `extensions.list` bridge surface and the webapp
         # consumes it from there, not from this 1 Hz polled action.
         db_path = Path(self.database_file_path)
-        # On the native path RX counters live in the Rust codec; TX counters
-        # (tx_errors/tx_overflows) still come from self.metrics via the bus.
-        if self._use_native:
+        # On the Rust paths (zelos-socketcan / ssh-socketcan) RX counters live in
+        # the Rust codec. TX counters merge the Python-side self.metrics (one-shot
+        # send failures via the bus/adapter) with the Rust codec's own tx counters
+        # (a stalled ssh transport surfaces there, not in self.metrics). For the
+        # native zelos-socketcan path TX goes through a separate python-can compat
+        # bus so the Rust tx counters stay 0 — the reported values are unchanged.
+        tx_errors = self.metrics.tx_errors
+        tx_overflows = self.metrics.tx_overflows
+        if self._use_rust:
             rx = self._native_rx_counts()
+            native_tx = self._native_tx_counts()
+            tx_errors += native_tx["tx_errors"]
+            tx_overflows += native_tx["tx_overflows"]
         else:
             rx = {
                 "messages_received": self.metrics.messages_received,
@@ -1132,8 +1328,8 @@ class CanCodec(can.Listener):
                     "message_count": len(self.db.messages),
                 },
                 "metrics": {
-                    "tx_errors": self.metrics.tx_errors,
-                    "tx_overflows": self.metrics.tx_overflows,
+                    "tx_errors": tx_errors,
+                    "tx_overflows": tx_overflows,
                     **rx,
                 },
                 "periodics": [self._periodic_slots[tid] for tid in sorted(self._periodic_slots)],

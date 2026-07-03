@@ -25,9 +25,12 @@ dependencies = [
     "cantools",
     "rich-click>=1.8.0",
     "pyarrow>=14.0.0",
-    # Rust-backed SocketCAN interface (registers the 'zelos-socketcan'
-    # python-can plugin). Linux-only; not installed on macOS/Windows.
-    "zelos-can[python-can]>=0.0.6; sys_platform == 'linux'",
+    # Rust-backed CAN codec. Registers the 'zelos-socketcan' python-can plugin
+    # (Linux) and provides zelos_can.ExternalBus, which drives the cross-platform
+    # 'ssh-socketcan' interface. ExternalBus ships in 0.0.7a1 and wheels cover all
+    # platforms, so there is no sys_platform marker. Floor (not exact) pin to
+    # avoid per-alpha churn.
+    "zelos-can[python-can]>=0.0.7a1",
 ]
 
 [project.scripts]
@@ -47,6 +50,7 @@ dev = [
     "pytest>=8.4.2",
     "pre-commit>=4.3.0",
     "ruff>=0.14.2",
+    "jsonschema>=4.0.0",
     "tomli>=2.3.0; python_version < '3.11'",
 ]
 

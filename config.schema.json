@@ -15,9 +15,10 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface type. zelos-socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan is the python-can implementation. macOS/Windows: pcan/kvaser/vector.",
+            "description": "CAN interface type. zelos-socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan is the python-can implementation. macOS/Windows: pcan/kvaser/vector. ssh-socketcan works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
               "zelos-socketcan",
+              "ssh-socketcan",
               "demo",
               "virtual",
               "socketcan",
@@ -216,6 +217,97 @@
                     ]
                   }
                 }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "ssh-socketcan"
+                    ]
+                  },
+                  "remote_host": {
+                    "type": "string",
+                    "title": "Remote Host",
+                    "description": "Hostname or IP of the edge device running SocketCAN, reached over SSH (may be a ~/.ssh/config alias)"
+                  },
+                  "remote_channel": {
+                    "type": "string",
+                    "title": "Remote CAN Channel",
+                    "description": "SocketCAN interface name on the remote edge device (e.g. can0, vcan0)",
+                    "default": "can0"
+                  },
+                  "ssh_user": {
+                    "type": "string",
+                    "title": "SSH User",
+                    "description": "Username for the SSH connection (optional; falls back to your ssh config / current user)"
+                  },
+                  "ssh_port": {
+                    "type": "integer",
+                    "title": "SSH Port",
+                    "description": "TCP port for the SSH connection",
+                    "default": 22
+                  },
+                  "ssh_key_path": {
+                    "type": "string",
+                    "title": "SSH Key File",
+                    "description": "Path to a private key file for SSH authentication (optional)",
+                    "ui:widget": "file-picker"
+                  },
+                  "ssh_extra_opts": {
+                    "type": "string",
+                    "title": "SSH Extra Options",
+                    "description": "Additional ssh command-line options, space-separated (e.g. -o StrictHostKeyChecking=no)"
+                  },
+                  "database_file": {
+                    "type": "string",
+                    "title": "Database File (.dbc)",
+                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
+                    "ui:widget": "file-picker"
+                  },
+                  "name": {
+                    "type": "string",
+                    "title": "Name",
+                    "description": "Name to identify this bus (used as prefix in trace events)",
+                    "ui:placeholder": "can_codec"
+                  },
+                  "fd_mode": {
+                    "type": "boolean",
+                    "title": "CAN-FD Mode",
+                    "description": "Enable CAN-FD for higher data rates and larger payloads",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "timestamp_mode": {
+                    "type": "string",
+                    "title": "Timestamp Mode",
+                    "description": "Timestamp handling for the REMOTE edge clock (not local): 'auto' trusts the remote epoch when it is within ~15s of local time, otherwise maps monotonic remote timestamps onto local wall-clock; 'absolute' uses the remote timestamp as-is; 'ignore' uses the local receive time. A skewed edge NTP/RTC clock will shift trace timestamps.",
+                    "enum": [
+                      "auto",
+                      "absolute",
+                      "ignore"
+                    ],
+                    "default": "auto"
+                  },
+                  "log_raw_frames": {
+                    "type": "boolean",
+                    "title": "Log Raw CAN Frames",
+                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "emit_schemas_on_init": {
+                    "type": "boolean",
+                    "title": "Emit Schemas On Init",
+                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "interface",
+                  "remote_host",
+                  "database_file"
+                ]
               },
               {
                 "properties": {
