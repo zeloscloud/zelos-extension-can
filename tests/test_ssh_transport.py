@@ -151,6 +151,15 @@ class FakePopenFactory:
         self.procs = []
         self.calls = []
         self.fail_on_call = None  # 1-based index whose construction raises
+        # If set, the RX proc (first Popen) is born already-exited with this
+        # stderr + returncode and its stdout closed — models a fast ssh startup
+        # failure (host key / auth / unreachable / missing can-utils) that the
+        # startup probe must classify and fail fast on.
+        self.rx_dead_stderr = None
+        self.rx_dead_rc = 1
+        # If set, the (alive) RX proc is born with this frame already on its
+        # stdout, so the reader sets `_rx_started` and the probe connects early.
+        self.rx_born_frame = None
 
     def __call__(self, argv, *, stdin=None, stdout=None, stderr=None, bufsize=-1, **_kw):
         self.calls.append(argv)
@@ -158,6 +167,15 @@ class FakePopenFactory:
             raise OSError("simulated Popen failure")
         p = FakePopen(argv, stdin=stdin, stdout=stdout, stderr=stderr)
         self.procs.append(p)
+        # The first proc is the RX (candump) side that the startup probe watches.
+        if len(self.procs) == 1:
+            if self.rx_dead_stderr is not None:
+                if self.rx_dead_stderr:
+                    p.feed_stderr(self.rx_dead_stderr)
+                p.die(self.rx_dead_rc)
+                p.close_stdout()  # reader hits EOF → never sets _rx_started
+            elif self.rx_born_frame is not None:
+                p.feed(self.rx_born_frame)  # reader sets _rx_started → connected
         return p
 
     @property
@@ -174,6 +192,14 @@ class FakePopenFactory:
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _fast_startup_grace(monkeypatch):
+    """Shrink the startup probe's idle grace so the file stays fast. The probe
+    LOGIC is unchanged (fail-fast when the rx proc is dead, proceed when it is
+    alive) — only the idle wait on an alive-but-silent proc is compressed."""
+    monkeypatch.setattr(ssh_socketcan, "_STARTUP_GRACE", 0.2)
 
 
 @pytest.fixture
@@ -426,6 +452,95 @@ def test_teardown_idempotent(fake_ssh, make_codec):
     transport.teardown()
     transport.teardown()  # second call must not raise
     assert transport.healthy is False
+
+
+# ── startup connection probe ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "stderr, expect",
+    [
+        # host key not trusted / changed
+        (b"Host key verification failed.\r\n", "host key"),
+        (b"@@@ REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\r\n", "host key"),
+        # auth failure (BatchMode → publickey)
+        (b"zelos@edge: Permission denied (publickey).\r\n", "authentication"),
+        # unreachable / refused / timed out
+        (b"ssh: connect to host edge port 22: Connection refused\r\n", "cannot reach"),
+        (b"ssh: connect to host edge port 22: Operation timed out\r\n", "cannot reach"),
+        # DNS
+        (b"ssh: Could not resolve hostname edge: nodename nor servname provided\r\n", "resolve"),
+        # remote is missing can-utils
+        (b"bash: candump: command not found\r\n", "can-utils"),
+    ],
+)
+def test_startup_probe_fails_fast_on_dead_rx(fake_ssh, make_codec, stderr, expect):
+    """A candump proc that exits immediately (permanent ssh failure) makes the
+    probe raise a classified, actionable CanInitializationError — fast, with the
+    raw stderr appended — and leaks no threads."""
+    ebus, codec = make_codec()
+    fake_ssh.rx_dead_stderr = stderr
+
+    before = {t.ident for t in threading.enumerate()}
+    t0 = time.monotonic()
+    with pytest.raises(can.exceptions.CanInitializationError) as ei:
+        ssh_socketcan.SshTransport(ebus, "zelos@edge:can0")
+    elapsed = time.monotonic() - t0
+
+    msg = str(ei.value)
+    assert expect in msg, f"expected {expect!r} in classified message: {msg!r}"
+    assert "(ssh:" in msg  # raw stderr is always appended
+    assert elapsed < 3.0  # failed fast, did not spin the full connect timeout
+    # The partial transport was torn down: no leaked threads survive the raise.
+    leaked = [t for t in threading.enumerate() if t.ident not in before and t.is_alive()]
+    assert leaked == []
+
+
+def test_startup_probe_generic_when_no_stderr(fake_ssh, make_codec, monkeypatch):
+    """A dead rx proc with no stderr still fails fast, with the generic message
+    and the '<no stderr>' placeholder."""
+    monkeypatch.setattr(ssh_socketcan, "_STARTUP_STDERR_SETTLE", 0.05)
+    ebus, codec = make_codec()
+    fake_ssh.rx_dead_stderr = b""  # dies, writes nothing
+
+    with pytest.raises(can.exceptions.CanInitializationError) as ei:
+        ssh_socketcan.SshTransport(ebus, "zelos@edge:can0")
+    msg = str(ei.value)
+    assert "ssh-socketcan failed to start on edge:can0" in msg
+    assert "<no stderr>" in msg
+
+
+def test_startup_probe_succeeds_when_frames_stream(fake_ssh, make_codec, make_transport):
+    """The happy path: candump streams a frame during the grace, so the probe
+    connects (no raise), the transport is healthy, and the frame decodes."""
+    ebus, codec = make_codec(database_file=TEST_DBC)
+    fake_ssh.rx_born_frame = f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode()
+
+    t0 = time.monotonic()
+    transport = make_transport(ebus)  # must NOT raise
+    elapsed = time.monotonic() - t0
+
+    assert transport._rx_started.is_set()
+    assert transport.healthy is True
+    # Broke on the first frame, before the (already-short) idle grace elapsed.
+    assert elapsed < ssh_socketcan._STARTUP_GRACE + 0.1
+    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
+
+
+def test_startup_probe_succeeds_on_idle_alive_proc(fake_ssh, make_codec, make_transport):
+    """An idle-but-connected bus (no frames, proc alive through the grace) is NOT
+    a failure: the probe waits the grace, then proceeds with a healthy transport.
+    Guards against a false-fail on a quiet bus."""
+    ebus, codec = make_codec(database_file=TEST_DBC)  # no frames fed, proc stays alive
+
+    t0 = time.monotonic()
+    transport = make_transport(ebus)  # must NOT raise
+    elapsed = time.monotonic() - t0
+
+    assert not transport._rx_started.is_set()  # never streamed a frame
+    assert transport.healthy is True
+    # Waited ~the (shrunk) grace — not an instant fail, not a hang.
+    assert 0.1 <= elapsed < 2.0
 
 
 # ── argv construction ────────────────────────────────────────────────────────

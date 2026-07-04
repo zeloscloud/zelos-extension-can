@@ -20,11 +20,13 @@ import itertools
 import json
 from pathlib import Path
 
+import can.exceptions
 import pytest
 import zelos_can
 
 from zelos_extension_can import ssh_socketcan
-from zelos_extension_can.cli.app import _create_codecs, _prepare_bus_config
+from zelos_extension_can.cli import app as app_mod
+from zelos_extension_can.cli.app import _create_codecs, _prepare_bus_config, _run_codecs_async
 from zelos_extension_can.codec import CanCodec
 
 TEST_DBC = str(Path(__file__).parent / "files" / "test.dbc")
@@ -57,9 +59,13 @@ class _StubTransport:
         self.fd_mode = fd_mode
         self.healthy = True
         self.teardowns = 0
+        self.stderr = ""
 
     def teardown(self):
         self.teardowns += 1
+
+    def stderr_tail(self):
+        return self.stderr
 
 
 @pytest.fixture
@@ -284,6 +290,86 @@ def test_reconnect_stop_during_teardown_does_not_resurrect(make_ssh_codec, stub_
     assert len(stub_transports) == 1  # re-check bailed before building
     assert codec._transport is old_transport
     assert codec.bus is bus_before
+
+
+# ── clean failure: a doomed transport surfaces a CanError, not a traceback ───
+
+
+def test_start_raises_can_error_on_transport_failure(make_ssh_codec, monkeypatch):
+    """When SshTransport's startup probe fails (permanent ssh error), codec.start()
+    surfaces a can.exceptions.CanError — the type run_app_mode catches — instead
+    of an ad-hoc exception the app layer wouldn't recognize."""
+
+    def boom(bus, channel, **kwargs):
+        raise can.exceptions.CanInitializationError(
+            "ssh authentication to edge failed (ssh: Permission denied (publickey))"
+        )
+
+    monkeypatch.setattr(ssh_socketcan, "SshTransport", boom)
+    codec = make_ssh_codec(start=False)  # fixture still stops it → no leak
+
+    with pytest.raises(can.exceptions.CanError):
+        codec.start()
+
+
+def test_run_codecs_async_propagates_can_error_and_cleans_up(make_ssh_codec, monkeypatch):
+    """A CanError from codec.start() propagates out of _run_codecs_async (so
+    run_app_mode's except can catch it), and the try/finally still tears down any
+    bus that had already started before the failing one."""
+
+    def boom(bus, channel, **kwargs):
+        raise can.exceptions.CanInitializationError("cannot reach edge:22 (ssh: timed out)")
+
+    monkeypatch.setattr(ssh_socketcan, "SshTransport", boom)
+    codec = make_ssh_codec(start=False)
+
+    with pytest.raises(can.exceptions.CanError):
+        asyncio.run(_run_codecs_async([codec]))
+
+
+def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypatch):
+    """End to end: a doomed ssh bus makes run_app_mode exit(1) with a logged
+    reason rather than propagating a raw CanInitializationError traceback."""
+
+    def boom(bus, channel, **kwargs):
+        raise can.exceptions.CanInitializationError(
+            "ssh host key for edge is not trusted (ssh: Host key verification failed.)"
+        )
+
+    monkeypatch.setattr(ssh_socketcan, "SshTransport", boom)
+
+    # Stub the SDK ceremony run_app_mode performs so the test drives only the
+    # start/run path; capture the real codecs it builds so we can stop them.
+    created: list[CanCodec] = []
+
+    def capture_create(config, dbc):
+        pairs = _create_codecs(config, dbc)
+        created.extend(c for c, _ in pairs)
+        return pairs
+
+    monkeypatch.setattr(
+        app_mod,
+        "load_config",
+        lambda: {
+            "log_level": "INFO",
+            "buses": [
+                {"interface": "ssh-socketcan", "remote_host": "edge", "database_file": TEST_DBC}
+            ],
+        },
+    )
+    monkeypatch.setattr(app_mod, "_create_codecs", capture_create)
+    monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
+
+    try:
+        with pytest.raises(SystemExit) as ei:
+            app_mod.run_app_mode(demo=False, file=None, demo_dbc_path=Path("/nonexistent/demo.dbc"))
+        assert ei.value.code == 1
+    finally:
+        for c in created:
+            with contextlib.suppress(Exception):
+                c.stop()
 
 
 # ── stop(): tears down the transport and snapshots native metrics ────────────
