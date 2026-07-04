@@ -904,7 +904,18 @@ class CanCodec(can.Listener):
                     if self._check_bus_health():
                         interval = healthy_interval
                         continue
-                    logger.error("Reconnection triggered: ssh transport unhealthy")
+                    # Surface WHY the link went unhealthy (unreachable / timed
+                    # out / auth / candump died) from the transport's rx stderr
+                    # tail, so a slow-connect or runtime drop is diagnosable
+                    # rather than a bare "unhealthy". Read BEFORE reconnect so we
+                    # capture the genuine failure, not teardown "Killed" noise.
+                    reason = self._transport.stderr_tail() if self._transport is not None else ""
+                    if reason:
+                        logger.error(
+                            "Reconnection triggered: ssh transport unhealthy (ssh: %s)", reason
+                        )
+                    else:
+                        logger.error("Reconnection triggered: ssh transport unhealthy")
                     if await self._reconnect_bus():
                         interval = healthy_interval
                     else:

@@ -59,6 +59,67 @@ _JOIN_TIMEOUT = 2.0
 _WAIT_TIMEOUT = 2.0
 _NEXT_TX_TIMEOUT = 0.5
 _CONNECT_TIMEOUT = 10  # seconds for the TCP connect (ServerAlive* is post-connect only)
+# Startup connection probe: how long __init__ waits for candump to prove the
+# link is up (first RX frame) before assuming an idle-but-connected bus. A fast
+# ssh failure (host key / auth / bad remote command) dies in <2 s, well inside
+# this grace, so the probe catches it and fails fast; a slow unreachable host
+# (full ConnectTimeout) outlives the grace and is left to the reconnect
+# supervisor. See the probe block at the end of __init__.
+_STARTUP_GRACE = 3.0
+# When the probe finds candump already dead, wait up to this long for the stderr
+# drain thread to record the exit reason before classifying it (the proc's
+# stderr is fully buffered once it exits; this only closes the drain-vs-probe
+# scheduling race and only ever runs on the failure path).
+_STARTUP_STDERR_SETTLE = 0.25
+
+
+def _classify_ssh_failure(
+    host: str, iface: str, ssh_port: int, stderr_tail: str
+) -> can.exceptions.CanInitializationError:
+    """Turn an ssh startup-failure stderr tail into an actionable error.
+
+    Case-insensitive substring match on the last bytes ssh/candump wrote before
+    exiting. Every message names the concrete fix and appends the raw stderr so
+    the underlying cause is never lost.
+    """
+    low = stderr_tail.lower()
+    suffix = f" (ssh: {stderr_tail or '<no stderr>'})"
+
+    def has(*needles: str) -> bool:
+        return any(n in low for n in needles)
+
+    if has("host key verification failed", "remote host identification has changed"):
+        msg = (
+            f"ssh host key for {host} is not trusted (or has changed). Fix: run "
+            f"`ssh-keyscan -H {host} >> ~/.ssh/known_hosts`, or connect once by hand "
+            f"with `ssh {host}` to accept it, or add "
+            "`-o StrictHostKeyChecking=accept-new` to ssh_extra_opts. The extension "
+            "runs non-interactively, so it cannot prompt to accept a new key."
+        )
+    elif has("permission denied", "publickey", "password"):
+        msg = (
+            f"ssh authentication to {host} failed. The extension runs with BatchMode "
+            "(no password prompt), so authorize your key with `ssh-copy-id`, or set "
+            "ssh_key_path, or use an ssh-agent."
+        )
+    elif has("could not resolve", "name or service not known", "nodename nor servname"):
+        msg = f"cannot resolve host {host}; check the remote_host value and your DNS."
+    elif has(
+        "connection refused",
+        "connection timed out",
+        "no route to host",
+        "operation timed out",
+    ):
+        msg = (
+            f"cannot reach {host}:{ssh_port}; check that the host is up and that "
+            "ssh_port is correct."
+        )
+    elif has("candump: not found", "cansend: not found", "command not found"):
+        msg = f"the edge {host} is missing can-utils (candump/cansend); install can-utils on it."
+    else:
+        msg = f"ssh-socketcan failed to start on {host}:{iface}."
+
+    return can.exceptions.CanInitializationError(msg + suffix)
 
 
 class SshTransport:
@@ -90,6 +151,14 @@ class SshTransport:
         self._writer: threading.Thread | None = None
         self._rx_err: threading.Thread | None = None
         self._tx_err: threading.Thread | None = None
+        # Set by the reader thread on the FIRST non-empty candump chunk: proof
+        # the ssh link is up and streaming. The startup probe waits on it.
+        self._rx_started = threading.Event()
+        # Last _STDERR_CAP bytes of each proc's stderr, kept live by the drain
+        # threads so the startup probe / reconnect supervisor can read WHY a
+        # link failed (host key / auth / unreachable) instead of guessing.
+        self._rx_stderr_tail = b""
+        self._tx_stderr_tail = b""
         # Observability for dropped RX lines (parse failures and oversized
         # carry). Public attributes so the codec/supervisor can surface them.
         self._parse_drops = 0
@@ -190,13 +259,13 @@ class SshTransport:
             # teardown; each keeps only the last few KB and logs it on EOF.
             self._rx_err = threading.Thread(
                 target=self._drain_stderr,
-                args=(self._rx_proc, "candump"),
+                args=(self._rx_proc, "candump", "_rx_stderr_tail"),
                 name=f"ssh-can-rx-err-{iface}",
                 daemon=True,
             )
             self._tx_err = threading.Thread(
                 target=self._drain_stderr,
-                args=(self._tx_proc, "cansend"),
+                args=(self._tx_proc, "cansend", "_tx_stderr_tail"),
                 name=f"ssh-can-tx-err-{iface}",
                 daemon=True,
             )
@@ -209,6 +278,31 @@ class SshTransport:
             raise can.exceptions.CanInitializationError(
                 f"failed to start ssh-socketcan transport on {channel!r}: {e}"
             ) from e
+
+        # ── Startup connection probe ─────────────────────────────────────────
+        # A false-fail is IMPOSSIBLE here: we only raise if the rx (candump)
+        # proc actually EXITED. An idle-but-connected bus keeps candump alive and
+        # simply proceeds. Fast failures (host key / auth / bad remote command)
+        # die in <2 s, so the 3 s grace catches them and fails fast; a slow
+        # unreachable host (full ConnectTimeout=10 s) outlives the grace,
+        # proceeds, and is handled by the codec's reconnect supervisor.
+        deadline = time.monotonic() + _STARTUP_GRACE
+        while time.monotonic() < deadline:
+            if self._rx_started.is_set():
+                break  # candump is streaming — connected
+            if self._rx_proc.poll() is not None:
+                # candump exited before streaming a frame. Give the stderr drain
+                # a brief moment to record the exit reason, then classify it into
+                # an actionable error and tear the partial transport down.
+                settle = time.monotonic() + _STARTUP_STDERR_SETTLE
+                while time.monotonic() < settle and not self._rx_stderr_tail:
+                    time.sleep(0.01)
+                tail = bytes(self._rx_stderr_tail).decode("utf-8", "replace").strip()
+                self._teardown()
+                raise _classify_ssh_failure(host, iface, ssh_port, tail)
+            time.sleep(0.05)
+        # Grace elapsed with candump still alive: idle-but-connected bus, or a
+        # slow-but-valid connect. Assume connected and proceed.
 
     @staticmethod
     def _build_argv(user, host, ssh_port, ssh_key_path, ssh_extra_opts) -> list[str]:
@@ -257,6 +351,10 @@ class SshTransport:
             if not chunk:
                 self._eof = True
                 break
+            # First bytes off candump prove the ssh link is up and streaming;
+            # signal the startup probe (idempotent — set() is a no-op after).
+            if not self._rx_started.is_set():
+                self._rx_started.set()
             carry += chunk
             while True:
                 nl = carry.find(b"\n")
@@ -325,7 +423,7 @@ class SshTransport:
             self._overflow_drops,
         )
 
-    def _drain_stderr(self, proc: subprocess.Popen | None, label: str) -> None:
+    def _drain_stderr(self, proc: subprocess.Popen | None, label: str, tail_attr: str) -> None:
         """Continuously drain a proc's stderr into a bounded ring; log on EOF.
 
         Draining prevents the >64 KB pipe-fill deadlock that would otherwise
@@ -333,6 +431,10 @@ class SshTransport:
         and they are logged once at WARNING when the pipe EOFs (proc died) —
         but not during an intentional teardown, where ssh's "Killed by signal"
         noise is expected rather than diagnostic.
+
+        The live tail is mirrored onto ``self.<tail_attr>`` (an immutable
+        ``bytes`` snapshot) after every read so the startup probe and reconnect
+        supervisor can read WHY a link failed without racing this thread.
         """
         if proc is None or proc.stderr is None:
             return
@@ -348,6 +450,9 @@ class SshTransport:
             ring += chunk
             if len(ring) > _STDERR_CAP:
                 del ring[: len(ring) - _STDERR_CAP]
+            # Publish an immutable snapshot; attribute assignment is atomic, so a
+            # concurrent reader always sees a consistent (if slightly stale) tail.
+            setattr(self, tail_attr, bytes(ring))
         if ring and not self._stop.is_set():
             logger.warning(
                 "ssh-socketcan (%s) %s stderr: %s",
@@ -373,6 +478,13 @@ class SshTransport:
             return True
         except Exception:
             return False
+
+    def stderr_tail(self) -> str:
+        """Decoded tail of the rx (candump) stderr — the last diagnostic bytes
+        ssh/candump wrote. Empty when there is none. The reconnect supervisor
+        logs this so an unhealthy link reads as "unreachable"/"timed out" rather
+        than a bare "unhealthy"."""
+        return bytes(self._rx_stderr_tail).decode("utf-8", "replace").strip()
 
     def teardown(self) -> None:
         """Idempotent, orphan-safe, best-effort teardown (never raises)."""

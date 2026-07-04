@@ -8,6 +8,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import can.exceptions
 import zelos_sdk
 from zelos_sdk.extensions import load_config
 
@@ -247,9 +248,20 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     bus_count = len(codecs)
     logger.info(f"Starting CAN extension with {bus_count} bus{'es' if bus_count > 1 else ''}")
 
-    # Run with optional trace writer
-    if output_file:
-        with zelos_sdk.TraceWriter(str(output_file)):
+    # Run with optional trace writer. A bus that can't start (bad interface,
+    # unreachable / unauthenticated ssh host, missing remote can-utils, ...)
+    # raises can.exceptions.CanError — CanInitializationError and
+    # CanInterfaceNotImplementedError are subclasses. Catch it and exit cleanly
+    # with a one-line reason instead of dumping a raw traceback that looks like
+    # a crash. _run_codecs_async's try/finally has already stopped any bus that
+    # DID start before the failing one, so cleanup is complete by the time we
+    # get here.
+    try:
+        if output_file:
+            with zelos_sdk.TraceWriter(str(output_file)):
+                asyncio.run(_run_codecs_async(codecs))
+        else:
             asyncio.run(_run_codecs_async(codecs))
-    else:
-        asyncio.run(_run_codecs_async(codecs))
+    except can.exceptions.CanError as e:
+        logger.error("CAN bus failed to start: %s", e)
+        sys.exit(1)

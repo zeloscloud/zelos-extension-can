@@ -22,7 +22,7 @@ All configuration is managed through the Zelos App settings interface.
 
 ### Required Settings
 - **Database File**: Upload your CAN database file (`.dbc`, `.arxml`, `.kcd`, or `.sym` format)
-- **Interface**: Choose your CAN adapter type (zelos-socketcan, socketcan, pcan, kvaser, vector, virtual, or demo). On Linux, `zelos-socketcan` is the recommended SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture.
+- **Interface**: Choose your CAN adapter type (zelos-socketcan, ssh-socketcan, socketcan, pcan, kvaser, vector, virtual, or demo). On Linux, `zelos-socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
 - **Channel**: Specify the CAN channel/device name
 
 ### Optional Settings
@@ -31,6 +31,53 @@ All configuration is managed through the Zelos App settings interface.
 - **Timestamp Mode**: Control how timestamps are interpreted (auto, absolute, ignore)
 - **Schema Emission**: Emit all schemas on startup or lazily as messages appear
 - **Raw Frame Logging**: Log undecoded raw CAN frames for debugging
+
+## Remote CAN over SSH (`ssh-socketcan`)
+
+Trace a remote edge device's SocketCAN bus over an SSH connection, using the
+edge's **own** `can-utils`. Nothing is installed on the edge, no local `vcan` is
+needed, and it runs from macOS, Linux, or Windows. Decode, tracing, metrics, and
+periodic transmit all run in the same high-throughput Rust pipeline as the local
+`zelos-socketcan` interface. Sent frames are echoed back by the edge's kernel
+loopback, so every transmit is traced exactly once.
+
+### Prerequisites on the edge
+- An SSH server reachable from the machine running Zelos.
+- `can-utils` installed (`candump` and `cansend` on `PATH`).
+- A SocketCAN interface that is up (e.g. `can0`).
+
+### Prerequisites on this machine
+- An `ssh` client on `PATH`.
+- **Key-based SSH auth** to the edge. The extension connects non-interactively
+  (`BatchMode`), so password prompts are not possible — set up a key
+  (`ssh-copy-id user@host`) or point **SSH Key Path** at your private key.
+- **A trusted host key.** On the *first* connection to a new edge, SSH must
+  already know its host key or the connection fails with
+  `Host key verification failed`. Resolve it once, up front, by either:
+  - connecting manually a single time to accept the key: `ssh user@host`, or
+  - adding it non-interactively: `ssh-keyscan -H host >> ~/.ssh/known_hosts`, or
+  - adding `-o StrictHostKeyChecking=accept-new` to **SSH Extra Options**
+    (trust-on-first-use; still detects a later key change).
+
+### Settings
+- **Remote Host** (required): edge hostname or IP (or an `~/.ssh/config` alias).
+- **Remote Channel**: SocketCAN interface on the edge (default `can0`).
+- **SSH User**: login user on the edge (optional if set in `~/.ssh/config`).
+- **SSH Port**: default `22`.
+- **SSH Key Path**: private key to authenticate with (optional).
+- **SSH Extra Options**: extra `ssh` flags, e.g.
+  `-o StrictHostKeyChecking=accept-new` or a `-J bastion` jump host.
+- Plus the shared **Database File**, **Timestamp Mode**, **Raw Frame Logging**,
+  and **Schema Emission** settings.
+
+### Notes
+- If a connection fails, the extension reports a specific reason (untrusted host
+  key, authentication, unreachable host, or missing `can-utils` on the edge)
+  rather than retrying silently.
+- If the link drops mid-capture, it reconnects automatically; decoded state and
+  any armed periodic transmissions are preserved across the reconnect.
+- Timestamps in `auto`/`absolute` mode come from the **edge's** clock — keep the
+  edge's time in sync (NTP) if absolute timestamps matter.
 
 ## Actions
 
