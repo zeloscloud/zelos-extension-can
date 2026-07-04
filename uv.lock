@@ -419,7 +419,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "rpds-py" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' and python_full_version >= '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036 }
 wheels = [
@@ -692,19 +692,21 @@ wheels = [
 
 [[package]]
 name = "zelos-can"
-version = "0.0.6"
+version = "0.0.7a1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zelos-sdk", marker = "sys_platform == 'linux'" },
+    { name = "zelos-sdk" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/3b/4d00d49201dd514ab8d7bbfe7e85c8e22bfc151373260c6973fe4510b7bf/zelos_can-0.0.6-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e63bec257d71be5a6af1d2ab89147aaea59cf18184486eca8a034b57acc2b10c", size = 935197 },
-    { url = "https://files.pythonhosted.org/packages/7d/ee/72f72e97ff41c9ddac7d5c3e928a21088ce4c3d99855468ff62dd48e424e/zelos_can-0.0.6-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4eb21a7498701fb16c2220974a0165c2fd0fa06e6f15582e7306ec5ca28129fb", size = 1307831 },
+    { url = "https://files.pythonhosted.org/packages/86/db/b475986c4609482feebba821329d650ed6a990143b6f3e2f5db561633841/zelos_can-0.0.7a1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:b0a22f65c3323ac4d438d8bf2d13964d2827b187985bb79a0ec07cf747702836", size = 692664 },
+    { url = "https://files.pythonhosted.org/packages/16/60/759e7e85e29b57eccf660b4f92c59866cd70e0b25bbbc264159244350eeb/zelos_can-0.0.7a1-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:ed1342aa2a68e8f20cfd85a3df4386ee0a0b7c06315fefefdc2256e9f4882e57", size = 972821 },
+    { url = "https://files.pythonhosted.org/packages/e5/70/95e3fa526c5144a6295467125d0aaf3e1796832d96ae5e66b481c3f6bc46/zelos_can-0.0.7a1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f6e71a9e6c57b10f61f9888d2803139e6c140467a4c8499e6841020788e57e2e", size = 1358405 },
+    { url = "https://files.pythonhosted.org/packages/00/1f/116e7cc95c5acb6e8e8ae3432c2d5b4987a2f7bc86c518f99b8418587ed1/zelos_can-0.0.7a1-cp310-abi3-win_amd64.whl", hash = "sha256:8c68a9f66223be32b59912cd13bb4eb445e289042f60673453ecc31c793ab5bd", size = 662508 },
 ]
 
 [package.optional-dependencies]
 python-can = [
-    { name = "python-can", marker = "sys_platform == 'linux'" },
+    { name = "python-can" },
 ]
 
 [[package]]
@@ -716,7 +718,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "python-can" },
     { name = "rich-click" },
-    { name = "zelos-can", extra = ["python-can"], marker = "sys_platform == 'linux'" },
+    { name = "zelos-can", extra = ["python-can"] },
     { name = "zelos-sdk" },
 ]
 
@@ -725,6 +727,7 @@ cli = [
     { name = "tqdm" },
 ]
 dev = [
+    { name = "jsonschema" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "ruff" },
@@ -733,6 +736,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cantools" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.3.0" },
     { name = "pyarrow", specifier = ">=14.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.2" },
@@ -741,7 +745,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.2" },
     { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.3.0" },
     { name = "tqdm", marker = "extra == 'cli'", specifier = ">=4.0.0" },
-    { name = "zelos-can", extras = ["python-can"], marker = "sys_platform == 'linux'", specifier = ">=0.0.6" },
+    { name = "zelos-can", extras = ["python-can"], specifier = ">=0.0.7a1" },
     { name = "zelos-sdk", specifier = ">=0.0.10a5" },
 ]
 
