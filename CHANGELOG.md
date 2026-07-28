@@ -3,6 +3,18 @@
 All notable changes to the Zelos CAN extension are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- **DBC files saved in cp1252/Latin-1 now load.** A DBC written by Windows CAN
+  tooling — e.g. a `"°C"` unit stored as the single byte `0xB0` — failed codec
+  startup with `Failed to load DBC database from file`. Requires
+  `zelos-can>=0.0.7`.
+
+### Changed
+- DBC load failures now report the file path and underlying cause instead of a
+  bare one-line error, and malformed DBCs report the offending line/column.
+
 ## [0.1.13]
 
 ### Added
