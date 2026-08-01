@@ -7,9 +7,15 @@ from pathlib import Path
 import rich_click as click
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
+from zelos_extension_can import SERVICE_NAME as _SERVICE_NAME
 from zelos_extension_can import cli as cli_commands
 
 DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.dbc"
+
+#: Re-exported so the at-rest inventory dump — which reads this entry module —
+#: sees the same namespace the live registration uses. See the definition in
+#: `zelos_extension_can/__init__.py`.
+SERVICE_NAME = _SERVICE_NAME
 
 # Configure rich-click
 click.rich_click.USE_RICH_MARKUP = True

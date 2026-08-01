@@ -426,6 +426,112 @@ def export_trace_to_log(
         return {"status": "error", "message": f"Export failed: {e}"}
 
 
+# ─── Standalone (runs with the extension stopped) ───────────────────────────
+
+
+def _configured_database_file() -> str | None:
+    """First `database_file` from the saved extension config, if any.
+
+    Config is at-rest state — it is written on Start and persists across stop —
+    so this resolves whether or not the extension is running. It is applied in
+    the action body rather than as a schema default because the inventory is
+    dumped at package time, before any config exists.
+    """
+    try:
+        from zelos_sdk.extensions.config import load_config
+
+        buses = (load_config() or {}).get("buses") or []
+    except Exception:  # no config yet, or schema mismatch — not an error here
+        return None
+    for bus in buses:
+        if isinstance(bus, dict) and bus.get("database_file"):
+            return str(bus["database_file"])
+    return None
+
+
+@action(
+    "Convert CAN Log",
+    "Convert a CAN log file to a Zelos trace (.trz). Runs without the extension "
+    "running — no bus, no live connection.",
+    timeout=600.0,
+    standalone=True,
+)
+@action.text(
+    "input_file",
+    title="CAN log",
+    description="Source .asc, .blf, .trc, .log, .csv or .mf4",
+    widget="file_path_picker",
+)
+@action.text(
+    "database_file",
+    title="Database (.dbc)",
+    description="Defaults to the first database_file configured for this extension",
+    required=False,
+    default="",
+    widget="file_path_picker",
+)
+@action.text(
+    "output_file",
+    title="Output (.trz)",
+    description="Defaults to the input file with a .trz suffix",
+    required=False,
+    default="",
+    widget="file_path_picker",
+)
+@action.boolean(
+    "force", title="Overwrite existing output", required=False, default=False, widget="toggle"
+)
+def convert(
+    input_file: str,
+    database_file: str = "",
+    output_file: str = "",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
+    CLI command, so the two surfaces cannot diverge."""
+    from .converter import SUPPORTED_FORMATS, convert_can_trace
+
+    source = Path(input_file).expanduser()
+    if not source.is_file():
+        return {"status": "error", "message": f"Input file not found: {source}"}
+    if source.suffix.lower() not in SUPPORTED_FORMATS:
+        return {
+            "status": "error",
+            "message": (
+                f"Unsupported format: {source.suffix}. "
+                f"Supported: {', '.join(SUPPORTED_FORMATS.keys())}"
+            ),
+        }
+
+    database = database_file or _configured_database_file()
+    if not database:
+        return {
+            "status": "error",
+            "message": "No database_file given and none configured for this extension",
+        }
+    database_path = Path(database).expanduser()
+    if not database_path.is_file():
+        return {"status": "error", "message": f"Database file not found: {database_path}"}
+
+    destination = Path(output_file).expanduser() if output_file else source.with_suffix(".trz")
+    if destination.exists():
+        if not force:
+            return {
+                "status": "error",
+                "message": f"Output exists: {destination} (enable Overwrite to replace it)",
+            }
+        destination.unlink()
+
+    stats = convert_can_trace(source, database_path, destination)
+    return {
+        "status": "success",
+        "input_file": str(source),
+        "database_file": str(database_path),
+        "output_file": str(destination),
+        **stats.to_dict(),
+    }
+
+
 # ─── Registration helper ────────────────────────────────────────────────────
 
 
