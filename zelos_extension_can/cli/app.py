@@ -12,7 +12,7 @@ import can.exceptions
 import zelos_sdk
 from zelos_sdk.extensions import load_config
 
-from .. import SERVICE_NAME
+from .. import ACTION_PREFIX
 from .. import actions as can_actions
 from ..codec import CanCodec
 from .utils import setup_shutdown_handler
@@ -235,12 +235,12 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         can_actions.CAN_CODECS[codec_name] = codec
 
     # Register the actions module once. The `can/` prefix is supplied by
-    # `init(name=SERVICE_NAME, actions=True)` below.
+    # `init(name=ACTION_PREFIX, actions=True)` below.
     can_actions.register_actions(zelos_sdk.actions_registry)
 
-    # Initialize SDK. `SERVICE_NAME` is package-level so the live namespace and
+    # Initialize SDK. `ACTION_PREFIX` is package-level so the live namespace and
     # the packaged at-rest inventory cannot drift apart.
-    zelos_sdk.init(name=SERVICE_NAME, log_level="info", actions=True)
+    zelos_sdk.init(name=ACTION_PREFIX, log_level="info", actions=True)
 
     # Setup shutdown handler for all codecs.
     for codec in codecs:
