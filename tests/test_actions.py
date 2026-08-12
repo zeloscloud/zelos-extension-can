@@ -117,33 +117,32 @@ class TestDispatch:
 
 
 class TestConverterDbcResolution:
+    # Failures must *raise* — the actions protocol derives its error verdict
+    # from a raised exception, not from a payload key.
     def test_requires_database_path_or_codec(self, two_codecs, tmp_path):
         # No database_path, no codec — must error.
-        result = actions.convert_trace_file(
-            input_path=str(tmp_path / "missing.log"),
-            database_path="",
-            codec="",
-        )
-        assert result["status"] == "error"
-        assert "database_path" in result["message"] and "codec" in result["message"]
+        with pytest.raises(ValueError, match=r"`database_path` or `codec`"):
+            actions.convert_trace_file(
+                input_path=str(tmp_path / "missing.log"),
+                database_path="",
+                codec="",
+            )
 
     def test_codec_fallback_uses_codecs_dbc(self, two_codecs, tmp_path):
         # Input doesn't exist — we only care that codec resolution gets past
         # the "neither was given" guard. The "Input file not found" branch
         # proves we successfully resolved a database from the codec.
-        result = actions.convert_trace_file(
-            input_path=str(tmp_path / "missing.log"),
-            database_path="",
-            codec="busA",
-        )
-        assert result["status"] == "error"
-        assert "Input file not found" in result["message"]
+        with pytest.raises(FileNotFoundError, match="Input file not found"):
+            actions.convert_trace_file(
+                input_path=str(tmp_path / "missing.log"),
+                database_path="",
+                codec="busA",
+            )
 
     def test_unknown_codec_in_fallback_is_explicit_error(self, two_codecs, tmp_path):
-        result = actions.convert_trace_file(
-            input_path=str(tmp_path / "missing.log"),
-            database_path="",
-            codec="nope",
-        )
-        assert result["status"] == "error"
-        assert "Unknown CAN codec" in result["message"]
+        with pytest.raises(ValueError, match="Unknown CAN codec"):
+            actions.convert_trace_file(
+                input_path=str(tmp_path / "missing.log"),
+                database_path="",
+                codec="nope",
+            )

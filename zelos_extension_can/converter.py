@@ -87,29 +87,58 @@ def _get_reader_config(input_file: Path) -> tuple[type, dict[str, Any]]:
     return reader_class, reader_kwargs
 
 
+def _make_decoder(
+    database_file: Path,
+    namespace: Any,
+    emit_schemas_on_init: bool = True,
+) -> Any:
+    """Build the Rust-backed decoder a conversion runs on.
+
+    Decoding happens in Rust with the GIL released, which is the whole point of
+    routing conversions through `zelos_can` rather than the Python `CanCodec`.
+
+    Two things are deliberate and load-bearing:
+
+    - **Source name.** `can_codec` is what `CanCodec` produced for a conversion
+      (no `bus_name` is passed on this path), and the source name *is* the
+      leading segment of every signal path in the resulting trace. Changing it
+      would silently re-path every future conversion and break saved layouts
+      against previously converted traces.
+    - **`timestamp_mode="absolute"`.** Preserves each frame's own timestamp
+      verbatim. The Rust side treats `absolute` as an alias for `hardware`;
+      anything it does not recognise falls back to `auto`, which would re-stamp
+      a recording against wall-clock.
+    """
+    from zelos_can import CanDecoder
+
+    return CanDecoder(
+        database_file=str(database_file),
+        timestamp_mode="absolute",
+        emit_schemas_on_init=emit_schemas_on_init,
+        source=zelos_sdk.TraceSource("can_codec", namespace=namespace),
+    )
+
+
 def _process_messages(
     reader: Any,
-    codec: Any,
+    decoder: Any,
     stats: ConversionStats,
     progress_callback: Callable[[int], None] | None = None,
 ) -> None:
-    """Process CAN messages through codec and track stats.
+    """Feed every frame through the decoder and track stats.
 
     Args:
         reader: CAN message reader iterator
-        codec: CanCodec instance for decoding
+        decoder: zelos_can.CanDecoder for decoding
         stats: ConversionStats to update
         progress_callback: Optional callback(message_count) for progress updates
     """
+    # `metrics()` crosses into Rust and rebuilds a snapshot, so it is read on
+    # the logging/callback cadence rather than once per frame. The old code
+    # paid three of those per message.
     last_log_count = 0
-    for can_msg in reader:
-        # Let the codec handle all the decoding complexity
-        codec._handle_message(can_msg)
-
-        # Track stats from codec metrics
-        stats.messages_converted = codec.metrics.messages_decoded
-        stats.messages_skipped = codec.metrics.unknown_messages
-        stats.decode_errors = codec.metrics.decode_errors
+    for seen, can_msg in enumerate(reader, start=1):
+        decoder.decode_message(can_msg)
 
         # Track timing
         if stats.start_timestamp is None and can_msg.timestamp:
@@ -117,18 +146,28 @@ def _process_messages(
         if can_msg.timestamp:
             stats.end_timestamp = can_msg.timestamp
 
-        # Progress callback every 1000 messages
-        if progress_callback and stats.messages_converted % 1000 == 0:
-            progress_callback(stats.messages_converted)
+        if seen % 1000 == 0:
+            metrics = decoder.metrics()
+            stats.messages_converted = metrics.messages_decoded
+            stats.messages_skipped = metrics.unknown_messages
+            stats.decode_errors = metrics.decode_errors
 
-        # Log progress every 100k messages
-        total = codec.metrics.messages_received
-        if total - last_log_count >= 100000:
-            logger.info(
-                f"Progress: {total:,} received, {stats.messages_converted:,} decoded, "
-                f"{stats.messages_skipped:,} skipped, {stats.decode_errors:,} errors"
-            )
-            last_log_count = total
+            if progress_callback:
+                progress_callback(stats.messages_converted)
+
+            if metrics.messages_received - last_log_count >= 100000:
+                logger.info(
+                    f"Progress: {metrics.messages_received:,} received, "
+                    f"{stats.messages_converted:,} decoded, "
+                    f"{stats.messages_skipped:,} skipped, {stats.decode_errors:,} errors"
+                )
+                last_log_count = metrics.messages_received
+
+    # Final read so a run shorter than the sampling interval still reports.
+    metrics = decoder.metrics()
+    stats.messages_converted = metrics.messages_decoded
+    stats.messages_skipped = metrics.unknown_messages
+    stats.decode_errors = metrics.decode_errors
 
 
 def convert_can_trace(
@@ -181,29 +220,17 @@ def convert_can_trace(
 
     # Create local, isolated trace writer and source in the namespace
     with zelos_sdk.TraceWriter(str(output_file), namespace=converter_namespace):
-        from .codec import CanCodec
-
-        # Configure codec for conversion: no timestamp adjustment
-        codec_config = {
-            "interface": "virtual",
-            "channel": "converter",
-            "database_file": str(database_file),
-            "timestamp_mode": "absolute",  # Preserve timestamps as-is
-            "emit_schemas_on_init": emit_schemas_on_init,
-        }
-
-        # Create local codec in isolated namespace
-        codec = CanCodec(codec_config, namespace=converter_namespace)
+        decoder = _make_decoder(database_file, converter_namespace, emit_schemas_on_init)
 
         # Create reader and process messages
         reader = reader_class(str(input_file), **reader_kwargs)
-        _process_messages(reader, codec, stats, progress_callback)
+        _process_messages(reader, decoder, stats, progress_callback)
 
-        # Wait for async trace writer to flush all buffered data
-        # TODO: TraceWriter should have proper backpressure/flush - this is a workaround
-        import time
-
-        time.sleep(2.0)
+        # Push buffered events through to the writer before it closes. This is
+        # the real flush the old `time.sleep(2.0)` was approximating: a sleep
+        # both wasted two seconds on every conversion and never actually
+        # guaranteed the tail had landed.
+        decoder.flush()
 
     logger.info(f"Conversion complete: {stats.to_dict()}")
     return stats
@@ -346,32 +373,18 @@ def _convert_with_progress(
 
     # Create local, isolated trace writer and codec in the namespace
     with zelos_sdk.TraceWriter(str(output_file), namespace=converter_namespace):
-        from .codec import CanCodec
-
-        codec_config = {
-            "interface": "virtual",
-            "channel": "converter",
-            "database_file": str(database_file),
-            "timestamp_mode": "absolute",
-            "emit_schemas_on_init": True,  # Pre-generate all schemas to avoid NaN batch failures
-        }
-
-        codec = CanCodec(codec_config, namespace=converter_namespace)
+        decoder = _make_decoder(database_file, converter_namespace)
         reader = reader_class(str(input_file), **reader_kwargs)
 
         # Wrap reader with tqdm if available
         if has_tqdm:
             with logging_redirect_tqdm():
                 reader_iter = tqdm(reader, total=file_lines, unit="msg")
-                _process_messages(reader_iter, codec, stats)
+                _process_messages(reader_iter, decoder, stats)
         else:
-            _process_messages(reader, codec, stats)
+            _process_messages(reader, decoder, stats)
 
-        # Wait for async trace writer to flush all buffered data
-        # TODO: TraceWriter should have proper backpressure/flush - this is a workaround
-        import time
-
-        time.sleep(2.0)
+        decoder.flush()
 
     # Print results to console
     print("\n✓ Conversion complete!")

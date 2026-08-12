@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -270,26 +271,19 @@ def convert_trace_file(
         if database_path:
             database_file = Path(database_path).expanduser().resolve()
             if not database_file.exists():
-                return {
-                    "status": "error",
-                    "message": f"CAN database file not found: {database_file}",
-                }
+                raise FileNotFoundError(f"CAN database file not found: {database_file}")
             logger.info("Using user-specified database: %s", database_file)
         elif codec:
-            # _get_codec raises ValueError on unknown codec — caught by the
-            # outer ValueError handler below, which surfaces the message
-            # with an "Invalid input:" prefix.
+            # _get_codec raises ValueError on unknown codec — propagated
+            # verbatim by the pass-through handler below.
             database_file = Path(_get_codec(codec).database_file_path)
             logger.info("Using codec '%s' database: %s", codec, database_file)
         else:
-            return {
-                "status": "error",
-                "message": "Provide either `database_path` or `codec`. Neither was given.",
-            }
+            raise ValueError("Provide either `database_path` or `codec`. Neither was given.")
 
         input_file = Path(input_path).expanduser().resolve()
         if not input_file.exists():
-            return {"status": "error", "message": f"Input file not found: {input_file}"}
+            raise FileNotFoundError(f"Input file not found: {input_file}")
 
         if not output_path:
             output_path = str(input_file.with_suffix(".trz"))
@@ -298,23 +292,17 @@ def convert_trace_file(
             output_file = output_file.with_suffix(".trz")
 
         if output_file == input_file:
-            return {
-                "status": "error",
-                "message": f"Output file cannot be the same as input file: {input_file}",
-            }
+            raise ValueError(f"Output file cannot be the same as input file: {input_file}")
 
         if output_file.exists():
             if overwrite:
                 logger.info("Removing existing file: %s", output_file)
                 output_file.unlink()
             else:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Output file '{output_file}' already exists. "
-                        "Enable 'Overwrite if exists' to replace it."
-                    ),
-                }
+                raise FileExistsError(
+                    f"Output file '{output_file}' already exists. "
+                    "Enable 'Overwrite if exists' to replace it."
+                )
 
         logger.info(
             "Converting %s -> %s using database: %s", input_file, output_file, database_file
@@ -332,15 +320,15 @@ def convert_trace_file(
             "output_file": str(output_file),
             **stats.to_dict(),
         }
-    except FileNotFoundError as e:
-        return {"status": "error", "message": f"File not found: {e}"}
-    except ValueError as e:
-        return {"status": "error", "message": f"Invalid input: {e}"}
+    except (FileNotFoundError, FileExistsError, ValueError):
+        # Already self-describing (validation above, plus convert_can_trace's
+        # own path/format errors) — propagate verbatim.
+        raise
     except ImportError as e:
-        return {"status": "error", "message": f"Missing dependency: {e}"}
+        raise ImportError(f"Missing dependency: {e}") from e
     except Exception as e:
         logger.exception("Conversion failed")
-        return {"status": "error", "message": f"Conversion failed: {e}"}
+        raise RuntimeError(f"Conversion failed: {e}") from e
 
 
 @action("Export Trace to Log", "Export raw CAN frames from TRZ to candump log format")
@@ -371,9 +359,9 @@ def export_trace_to_log(
     try:
         input_file = Path(input_path).expanduser().resolve()
         if not input_file.exists():
-            return {"status": "error", "message": f"Input file not found: {input_file}"}
+            raise FileNotFoundError(f"Input file not found: {input_file}")
         if input_file.suffix.lower() != ".trz":
-            return {"status": "error", "message": f"Input file must be a .trz file: {input_file}"}
+            raise ValueError(f"Input file must be a .trz file: {input_file}")
 
         if not output_path:
             output_path = str(input_file.with_suffix(".log"))
@@ -382,23 +370,17 @@ def export_trace_to_log(
             output_file = output_file.with_suffix(".log")
 
         if output_file == input_file:
-            return {
-                "status": "error",
-                "message": f"Output file cannot be the same as input file: {input_file}",
-            }
+            raise ValueError(f"Output file cannot be the same as input file: {input_file}")
 
         if output_file.exists():
             if overwrite:
                 logger.info("Removing existing file: %s", output_file)
                 output_file.unlink()
             else:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Output file '{output_file}' already exists. "
-                        "Enable 'Overwrite if exists' to replace it."
-                    ),
-                }
+                raise FileExistsError(
+                    f"Output file '{output_file}' already exists. "
+                    "Enable 'Overwrite if exists' to replace it."
+                )
 
         logger.info("Exporting %s -> %s", input_file, output_file)
         stats = export_to_candump(input_file, output_file)
@@ -419,11 +401,12 @@ def export_trace_to_log(
             "frame_count": stats["frame_count"],
             "sources_exported": stats["sources_exported"],
         }
-    except FileNotFoundError as e:
-        return {"status": "error", "message": f"File not found: {e}"}
+    except (FileNotFoundError, FileExistsError, ValueError):
+        # Already self-describing — propagate verbatim.
+        raise
     except Exception as e:
         logger.exception("Export failed")
-        return {"status": "error", "message": f"Export failed: {e}"}
+        raise RuntimeError(f"Export failed: {e}") from e
 
 
 # ─── Standalone (runs with the extension stopped) ───────────────────────────
@@ -449,11 +432,50 @@ def _configured_database_file() -> str | None:
     return None
 
 
+def _open_in_app(path: Path) -> None:
+    """Hand a finished .trz to the desktop app via the OS file association.
+
+    There is no agent RPC for "open this trace", so the route is the platform
+    opener plus the app's own `.trz` association. Two details are load-bearing
+    when this runs at rest:
+
+    - **Own session.** A standalone action runs in a `setsid`-detached one-shot
+      whose *process group* the supervisor kills on any abnormal exit. A child
+      in that group would be killed with it, so the opener gets its own session.
+    - **Detached stdio.** The supervisor drains the run's stdout/stderr pipes and
+      waits for them to close. A child inheriting them holds them open after the
+      action returns, which stalls the run and then trips the "pipes open but the
+      child is gone" terminate path. Redirect to devnull so the run ends cleanly.
+
+    Raises whatever the spawn raises; the caller decides that a conversion which
+    produced a file is not a failure just because the GUI did not come up.
+    """
+    if sys.platform == "darwin":
+        argv = ["open", str(path)]
+    elif sys.platform == "win32":
+        argv = ["cmd", "/c", "start", "", str(path)]
+    else:
+        argv = ["xdg-open", str(path)]
+
+    subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 @action(
     "Convert CAN Log",
     "Convert a CAN log file to a Zelos trace (.trz). Runs without the extension "
     "running — no bus, no live connection.",
-    timeout=600.0,
+    # Conversion is I/O bound over files that can reach multi-GB. 30 minutes is
+    # a ceiling for the pathological case, not an expectation; the action
+    # returns as soon as the file is written. Note the AI tool bridge clamps
+    # its own calls to MAX_ACTION_TOOL_TIMEOUT_MS (5 min) regardless, so long
+    # conversions are an action-panel / CLI path.
+    timeout=1800.0,
     standalone=True,
 )
 @action.text(
@@ -481,11 +503,20 @@ def _configured_database_file() -> str | None:
 @action.boolean(
     "force", title="Overwrite existing output", required=False, default=False, widget="toggle"
 )
+@action.boolean(
+    "open_on_complete",
+    title="Open trace when finished",
+    description="Open the converted .trz in the Zelos app once the conversion succeeds",
+    required=False,
+    default=False,
+    widget="toggle",
+)
 def convert(
     input_file: str,
     database_file: str = "",
     output_file: str = "",
     force: bool = False,
+    open_on_complete: bool = False,
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
@@ -493,43 +524,52 @@ def convert(
 
     source = Path(input_file).expanduser()
     if not source.is_file():
-        return {"status": "error", "message": f"Input file not found: {source}"}
+        raise FileNotFoundError(f"Input file not found: {source}")
     if source.suffix.lower() not in SUPPORTED_FORMATS:
-        return {
-            "status": "error",
-            "message": (
-                f"Unsupported format: {source.suffix}. "
-                f"Supported: {', '.join(SUPPORTED_FORMATS.keys())}"
-            ),
-        }
+        raise ValueError(
+            f"Unsupported format: {source.suffix}. Supported: {', '.join(SUPPORTED_FORMATS.keys())}"
+        )
 
     database = database_file or _configured_database_file()
     if not database:
-        return {
-            "status": "error",
-            "message": "No database_file given and none configured for this extension",
-        }
+        raise ValueError("No database_file given and none configured for this extension")
     database_path = Path(database).expanduser()
     if not database_path.is_file():
-        return {"status": "error", "message": f"Database file not found: {database_path}"}
+        raise FileNotFoundError(f"Database file not found: {database_path}")
 
     destination = Path(output_file).expanduser() if output_file else source.with_suffix(".trz")
     if destination.exists():
         if not force:
-            return {
-                "status": "error",
-                "message": f"Output exists: {destination} (enable Overwrite to replace it)",
-            }
+            raise FileExistsError(f"Output exists: {destination} (enable Overwrite to replace it)")
         destination.unlink()
 
     stats = convert_can_trace(source, database_path, destination)
-    return {
+
+    # The trace exists on disk from here on. Failing to open it is a worse
+    # outcome to report than it is a real one: the conversion succeeded, and
+    # raising now would tell the caller the whole run failed and invite a
+    # re-run of work already done. Report it in-band instead.
+    opened = False
+    open_error: str | None = None
+    if open_on_complete:
+        try:
+            _open_in_app(destination)
+            opened = True
+        except Exception as e:  # noqa: BLE001 — any spawn failure is non-fatal here
+            open_error = str(e)
+            logger.warning("Converted %s but could not open it: %s", destination, e)
+
+    result = {
         "status": "success",
         "input_file": str(source),
         "database_file": str(database_path),
         "output_file": str(destination),
+        "opened": opened,
         **stats.to_dict(),
     }
+    if open_error is not None:
+        result["open_error"] = open_error
+    return result
 
 
 # ─── Registration helper ────────────────────────────────────────────────────
