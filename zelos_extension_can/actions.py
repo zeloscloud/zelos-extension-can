@@ -1,7 +1,7 @@
-"""Free-floating CAN action functions registered under `can/<name>`.
+"""Free-floating CAN action functions registered under `<ACTION_PREFIX>/<name>`.
 
 This is the standard pattern for multi-bus extensions: a single global namespace
-keyed by a `codec` parameter, not per-bus action paths (`can/<bus>/<action>`).
+keyed by a `codec` parameter, not per-bus action paths (`<prefix>/<bus>/<action>`).
 
 - CLI/SDK consumers get one stable surface — `can.send_message` always exists,
   with the same shape, regardless of how many buses are configured.

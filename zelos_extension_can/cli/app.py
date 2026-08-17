@@ -221,7 +221,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     codecs = [codec for codec, _ in codec_pairs]
 
     # Populate the shared codec registry that `actions.py` reads from. The
-    # action surface is a single global namespace — `can/send_message`,
+    # action surface is a single global namespace — `CAN/send_message`,
     # `CAN/get_tx_state`, etc. — with a `codec` parameter that selects which
     # bus to operate on. CLI usage:
     #
@@ -234,7 +234,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     for codec, codec_name in codec_pairs:
         can_actions.CAN_CODECS[codec_name] = codec
 
-    # Register the actions module once. The `can/` prefix is supplied by
+    # Register the actions module once. The address prefix is supplied by
     # `init(name=ACTION_PREFIX, actions=True)` below.
     can_actions.register_actions(zelos_sdk.actions_registry)
 
