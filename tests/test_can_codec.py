@@ -499,6 +499,107 @@ class TestErrorHandling:
             CanCodec(config)
 
 
+class TestEmitFailureSuppression:
+    """A deterministically failing message is reported once, then stays silent.
+
+    Extension logs persist to disk unwatched, so the log volume for a broken
+    message must stay bounded: at most ONE record per distinct failing message
+    key per process lifetime, and ZERO records once the key is blocklisted.
+    """
+
+    CODEC_LOGGER = "zelos_extension_can.codec"
+    FAILING_ID = 0x64  # DUT_Status, 8 data bytes
+    HEALTHY_ID = 0xC8  # DUT_Command, 1 data byte
+
+    @staticmethod
+    def _frame(arbitration_id: int, data: bytes):
+        import can
+
+        return can.Message(arbitration_id=arbitration_id, data=data, is_extended_id=False)
+
+    @staticmethod
+    def _distinct_events(codec):
+        """Make source.add_event return a distinct mock per event name."""
+        from unittest.mock import MagicMock
+
+        codec.source.add_event.side_effect = lambda name, fields: MagicMock()
+
+    def test_emit_failure_logs_once_then_suppresses(self, codec, caplog, monkeypatch):
+        """N frames of a message whose emit always fails produce exactly one log record."""
+        import logging
+
+        self._distinct_events(codec)
+
+        # Schema registration blows up for the failing message only - the same
+        # deterministic fault the real defect hit, repeated on every frame.
+        original_generate = codec._generate_base_schema
+
+        def failing_generate(dbc_msg):
+            if dbc_msg.frame_id == self.FAILING_ID:
+                raise RuntimeError("schema registration exploded")
+            return original_generate(dbc_msg)
+
+        monkeypatch.setattr(codec, "_generate_base_schema", failing_generate)
+
+        failing = self._frame(self.FAILING_ID, bytes(8))
+        healthy = self._frame(self.HEALTHY_ID, bytes(1))
+        frames = 25
+
+        with caplog.at_level(logging.DEBUG, logger=self.CODEC_LOGGER):
+            # First failing frame: loud, exactly once.
+            codec._decode_and_emit_message(failing, None)
+
+            errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+            assert len(errors) == 1
+            message = errors[0].getMessage()
+            assert "0064" in message
+            assert "DUT_Status" in message
+            assert "schema registration exploded" in message
+            assert "suppressing further errors for this message" in message
+
+            assert (self.FAILING_ID, False) in codec._failed_messages
+            assert codec.metrics.emit_errors == 1
+
+            # Every later frame: silent short-circuit, still counted.
+            for i in range(2, frames + 1):
+                caplog.clear()
+                codec._decode_and_emit_message(failing, None)
+                assert caplog.records == []
+                assert codec.metrics.emit_errors == i
+
+            # The healthy sibling keeps emitting throughout, unaffected.
+            caplog.clear()
+            for _ in range(frames):
+                codec._decode_and_emit_message(healthy, None)
+            assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+        healthy_event = codec._events[(self.HEALTHY_ID, False)]
+        assert healthy_event.log.call_count == frames
+        assert (self.HEALTHY_ID, False) not in codec._failed_messages
+
+        # Emit failures never touch decode_errors (bus-noise semantics).
+        assert codec.metrics.decode_errors == 0
+        assert codec.metrics.emit_errors == frames
+
+    def test_decode_error_keeps_its_own_arm(self, codec, caplog):
+        """A real DecodeError is transient bus noise: counted, quiet, never blocklisted."""
+        import logging
+
+        self._distinct_events(codec)
+
+        # DUT_Status is 8 bytes; a short frame raises cantools DecodeError.
+        short = self._frame(self.FAILING_ID, bytes(2))
+
+        with caplog.at_level(logging.DEBUG, logger=self.CODEC_LOGGER):
+            for _ in range(3):
+                codec._decode_and_emit_message(short, None)
+
+        assert codec.metrics.decode_errors == 3
+        assert codec.metrics.emit_errors == 0
+        assert (self.FAILING_ID, False) not in codec._failed_messages
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
 class TestFileUtils:
     """Test file utility functions."""
 

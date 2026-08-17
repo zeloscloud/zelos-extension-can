@@ -230,6 +230,11 @@ class Metrics:
     messages_received: int = 0
     messages_decoded: int = 0
     decode_errors: int = 0
+    # Unexpected failures in the decode -> emit path (schema registration,
+    # signal conversion, ...) plus every frame skipped afterwards for a message
+    # already known to fail. Deliberately separate from decode_errors, whose
+    # semantics are bus noise (malformed frames) that existing consumers rely on.
+    emit_errors: int = 0
     unknown_messages: int = 0
     # Counts CanError raised by the synchronous bus.send() in one-shot
     # send_raw / send_message paths. Periodics go through python-can's
@@ -312,6 +317,17 @@ class CanCodec(can.Listener):
 
         # Metrics tracking
         self.metrics = Metrics()
+
+        # Message keys whose decode -> emit path raised an unexpected exception
+        # (e.g. a schema that cannot be registered). Such faults are
+        # deterministic: without this set a 100 Hz message would raise, and log,
+        # 100 times a second forever.
+        #
+        # LOG-VOLUME INVARIANT (extension logs persist to disk, unwatched):
+        # at most ONE log record per distinct failing message key per process
+        # lifetime, and ZERO records on the short-circuit path once a key is in
+        # this set. Worst case is therefore one ERROR per DBC message, ever.
+        self._failed_messages: set[tuple[int, bool]] = set()
 
         # Demo mode simulation
         self.demo_mode = config.get("demo_mode", False)
@@ -991,16 +1007,25 @@ class CanCodec(can.Listener):
         :param msg: CAN message
         :param timestamp_ns: Timestamp in nanoseconds
         """
-        try:
-            key = self._message_key(msg.arbitration_id, msg.is_extended_id)
-            dbc_msg = self.messages_by_id.get(key)
-            if not dbc_msg:
-                logger.debug(
-                    "Unknown message ID: %04x (extended=%s)", msg.arbitration_id, msg.is_extended_id
-                )
-                self.metrics.unknown_messages += 1
-                return
+        # Resolved before the try so the failure handler below always has a key
+        # to blocklist — that is what bounds the log volume.
+        key = self._message_key(msg.arbitration_id, msg.is_extended_id)
+        dbc_msg = self.messages_by_id.get(key)
+        if not dbc_msg:
+            logger.debug(
+                "Unknown message ID: %04x (extended=%s)", msg.arbitration_id, msg.is_extended_id
+            )
+            self.metrics.unknown_messages += 1
+            return
 
+        # This message already failed with an unexpected error, which is
+        # deterministic, so skip the work. Silent by contract: the log-volume
+        # invariant on self._failed_messages allows ZERO records here.
+        if key in self._failed_messages:
+            self.metrics.emit_errors += 1
+            return
+
+        try:
             # decode_choices=False so a value-table hit doesn't replace the
             # scaled physical value with a NamedSignalValue wrapper that
             # carries the raw int. The trace consistently sees the physical
@@ -1022,8 +1047,19 @@ class CanCodec(can.Listener):
             logger.debug("Decode error for %04x: %s", msg.arbitration_id, e)
             self.metrics.decode_errors += 1
         except Exception as e:
-            logger.debug("Error decoding message %04x: %s", msg.arbitration_id, e)
-            self.metrics.decode_errors += 1
+            # First unexpected failure for this message (schema registration,
+            # signal conversion, ...). Loud once, then never again: the key is
+            # blocklisted so every later frame takes the silent short-circuit
+            # above, keeping the log-volume invariant.
+            logger.error(
+                "Failed to emit message %04x (%s): %s - suppressing further errors "
+                "for this message",
+                msg.arbitration_id,
+                dbc_msg.name,
+                e,
+            )
+            self._failed_messages.add(key)
+            self.metrics.emit_errors += 1
 
     def _handle_message(self, msg: can.Message) -> None:
         """Decode and emit CAN message to trace.
