@@ -222,13 +222,13 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
 
     # Populate the shared codec registry that `actions.py` reads from. The
     # action surface is a single global namespace — `can/send_message`,
-    # `can/get_tx_state`, etc. — with a `codec` parameter that selects which
+    # `CAN/get_tx_state`, etc. — with a `codec` parameter that selects which
     # bus to operate on. CLI usage:
     #
-    #   zelos actions execute can/send_raw \
+    #   zelos actions execute CAN/send_raw \
     #       --params '{"codec":"busA","can_id":"0x100","data":"01 02"}'
     #
-    # Web apps discover the bus list by calling `can/list_codecs`.
+    # Web apps discover the bus list by calling `CAN/list_codecs`.
     # Codec-name uniqueness is already enforced inside _create_codecs (multi-bus
     # path) and trivially satisfied in the single-bus path.
     for codec, codec_name in codec_pairs:

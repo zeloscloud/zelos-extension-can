@@ -584,10 +584,10 @@ def convert(
 
 def register_actions(registry: ActionsRegistry) -> list[str]:
     """Register every @action-decorated free function in this module by its
-    bare function name. The leading `can/` segment that consumers see comes
-    from `zelos_sdk.init(name="can", actions=True)` — the service-name prefix
-    is concatenated at serve time, so registering the raw `__name__` here
-    produces the desired `can/<func_name>` wire paths.
+    bare function name. The leading `CAN/` segment that consumers see comes
+    from `zelos_sdk.init(name=ACTION_PREFIX, actions=True)` — the service-name
+    prefix is concatenated at serve time, so registering the raw `__name__`
+    here produces the desired `CAN/<func_name>` wire paths.
 
     Returns the list of registered names (without the service prefix)."""
     module = sys.modules[__name__]
