@@ -136,15 +136,32 @@ def _process_messages(
     # `metrics()` crosses into Rust and rebuilds a snapshot, so it is read on
     # the logging/callback cadence rather than once per frame. The old code
     # paid three of those per message.
+    # Timestamps are passed explicitly rather than via `decode_message`, which
+    # treats 0.0 as "no hardware timestamp" and substitutes wall-clock now. That
+    # is right for a live bus, where python-can reports 0.0 when the driver gives
+    # nothing, and wrong for file replay, where 0.0 is the first frame of any
+    # relative-timestamped capture. Left alone, converting a candump whose first
+    # line reads `(0.000000)` produces a trace spanning from that frame's
+    # wall-clock stamp to the rest of the file's epoch times.
+    decode = decoder.decode_frame
     last_log_count = 0
     for seen, can_msg in enumerate(reader, start=1):
-        decoder.decode_message(can_msg)
+        ts = can_msg.timestamp
+        decode(
+            arbitration_id=can_msg.arbitration_id,
+            data=bytes(can_msg.data),
+            timestamp_ns=None if ts is None else int(ts * 1e9),
+            is_extended=can_msg.is_extended_id,
+            is_fd=can_msg.is_fd,
+            is_remote_frame=can_msg.is_remote_frame,
+        )
 
-        # Track timing
-        if stats.start_timestamp is None and can_msg.timestamp:
-            stats.start_timestamp = can_msg.timestamp
-        if can_msg.timestamp:
-            stats.end_timestamp = can_msg.timestamp
+        # Track timing. `is not None` rather than truthiness: a 0.0 stamp is a
+        # real first frame, not a missing one.
+        if ts is not None:
+            if stats.start_timestamp is None:
+                stats.start_timestamp = ts
+            stats.end_timestamp = ts
 
         if seen % 1000 == 0:
             metrics = decoder.metrics()

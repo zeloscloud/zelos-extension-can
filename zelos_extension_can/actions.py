@@ -385,15 +385,16 @@ def export_trace_to_log(
         logger.info("Exporting %s -> %s", input_file, output_file)
         stats = export_to_candump(input_file, output_file)
         if stats["frame_count"] == 0:
-            return {
-                "status": "warning",
-                "message": (
-                    "No raw CAN frames found in trace. "
-                    "Ensure 'Log Raw CAN Frames' was enabled when recording."
-                ),
-                "input_file": str(input_file),
-                "sources_found": stats["sources_found"],
-            }
+            # Raise, do not return. `export_to_candump` writes no file when the
+            # trace has no raw sources, so a returned payload here reads as
+            # success (a plain return means "no verdict", which the wire maps to
+            # DONE) while `output_file` does not exist. A caller chaining on exit
+            # status would proceed against a missing file.
+            raise ValueError(
+                "No raw CAN frames found in trace "
+                f"(sources found: {stats['sources_found']}). "
+                "Ensure 'Log Raw CAN Frames' was enabled when recording."
+            )
         return {
             "status": "success",
             "input_file": str(input_file),
@@ -537,7 +538,13 @@ def convert(
     if not database_path.is_file():
         raise FileNotFoundError(f"Database file not found: {database_path}")
 
-    destination = Path(output_file).expanduser() if output_file else source.with_suffix(".trz")
+    # Resolved, not just expanded. Two reasons: a relative path would otherwise
+    # resolve against the extension's working directory rather than the caller's,
+    # and an unresolved path starting with `-` reaches the platform opener as a
+    # flag (`open -a.trz` parses as `open -a <app>`).
+    destination = (
+        Path(output_file).expanduser().resolve() if output_file else source.with_suffix(".trz")
+    )
     if destination.exists():
         if not force:
             raise FileExistsError(f"Output exists: {destination} (enable Overwrite to replace it)")

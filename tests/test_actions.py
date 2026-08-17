@@ -146,3 +146,105 @@ class TestConverterDbcResolution:
                 database_path="",
                 codec="nope",
             )
+
+
+class TestStandaloneConvert:
+    """The at-rest ``convert`` action.
+
+    Distinct from ``convert_trace_file`` above: this is the one declared
+    ``standalone=True``, so it runs in a one-shot interpreter with no extension
+    process, no bus, and nothing listening for its logs. Raising is the only
+    failure signal a caller gets, because a plain return means "no verdict",
+    which the wire maps to DONE.
+    """
+
+    def _log(self, tmp_path: Path) -> Path:
+        src = tmp_path / "capture.log"
+        src.write_text("(0.0) can0 100#0011223344556677\n")
+        return src
+
+    def test_missing_input_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError, match="Input file not found"):
+            actions.convert(input_file=str(tmp_path / "missing.log"))
+
+    def test_unsupported_format_raises(self, tmp_path):
+        src = tmp_path / "capture.wat"
+        src.write_text("nope")
+        with pytest.raises(ValueError, match="Unsupported format"):
+            actions.convert(input_file=str(src))
+
+    def test_no_database_anywhere_raises(self, tmp_path):
+        src = self._log(tmp_path)
+        with (
+            patch.object(actions, "_configured_database_file", return_value=None),
+            pytest.raises(ValueError, match="No database_file given"),
+        ):
+            actions.convert(input_file=str(src))
+
+    def test_missing_database_raises(self, tmp_path):
+        src = self._log(tmp_path)
+        with pytest.raises(FileNotFoundError, match="Database file not found"):
+            actions.convert(input_file=str(src), database_file=str(tmp_path / "nope.dbc"))
+
+    def test_existing_output_without_force_raises(self, tmp_path):
+        src = self._log(tmp_path)
+        dest = tmp_path / "capture.trz"
+        dest.write_text("occupied")
+        with pytest.raises(FileExistsError, match="Output exists"):
+            actions.convert(input_file=str(src), database_file=str(DBC_PATH), output_file=str(dest))
+
+
+class TestOpenInApp:
+    """`_open_in_app`'s spawn contract.
+
+    Both kwargs asserted here are load-bearing, not cosmetic. A standalone action
+    runs in a setsid one-shot whose *process group* the supervisor kills on
+    abnormal exit, and whose stdout/stderr it drains to EOF before considering
+    the run finished. A child in that group dies with it; a child inheriting
+    those pipes holds them open past the action's return, stalling the run and
+    then tripping the terminate path.
+    """
+
+    def test_spawns_detached_with_no_inherited_pipes(self, tmp_path):
+        import subprocess
+
+        target = tmp_path / "out.trz"
+        with patch("subprocess.Popen") as popen:
+            actions._open_in_app(target)
+
+        assert popen.call_count == 1
+        args, kwargs = popen.call_args
+        assert kwargs["start_new_session"] is True, "opener must escape the killed process group"
+        for stream in ("stdin", "stdout", "stderr"):
+            assert kwargs[stream] is subprocess.DEVNULL, f"{stream} must not hold the run's pipes"
+        # argv list, never a shell string: the path is caller-supplied.
+        assert isinstance(args[0], list)
+        assert str(target) in args[0]
+
+    def test_open_failure_does_not_fail_a_finished_conversion(self, tmp_path):
+        src = tmp_path / "capture.log"
+        src.write_text("(0.0) can0 100#0011223344556677\n")
+        dest = tmp_path / "capture.trz"
+
+        class _Stats:
+            def to_dict(self):
+                return {}
+
+        # `convert` imports convert_can_trace inside the function body, so it
+        # must be patched where it is defined, not on the actions module.
+        with (
+            patch("zelos_extension_can.converter.convert_can_trace", return_value=_Stats()),
+            patch.object(actions, "_open_in_app", side_effect=OSError("no opener")),
+        ):
+            result = actions.convert(
+                input_file=str(src),
+                database_file=str(DBC_PATH),
+                output_file=str(dest),
+                open_on_complete=True,
+            )
+
+        # The trace exists by this point. A failed open reported as a failed
+        # conversion would send the caller to re-run work that already finished.
+        assert result["status"] == "success"
+        assert result["opened"] is False
+        assert "no opener" in result["open_error"]
