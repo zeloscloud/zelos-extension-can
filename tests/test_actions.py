@@ -193,19 +193,52 @@ class TestStandaloneConvert:
         with pytest.raises(FileExistsError, match="Output exists"):
             actions.convert(input_file=str(src), database_file=str(DBC_PATH), output_file=str(dest))
 
+    @pytest.mark.parametrize("preexisting", [None, "previous good trace"])
+    def test_failed_conversion_publishes_nothing(self, tmp_path, preexisting):
+        # A truncated .trz at the requested path is indistinguishable from a
+        # complete capture, so a conversion that dies mid-write must leave the
+        # destination exactly as it found it.
+        src = self._log(tmp_path)
+        dest = tmp_path / "capture.trz"
+        if preexisting is not None:
+            dest.write_text(preexisting)
+
+        def _die_mid_write(_input, _database, output, **_kwargs):
+            output.write_text("truncated")
+            raise RuntimeError("boom")
+
+        with (
+            patch("zelos_extension_can.converter.convert_can_trace", _die_mid_write),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            actions.convert(
+                input_file=str(src),
+                database_file=str(DBC_PATH),
+                output_file=str(dest),
+                force=True,
+            )
+
+        if preexisting is None:
+            assert not dest.exists()
+        else:
+            assert dest.read_text() == preexisting
+        # And no scratch left behind next to it.
+        assert {p.name for p in tmp_path.iterdir()} <= {"capture.log", "capture.trz"}
+
 
 class TestOpenInApp:
-    """`_open_in_app`'s spawn contract.
+    """`_open_in_app`'s opener contract.
 
-    Both kwargs asserted here are load-bearing, not cosmetic. A standalone action
-    runs in a setsid one-shot whose *process group* the supervisor kills on
-    abnormal exit, and whose stdout/stderr it drains to EOF before considering
+    Both Popen kwargs asserted here are load-bearing, not cosmetic. A standalone
+    action runs in a setsid one-shot whose *process group* the supervisor kills
+    on abnormal exit, and whose stdout/stderr it drains to EOF before considering
     the run finished. A child in that group dies with it; a child inheriting
     those pipes holds them open past the action's return, stalling the run and
     then tripping the terminate path.
     """
 
-    def test_spawns_detached_with_no_inherited_pipes(self, tmp_path):
+    def test_posix_spawn_is_detached_with_no_inherited_pipes(self, tmp_path):
+        # Runs the darwin/linux branch — the win32 branch is covered below.
         import subprocess
 
         target = tmp_path / "out.trz"
@@ -217,9 +250,23 @@ class TestOpenInApp:
         assert kwargs["start_new_session"] is True, "opener must escape the killed process group"
         for stream in ("stdin", "stdout", "stderr"):
             assert kwargs[stream] is subprocess.DEVNULL, f"{stream} must not hold the run's pipes"
-        # argv list, never a shell string: the path is caller-supplied.
+        # execve'd argv, no shell: `open`/`xdg-open` get the path as one argument.
         assert isinstance(args[0], list)
         assert str(target) in args[0]
+
+    def test_windows_hands_the_path_to_shell_execute_not_cmd(self, tmp_path):
+        # `cmd /c start` re-parses its command line and list2cmdline quotes only
+        # for whitespace, so this space-free path would select a command there.
+        target = tmp_path / "out&calc.exe.trz"
+        with (
+            patch.object(actions.sys, "platform", "win32"),
+            patch.object(actions.os, "startfile", create=True) as startfile,
+            patch("subprocess.Popen") as popen,
+        ):
+            actions._open_in_app(target)
+
+        startfile.assert_called_once_with(target)
+        popen.assert_not_called()
 
     def test_open_failure_does_not_fail_a_finished_conversion(self, tmp_path):
         src = tmp_path / "capture.log"
@@ -230,10 +277,16 @@ class TestOpenInApp:
             def to_dict(self):
                 return {}
 
+        def _write_trace(_input, _database, output, **_kwargs):
+            # The action publishes the file the converter wrote, so the stub has
+            # to write one.
+            output.write_text("trace")
+            return _Stats()
+
         # `convert` imports convert_can_trace inside the function body, so it
         # must be patched where it is defined, not on the actions module.
         with (
-            patch("zelos_extension_can.converter.convert_can_trace", return_value=_Stats()),
+            patch("zelos_extension_can.converter.convert_can_trace", _write_trace),
             patch.object(actions, "_open_in_app", side_effect=OSError("no opener")),
         ):
             result = actions.convert(
@@ -248,3 +301,4 @@ class TestOpenInApp:
         assert result["status"] == "success"
         assert result["opened"] is False
         assert "no opener" in result["open_error"]
+        assert dest.read_text() == "trace"  # staged output landed at the destination
