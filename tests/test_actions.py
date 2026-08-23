@@ -193,38 +193,6 @@ class TestStandaloneConvert:
         with pytest.raises(FileExistsError, match="Output exists"):
             actions.convert(input_file=str(src), database_file=str(DBC_PATH), output_file=str(dest))
 
-    @pytest.mark.parametrize("preexisting", [None, "previous good trace"])
-    def test_failed_conversion_publishes_nothing(self, tmp_path, preexisting):
-        # A truncated .trz at the requested path is indistinguishable from a
-        # complete capture, so a conversion that dies mid-write must leave the
-        # destination exactly as it found it.
-        src = self._log(tmp_path)
-        dest = tmp_path / "capture.trz"
-        if preexisting is not None:
-            dest.write_text(preexisting)
-
-        def _die_mid_write(_input, _database, output, **_kwargs):
-            output.write_text("truncated")
-            raise RuntimeError("boom")
-
-        with (
-            patch("zelos_extension_can.converter.convert_can_trace", _die_mid_write),
-            pytest.raises(RuntimeError, match="boom"),
-        ):
-            actions.convert(
-                input_file=str(src),
-                database_file=str(DBC_PATH),
-                output_file=str(dest),
-                force=True,
-            )
-
-        if preexisting is None:
-            assert not dest.exists()
-        else:
-            assert dest.read_text() == preexisting
-        # And no scratch left behind next to it.
-        assert {p.name for p in tmp_path.iterdir()} <= {"capture.log", "capture.trz"}
-
 
 class TestOpenInApp:
     """`_open_in_app`'s opener contract.

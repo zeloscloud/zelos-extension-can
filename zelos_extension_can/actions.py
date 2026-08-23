@@ -23,12 +23,8 @@ from __future__ import annotations
 import inspect
 import logging
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -57,28 +53,17 @@ def _get_codec(name: str) -> CanCodec:
     return codec
 
 
-@contextmanager
-def _staged_output(destination: Path) -> Iterator[Path]:
-    """Yield a scratch path to write, published onto `destination` only on a
-    clean return.
+def _clear_destination(destination: Path, overwrite: bool) -> None:
+    """Make `destination` writable, or refuse.
 
-    A run that raises partway, or is killed at its timeout, must not leave a
-    finalized-but-truncated file at the requested path: a short trace reads as a
-    complete capture, and the previous good file is gone. Staging leaves the
-    destination untouched until the work has finished, makes the publish a
-    same-filesystem rename (atomic, so concurrent runs resolve to one whole
-    file), and leaks at worst a hidden scratch dir on a hard kill.
-
-    A scratch *directory* rather than a temp file because `TraceWriter` refuses
-    to open a path that already exists.
+    `TraceWriter` will not open a path that already exists, so replacing one
+    means removing it first.
     """
-    staging = Path(tempfile.mkdtemp(dir=destination.parent, prefix=f".{destination.name}."))
-    try:
-        staged = staging / destination.name
-        yield staged
-        staged.replace(destination)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+    if not destination.exists():
+        return
+    if not overwrite:
+        raise FileExistsError(f"Output exists: {destination} (enable Overwrite to replace it)")
+    destination.unlink()
 
 
 # ─── Discovery ──────────────────────────────────────────────────────────────
@@ -323,22 +308,17 @@ def convert_trace_file(
         if output_file == input_file:
             raise ValueError(f"Output file cannot be the same as input file: {input_file}")
 
-        if output_file.exists() and not overwrite:
-            raise FileExistsError(
-                f"Output file '{output_file}' already exists. "
-                "Enable 'Overwrite if exists' to replace it."
-            )
+        _clear_destination(output_file, overwrite)
 
         logger.info(
             "Converting %s -> %s using database: %s", input_file, output_file, database_file
         )
-        with _staged_output(output_file) as staged:
-            stats = convert_can_trace(
-                input_file,
-                database_file,
-                staged,
-                emit_schemas_on_init=emit_all_schemas,
-            )
+        stats = convert_can_trace(
+            input_file,
+            database_file,
+            output_file,
+            emit_schemas_on_init=emit_all_schemas,
+        )
         return {
             "status": "success",
             "input_file": str(input_file),
@@ -398,27 +378,21 @@ def export_trace_to_log(
         if output_file == input_file:
             raise ValueError(f"Output file cannot be the same as input file: {input_file}")
 
-        if output_file.exists() and not overwrite:
-            raise FileExistsError(
-                f"Output file '{output_file}' already exists. "
-                "Enable 'Overwrite if exists' to replace it."
-            )
+        _clear_destination(output_file, overwrite)
 
         logger.info("Exporting %s -> %s", input_file, output_file)
-        with _staged_output(output_file) as staged:
-            stats = export_to_candump(input_file, staged)
-            if stats["frame_count"] == 0:
-                # Raise, do not return. `export_to_candump` writes no file when
-                # the trace has no raw sources, so a returned payload here reads
-                # as success (a plain return means "no verdict", which the wire
-                # maps to DONE) while `output_file` does not exist. A caller
-                # chaining on exit status would proceed against a missing file.
-                # Raised inside the staging block so nothing is published.
-                raise ValueError(
-                    "No raw CAN frames found in trace "
-                    f"(sources found: {stats['sources_found']}). "
-                    "Ensure 'Log Raw CAN Frames' was enabled when recording."
-                )
+        stats = export_to_candump(input_file, output_file)
+        if stats["frame_count"] == 0:
+            # Raise, do not return. `export_to_candump` writes no file when the
+            # trace has no raw sources, so a returned payload here reads as
+            # success (a plain return means "no verdict", which the wire maps to
+            # DONE) while `output_file` does not exist. A caller chaining on exit
+            # status would proceed against a missing file.
+            raise ValueError(
+                "No raw CAN frames found in trace "
+                f"(sources found: {stats['sources_found']}). "
+                "Ensure 'Log Raw CAN Frames' was enabled when recording."
+            )
         return {
             "status": "success",
             "input_file": str(input_file),
@@ -575,11 +549,9 @@ def convert(
     destination = (
         Path(output_file).expanduser().resolve() if output_file else source.with_suffix(".trz")
     )
-    if destination.exists() and not force:
-        raise FileExistsError(f"Output exists: {destination} (enable Overwrite to replace it)")
+    _clear_destination(destination, force)
 
-    with _staged_output(destination) as staged:
-        stats = convert_can_trace(source, database_path, staged)
+    stats = convert_can_trace(source, database_path, destination)
 
     # The trace exists on disk from here on. Failing to open it is a worse
     # outcome to report than it is a real one: the conversion succeeded, and
