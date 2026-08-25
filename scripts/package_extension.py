@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Package the Zelos extension into a tar.gz archive."""
 
+import json
+import subprocess
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 
 try:
     import tomllib  # Python 3.11+
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore
+
+#: Standalone action inventory, read from the archive root by the agent.
+ACTIONS_FILE = "actions.json"
 
 
 def filter_archive_files(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
@@ -35,6 +41,76 @@ def filter_archive_files(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
         return None
 
     return tarinfo
+
+
+def generate_actions_inventory(manifest: dict) -> str | None:
+    """Generate `actions.json` from the SDK's standalone-action harness.
+
+    The agent reads this file for packaged installs and only ever dumps the
+    inventory itself for dev installs, so an archive without it ships an
+    extension whose standalone actions do not exist for customers.
+
+    Mirrors `zelos extensions package`: same harness, same arguments, and the
+    dump's bytes are staged verbatim (the canonical packager writes exactly what
+    the harness produced, with no normalization).
+
+    :param manifest: Parsed extension.toml
+    :return: Archive-relative path to include, or None when nothing was written
+    """
+    entry = manifest.get("runtime", {}).get("entry")
+    if not entry:
+        return None
+
+    # Out-of-tree scratch: a failed dump must not be able to overwrite an
+    # existing inventory with a partial document.
+    with tempfile.TemporaryDirectory(prefix="zelos-standalone-dump-") as scratch:
+        out_path = Path(scratch) / ACTIONS_FILE
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "zelos_sdk.extensions.actions",
+                "dump",
+                "--entry",
+                entry,
+                "--out",
+                str(out_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 or not out_path.exists():
+            # `zelos extensions package` only warns here because it serves
+            # interactive authors on older SDKs. Release packaging is unattended:
+            # warning would ship a stale or missing inventory and still go green.
+            print(f"ERROR: standalone action dump failed (exit {result.returncode})")
+            print(result.stderr.strip() or "no diagnostic")
+            sys.exit(1)
+        raw = out_path.read_bytes()
+
+    try:
+        document = json.loads(raw)
+        prefix = str(document["action_prefix"]).strip()
+        found = document["actions"]
+        if not prefix or "/" in prefix:
+            raise ValueError(f"action prefix '{prefix}' must be non-empty and contain no '/'")
+    except (KeyError, TypeError, ValueError) as e:
+        print(f"ERROR: standalone action dump produced an unusable {ACTIONS_FILE}: {e}")
+        sys.exit(1)
+
+    inventory = Path(ACTIONS_FILE)
+    if not found:
+        # The only outcome that may delete: the dump proved this build has no
+        # standalone actions, so a leftover file would advertise ones it lacks.
+        if inventory.exists():
+            inventory.unlink()
+            print(f"WARNING: no standalone actions found; removed stale {ACTIONS_FILE}")
+        return None
+
+    inventory.write_bytes(raw)
+    print(f"Collected {len(found)} standalone action(s) under '{prefix}' -> {ACTIONS_FILE}")
+    return ACTIONS_FILE
 
 
 def main() -> None:
@@ -103,6 +179,10 @@ def main() -> None:
     for path in Path().iterdir():
         if path.is_dir() and path.name not in exclude_dirs and (path / "__init__.py").exists():
             files.append(path.name)
+
+    inventory = generate_actions_inventory(manifest)
+    if inventory:
+        files.append(inventory)
 
     # Create archive
     project_name = Path.cwd().name

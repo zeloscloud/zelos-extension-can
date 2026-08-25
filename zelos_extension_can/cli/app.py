@@ -12,6 +12,7 @@ import can.exceptions
 import zelos_sdk
 from zelos_sdk.extensions import load_config
 
+from .. import ACTION_PREFIX
 from .. import actions as can_actions
 from ..codec import CanCodec
 from .utils import setup_shutdown_handler
@@ -220,25 +221,26 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     codecs = [codec for codec, _ in codec_pairs]
 
     # Populate the shared codec registry that `actions.py` reads from. The
-    # action surface is a single global namespace — `can/send_message`,
-    # `can/get_tx_state`, etc. — with a `codec` parameter that selects which
+    # action surface is a single global namespace — `CAN/send_message`,
+    # `CAN/get_tx_state`, etc. — with a `codec` parameter that selects which
     # bus to operate on. CLI usage:
     #
-    #   zelos actions execute can/send_raw \
+    #   zelos actions execute CAN/send_raw \
     #       --params '{"codec":"busA","can_id":"0x100","data":"01 02"}'
     #
-    # Web apps discover the bus list by calling `can/list_codecs`.
+    # Web apps discover the bus list by calling `CAN/list_codecs`.
     # Codec-name uniqueness is already enforced inside _create_codecs (multi-bus
     # path) and trivially satisfied in the single-bus path.
     for codec, codec_name in codec_pairs:
         can_actions.CAN_CODECS[codec_name] = codec
 
-    # Register the actions module once. The `can/` prefix is supplied by
-    # `init(name="can", actions=True)` below.
+    # Register the actions module once. The address prefix is supplied by
+    # `init(name=ACTION_PREFIX, actions=True)` below.
     can_actions.register_actions(zelos_sdk.actions_registry)
 
-    # Initialize SDK
-    zelos_sdk.init(name="can", log_level="info", actions=True)
+    # Initialize SDK. `ACTION_PREFIX` is package-level so the live namespace and
+    # the packaged at-rest inventory cannot drift apart.
+    zelos_sdk.init(name=ACTION_PREFIX, log_level="info", actions=True)
 
     # Setup shutdown handler for all codecs.
     for codec in codecs:
