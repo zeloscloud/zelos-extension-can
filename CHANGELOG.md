@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - DBC load failures now report the file path and underlying cause instead of a
   bare one-line error, and malformed DBCs report the offending line/column.
+- Python log lines now carry UTC ISO 8601 timestamps with milliseconds, matching
+  the SDK's Rust tracing format in the same extension log stream.
 
 ## [0.1.13]
 
