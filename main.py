@@ -2,6 +2,7 @@
 """Zelos CAN extension - CAN bus monitoring and database decoding."""
 
 import logging
+import time
 from pathlib import Path
 
 import rich_click as click
@@ -19,7 +20,13 @@ click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
 click.rich_click.STYLE_ERRORS_SUGGESTION = "yellow italic"
 
 # Configure logging - INFO level prevents debug logs from being sent to backend
-logging.basicConfig(level=logging.INFO)
+# UTC ISO 8601 with ms, matching the SDK's Rust tracing lines in the same log stream
+logging.Formatter.converter = time.gmtime
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s.%(msecs)03dZ %(levelname)5s %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 
 # Add the built-in handler to capture logs at INFO level and above
 # (DEBUG logs won't be sent to backend to avoid duplicate trace data)
