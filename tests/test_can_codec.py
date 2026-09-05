@@ -160,17 +160,37 @@ class TestSchemaUtils:
     """Test DBC to SDK type mapping."""
 
     def test_float_signal_mapping(self, codec):
-        """Float and scaled signals always map to Float64. fp32 can't faithfully
-        store decimal-like physical values (a 12-bit scale=0.001 signal stores
-        4.095 as 4.09499979); Float64 has enough decimal precision to keep
-        value-table lookups string-matching."""
+        """An IEEE float raw with identity conversion keeps its declared width;
+        a scaled signal is Float64 (fp32 folds adjacent raws at factor 0.001)."""
         msg = codec.db.get_message_by_name("DUT_Status")
-        float_signal = msg.get_signal_by_name("float_signal")
-
         from zelos_sdk import DataType
 
-        result = cantools_signal_to_trace_type(float_signal)
-        assert result == DataType.Float64
+        assert (
+            cantools_signal_to_trace_type(msg.get_signal_by_name("float_signal"))
+            == DataType.Float32
+        )
+        assert (
+            cantools_signal_to_trace_type(msg.get_signal_by_name("small_float_signal"))
+            == DataType.Float64
+        )
+
+    def test_integral_scale_width_follows_the_physical_range(self):
+        """An integral conversion stays an integer, sized to the physical range.
+        A fixed 32-bit type saturated (1000,0) on 24 bits and typed (1,-125) unsigned."""
+        import cantools
+        from zelos_sdk import DataType
+
+        db = cantools.database.load_string(
+            'VERSION ""\nBS_:\nBU_: x\nBO_ 100 M: 8 x\n'
+            ' SG_ doubled : 0|8@1+ (2,0) [0|0] "" x\n'
+            ' SG_ big : 8|24@1+ (1000,0) [0|0] "" x\n'
+            ' SG_ torque : 32|8@1+ (1,-125) [-125|130] "" x\n',
+            "dbc",
+        )
+        by = db.get_message_by_name("M").get_signal_by_name
+        assert cantools_signal_to_trace_type(by("doubled")) == DataType.UInt16
+        assert cantools_signal_to_trace_type(by("big")) == DataType.UInt64
+        assert cantools_signal_to_trace_type(by("torque")) == DataType.Int16
 
     def test_integer_signal_mapping(self, codec):
         """Test integer signal maps correctly."""
