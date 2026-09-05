@@ -1,5 +1,7 @@
 """Utilities for converting cantools types to zelos_sdk types."""
 
+import math
+
 import cantools.database
 import zelos_sdk
 
@@ -7,44 +9,60 @@ import zelos_sdk
 def cantools_signal_to_trace_type(
     signal: cantools.database.can.signal.Signal,
 ) -> zelos_sdk.DataType:
-    """Map cantools signal type to zelos_sdk DataType.
+    """Map a cantools signal to the DataType that holds its physical domain exactly.
 
-    Adapted from zeloscloud.codecs.can.utils._cantools_signal_to_trace_type
+    The conversion picks the domain, as cantools does (LinearIntegerConversion
+    vs LinearConversion), and the width follows the physical range:
 
-    Float / scaled signals use Float64 unconditionally. fp32 can't faithfully
-    store decimal-like physical values (e.g. a 12-bit signal with scale 0.001
-    stores 4.095 as 4.09499979 because 0.001 has no exact binary representation).
-    Float64 has enough decimal precision that `.10g`-formatted display cleanly
-    shows the intended value AND string-matches the value-table keys emitted
-    by describe_message. The 2x storage cost over Float32 is acceptable;
-    per-sample fidelity is not.
-
-    Identity-conversion integer signals (scale=1, offset=0) still pick the
-    smallest int that fits the bit field.
+    - fractional or non-finite factor/offset: Float64, never Float32. fp32
+      keeps 24 significant bits, so a 24-bit signal at factor 0.001 stores
+      16777214 and 16777215 as one value.
+    - IEEE float raw (SIG_VALTYPE_) with identity conversion: its own width.
+    - integral factor/offset, identity included: the smallest int holding the
+      physical range. A fixed 32-bit type saturated a 24-bit raw at factor
+      1000 and typed ``(1,-125)`` unsigned.
 
     :param signal: cantools signal definition
     :return: Corresponding zelos_sdk DataType
     """
-    # Signal is a float (has DBC attribute) or is float post-scaling.
-    if signal.is_float or isinstance(signal.scale, float):
+    scale = float(signal.scale if signal.scale is not None else 1)
+    offset = float(signal.offset if signal.offset is not None else 0)
+    if (
+        not (math.isfinite(scale) and math.isfinite(offset))
+        or scale != int(scale)
+        or offset != int(offset)
+    ):
         return zelos_sdk.DataType.Float64
+    if signal.is_float:
+        return zelos_sdk.DataType.Float64 if signal.length > 32 else zelos_sdk.DataType.Float32
+    if signal.is_signed:
+        raw_min, raw_max = -(1 << (signal.length - 1)), (1 << (signal.length - 1)) - 1
+    else:
+        raw_min, raw_max = 0, (1 << signal.length) - 1
+    lo, hi = sorted((raw_min * int(scale) + int(offset), raw_max * int(scale) + int(offset)))
+    return _int_type_for_range(lo, hi)
 
-    # Identity conversion — map to the smallest int type that fits the bit field.
-    if signal.scale == 1 and signal.offset == 0:
-        if signal.length <= 8:
-            return zelos_sdk.DataType.Int8 if signal.is_signed else zelos_sdk.DataType.UInt8
-        if signal.length <= 16:
-            return zelos_sdk.DataType.Int16 if signal.is_signed else zelos_sdk.DataType.UInt16
-        # For identity conversions between 17-32 bits, use smallest type that fits
-        if signal.length <= 32:
-            return zelos_sdk.DataType.Int32 if signal.is_signed else zelos_sdk.DataType.UInt32
 
-    # If our signal is greater than 32 bits long
-    if signal.length > 32:
-        return zelos_sdk.DataType.Int64 if signal.is_signed else zelos_sdk.DataType.UInt64
+_UNSIGNED = ((255, "UInt8"), (65535, "UInt16"), (2**32 - 1, "UInt32"), (2**64 - 1, "UInt64"))
+_SIGNED = (
+    (-128, 127, "Int8"),
+    (-32768, 32767, "Int16"),
+    (-(2**31), 2**31 - 1, "Int32"),
+    (-(2**63), 2**63 - 1, "Int64"),
+)
 
-    # Default: use 32-bit for non-identity conversions (scaled/offset values)
-    return zelos_sdk.DataType.Int32 if signal.is_signed else zelos_sdk.DataType.UInt32
+
+def _int_type_for_range(lo: int, hi: int) -> zelos_sdk.DataType:
+    """Smallest integer type holding ``[lo, hi]``; Float64 if none does."""
+    if lo >= 0:
+        for top, name in _UNSIGNED:
+            if hi <= top:
+                return getattr(zelos_sdk.DataType, name)
+    else:
+        for bottom, top, name in _SIGNED:
+            if bottom <= lo and hi <= top:
+                return getattr(zelos_sdk.DataType, name)
+    return zelos_sdk.DataType.Float64
 
 
 def cantools_signal_to_trace_metadata(
