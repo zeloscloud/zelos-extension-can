@@ -253,10 +253,20 @@
                     "description": "Path to a private key file for SSH authentication (optional)",
                     "ui:widget": "file-picker"
                   },
+                  "ssh_host_key_policy": {
+                    "type": "string",
+                    "title": "SSH Host Key Policy",
+                    "description": "How to treat the edge's SSH host key. 'auto' trusts whatever key the device presents and records nothing, so a reimaged device (which comes back with a new key) reconnects with no manual step. 'strict' uses your own ~/.ssh/known_hosts: an unknown or changed key is reported and the bus stops, rather than retrying.",
+                    "enum": [
+                      "auto",
+                      "strict"
+                    ],
+                    "default": "auto"
+                  },
                   "ssh_extra_opts": {
                     "type": "string",
                     "title": "SSH Extra Options",
-                    "description": "Additional ssh command-line options, space-separated (e.g. -o StrictHostKeyChecking=no)"
+                    "description": "Additional ssh command-line options, space-separated (e.g. -J bastion). Appended after the options above, so they can override them."
                   },
                   "database_file": {
                     "type": "string",

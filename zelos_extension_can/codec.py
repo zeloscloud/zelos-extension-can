@@ -620,9 +620,9 @@ class CanCodec(can.Listener):
         on Linux/macOS/Windows. ``zelos_can.CanCodec`` owns decode -> trace -> TX
         channel -> periodics -> metrics entirely in Rust, fed by a durable
         ``zelos_can.ExternalBus``; an :class:`SshTransport` shuttles raw frames
-        across two ssh procs (``candump`` RX, ``cansend`` TX). The transport is
-        disposable and is rebuilt on reconnect while the codec, ExternalBus, and
-        armed periodics survive (see ``_reconnect_bus``).
+        across ONE ssh session (``candump`` RX, a ``cansend`` loop on TX). The
+        transport is disposable and is rebuilt on reconnect while the codec,
+        ExternalBus, and armed periodics survive (see ``_reconnect_bus``).
 
         Mirrors ``_start_native`` but drives the codec through the ExternalBus
         seam instead of a SocketCAN socket: the ``channel``/``rcvbuf_size`` kwargs
@@ -659,6 +659,7 @@ class CanCodec(can.Listener):
             ssh_port=self.config.get("ssh_port", 22),
             ssh_key_path=self.config.get("ssh_key_path"),
             ssh_extra_opts=self.config.get("ssh_extra_opts"),
+            ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
             fd_mode=self.fd_mode,
         )
         self.bus = CodecTxAdapter(self._native, self._transport, self.config["channel"])
@@ -771,11 +772,12 @@ class CanCodec(can.Listener):
         """Rebuild ONLY the ssh transport; codec + ExternalBus + periodics survive.
 
         Runs off the event loop (via ``asyncio.to_thread``): the teardown joins
-        two threads and waits on two procs (~8 s worst case) then spawns two fresh
-        ssh procs. Returns True on a clean rebuild, False on any failure — on
-        failure the codec, its ``self.bus`` object identity, the ExternalBus, and
-        armed periodics are left untouched and the supervisor retries next tick.
-        Never touches ``self._native`` / ``self._ebus`` / ``self.bus`` identity.
+        three threads and waits on the ssh proc (~4 s worst case) then spawns a
+        fresh session. Returns True on a clean rebuild, False on a transient
+        failure — the codec, its ``self.bus`` object identity, the ExternalBus,
+        and armed periodics are then left untouched and the supervisor retries
+        next tick. A permanent failure propagates instead (see below). Never
+        touches ``self._native`` / ``self._ebus`` / ``self.bus`` identity.
         """
         if not self.running:
             return False
@@ -789,7 +791,7 @@ class CanCodec(can.Listener):
             )
             return False
 
-        from .ssh_socketcan import SshTransport
+        from .ssh_socketcan import SshPermanentError, SshTransport
 
         # Reap the dead procs/threads first (idempotent + total).
         try:
@@ -811,11 +813,17 @@ class CanCodec(can.Listener):
                 ssh_port=self.config.get("ssh_port", 22),
                 ssh_key_path=self.config.get("ssh_key_path"),
                 ssh_extra_opts=self.config.get("ssh_extra_opts"),
+                ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
                 fd_mode=self.fd_mode,
             )
             self.bus.transport = self._transport
             logger.info("ssh transport rebuilt, codec preserved")
             return True
+        except SshPermanentError:
+            # Retrying cannot fix this (auth, host key, no can-utils, no iface).
+            # Propagate so the app's CanError handler reports it once and exits,
+            # instead of looping on an unfixable config until someone notices.
+            raise
         except Exception as e:
             logger.warning("ssh transport rebuild failed, retrying next tick: %s", e)
             return False
@@ -907,6 +915,8 @@ class CanCodec(can.Listener):
         # adapter's bus.state and rebuilds only the transport on failure — codec,
         # ExternalBus, and armed periodics survive the rebuild.
         if self._use_ssh:
+            from .ssh_socketcan import SshPermanentError
+
             logger.info("Starting CAN rx (ssh-socketcan pipeline)")
             # Capped backoff so a long edge outage doesn't spam thousands of
             # rebuild/log cycles: probe every 5 s when healthy; on a failed
@@ -920,11 +930,21 @@ class CanCodec(can.Listener):
                     if self._check_bus_health():
                         interval = healthy_interval
                         continue
-                    # Surface WHY the link went unhealthy (unreachable / timed
-                    # out / auth / candump died) from the transport's rx stderr
-                    # tail, so a slow-connect or runtime drop is diagnosable
-                    # rather than a bare "unhealthy". Read BEFORE reconnect so we
-                    # capture the genuine failure, not teardown "Killed" noise.
+                    # Classify WHY the link went unhealthy from the transport's
+                    # stderr tail, BEFORE reconnecting, so we judge the genuine
+                    # failure and not teardown "Killed" noise.
+                    failure = (
+                        self._transport.classify_failure() if self._transport is not None else None
+                    )
+                    if isinstance(failure, SshPermanentError):
+                        # Unfixable without an operator; reconnecting forever would
+                        # only bury the one message that says what to do. Raise so
+                        # the app's CanError handler logs it once and exits, the
+                        # same way a startup failure does.
+                        raise failure
+                    # Transient: name the cause (unreachable / timed out / candump
+                    # died) instead of a bare "unhealthy". stderr_tail() self-mutes,
+                    # so a transport that outlives failed rebuilds says it once.
                     reason = self._transport.stderr_tail() if self._transport is not None else ""
                     if reason:
                         logger.error(
@@ -938,6 +958,8 @@ class CanCodec(can.Listener):
                         interval = min(interval * 2, max_interval)
             except asyncio.CancelledError:
                 logger.info("CAN reader cancelled")
+            except can.exceptions.CanError:
+                raise  # permanent ssh failure: the app layer reports and exits
             except Exception as e:
                 logger.exception("Error in ssh-socketcan supervision loop: %s", e)
             return
