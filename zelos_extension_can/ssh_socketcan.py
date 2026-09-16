@@ -7,12 +7,13 @@ Windows.
 
 Two pieces:
 
-  * :class:`SshTransport` owns two ssh processes (candump RX, cansend TX) and
-    four threads (reader, writer, and one stderr-drain per proc). It moves raw
-    frames between the wire and a durable ``zelos_can.ExternalBus``; decode,
-    tracing, TX channel, periodics, metrics, and backpressure are the codec's
-    Rust machinery. The transport is **disposable** and may be rebuilt on
-    reconnect without disturbing the ``ExternalBus`` or ``CanCodec`` it feeds.
+  * :class:`SshTransport` owns ONE ssh process (``candump`` RX on the channel's
+    stdout, a ``cansend`` read-loop consuming its stdin) and three threads
+    (reader, writer, stderr drain). It moves raw frames between the wire and a
+    durable ``zelos_can.ExternalBus``; decode, tracing, TX channel, periodics,
+    metrics, and backpressure are the codec's Rust machinery. The transport is
+    **disposable** and may be rebuilt on reconnect without disturbing the
+    ``ExternalBus`` or ``CanCodec`` it feeds.
   * :class:`CodecTxAdapter` presents the small python-can-shaped surface the
     existing action layer touches (``send``/``send_periodic``/``state``/
     ``shutdown``) on top of the Rust codec + transport.
@@ -33,6 +34,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -73,36 +75,118 @@ _STARTUP_GRACE = 3.0
 _STARTUP_STDERR_SETTLE = 0.25
 
 
-def _classify_ssh_failure(
-    host: str, iface: str, ssh_port: int, stderr_tail: str
-) -> can.exceptions.CanInitializationError:
-    """Turn an ssh startup-failure stderr tail into an actionable error.
+class SshPermanentError(can.exceptions.CanInitializationError):
+    """An ssh failure retrying cannot fix: auth denied, host key rejected under
+    the ``strict`` policy, no ``can-utils`` on the edge, no such CAN interface.
 
-    Case-insensitive substring match on the last bytes ssh/candump wrote before
-    exiting. Every message names the concrete fix and appends the raw stderr so
-    the underlying cause is never lost.
+    The class IS the verdict. It stays a ``CanError`` subclass, so the app's
+    existing handler logs it once and exits — whether it is raised by the startup
+    probe or mid-run by the reconnect supervisor.
+    """
+
+
+# ssh's host-key banner is ~4 KB of boilerplate wrapped around two useful lines
+# (the key fingerprint and the final cause). Lines starting with '@' — the @@@@
+# rules and the WARNING band — plus these needles are dropped before anything is
+# logged or appended to an error.
+_BANNER_NEEDLES = (
+    "it is possible",
+    "someone could be eavesdropping",
+    "please contact your system administrator",
+    "add correct host key",
+    "remove with:",
+    "offending",
+    # ssh emits this on EVERY connection under the "auto" host-key policy.
+    "permanently added",
+)
+_TAIL_CAP = 200  # chars of stderr appended to a reported error
+# "Offending ECDSA key in /home/u/.ssh/known_hosts:12" — the one banner line
+# worth keeping, quoted by the host-key message instead of dumped with the rest.
+_OFFENDING_RE = re.compile(r"Offending [\w-]+ key in (\S+)")
+
+
+def _clean_stderr_tail(tail: str) -> str:
+    """Strip ssh's banner boilerplate, keeping the fingerprint and the cause.
+
+    Collapses to a single line and keeps only the LAST ``_TAIL_CAP`` chars (on a
+    word boundary), so the cause — always written last — survives the cap.
+    """
+    kept = [
+        s
+        for line in tail.splitlines()
+        if (s := line.strip())
+        and not s.startswith("@")
+        and not any(n in s.lower() for n in _BANNER_NEEDLES)
+    ]
+    out = " ".join(kept)
+    if len(out) <= _TAIL_CAP:
+        return out
+    return "..." + out[-(_TAIL_CAP - 3) :].split(" ", 1)[-1]
+
+
+def _auth_remedy(target: str, ssh_port: int, ssh_key_path: str | None) -> str:
+    """Copy-paste command that authorizes this machine's key on the edge.
+
+    Resolved for this bus (user, host, port, key) and for the platform the
+    extension is running on — Windows has no ``ssh-copy-id``.
+    """
+    port = f" -p {ssh_port}" if ssh_port != 22 else ""
+    if sys.platform.startswith("win"):
+        return (
+            "run `ssh-keygen -t ed25519` (skip if you already have a key), then "
+            f"`type %USERPROFILE%\\.ssh\\id_ed25519.pub | ssh{port} {target} "
+            '"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"`'
+        )
+    key = f" -i {ssh_key_path}" if ssh_key_path else ""
+    return f"run `ssh-copy-id{key}{port} {target}`"
+
+
+def _classify_ssh_failure(
+    host: str,
+    iface: str,
+    ssh_port: int,
+    stderr_tail: str,
+    *,
+    user: str | None = None,
+    ssh_key_path: str | None = None,
+) -> can.exceptions.CanInitializationError:
+    """Turn an ssh failure's stderr tail into a classified, actionable error.
+
+    Case-insensitive substring match on the last bytes ssh/candump wrote. The
+    returned CLASS is the verdict: :class:`SshPermanentError` needs an operator,
+    a plain ``CanInitializationError`` is transient and worth a reconnect —
+    including the default case, so an unrecognized failure keeps retrying.
+    Matching runs on the RAW tail; only the appended copy is banner-stripped.
     """
     low = stderr_tail.lower()
-    suffix = f" (ssh: {stderr_tail or '<no stderr>'})"
+    target = f"{user}@{host}" if user else host
+    permanent = True
 
     def has(*needles: str) -> bool:
         return any(n in low for n in needles)
 
     if has("host key verification failed", "remote host identification has changed"):
+        offending = _OFFENDING_RE.search(stderr_tail)
+        where = f" (old key at {offending.group(1)})" if offending else ""
         msg = (
-            f"ssh host key for {host} is not trusted (or has changed). Fix: run "
-            f"`ssh-keyscan -H {host} >> ~/.ssh/known_hosts`, or connect once by hand "
-            f"with `ssh {host}` to accept it, or add "
-            "`-o StrictHostKeyChecking=accept-new` to ssh_extra_opts. The extension "
-            "runs non-interactively, so it cannot prompt to accept a new key."
+            f"ssh host key for {host} is not trusted, or has changed — a reimaged device "
+            f"presents a new one{where}. Fix: in your own terminal run "
+            f"`ssh-keygen -R {host}`, accept the new key with `ssh {target}`, then restart "
+            'this bus; or set this bus\'s SSH Host Key Policy to "auto" to trust whatever '
+            "key the device presents."
         )
     elif has("permission denied", "publickey", "password"):
         msg = (
-            f"ssh authentication to {host} failed. The extension runs with BatchMode "
-            "(no password prompt), so authorize your key with `ssh-copy-id`, or set "
-            "ssh_key_path, or use an ssh-agent."
+            f"ssh authentication to {host} failed. BatchMode means the extension can never "
+            f"prompt for a password. Fix: in your own terminal, "
+            f"{_auth_remedy(target, ssh_port, ssh_key_path)} once, then restart this bus."
         )
+    elif has("candump: not found", "cansend: not found", "command not found"):
+        msg = f"the edge {host} is missing can-utils (candump/cansend); install can-utils on it."
+    elif has("siocgifindex", "no such device"):
+        msg = f"the edge {host} has no CAN interface {iface}; check remote_channel and `ip link`."
     elif has("could not resolve", "name or service not known", "nodename nor servname"):
+        permanent = False
         msg = f"cannot resolve host {host}; check the remote_host value and your DNS."
     elif has(
         "connection refused",
@@ -110,16 +194,18 @@ def _classify_ssh_failure(
         "no route to host",
         "operation timed out",
     ):
+        permanent = False
         msg = (
             f"cannot reach {host}:{ssh_port}; check that the host is up and that "
             "ssh_port is correct."
         )
-    elif has("candump: not found", "cansend: not found", "command not found"):
-        msg = f"the edge {host} is missing can-utils (candump/cansend); install can-utils on it."
     else:
-        msg = f"ssh-socketcan failed to start on {host}:{iface}."
+        permanent = False
+        msg = f"ssh-socketcan on {host}:{iface} failed."
 
-    return can.exceptions.CanInitializationError(msg + suffix)
+    suffix = f" (ssh: {_clean_stderr_tail(stderr_tail) or '<no stderr>'})"
+    cls = SshPermanentError if permanent else can.exceptions.CanInitializationError
+    return cls(msg + suffix)
 
 
 class SshTransport:
@@ -138,6 +224,7 @@ class SshTransport:
         ssh_port=22,
         ssh_key_path=None,
         ssh_extra_opts=None,
+        ssh_host_key_policy="auto",
         fd_mode=False,
     ):
         self._bus = bus
@@ -145,20 +232,19 @@ class SshTransport:
         self._fd_mode = fd_mode
         self._stop = threading.Event()
         self._eof = False
-        self._rx_proc: subprocess.Popen | None = None
-        self._tx_proc: subprocess.Popen | None = None
+        self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
         self._writer: threading.Thread | None = None
-        self._rx_err: threading.Thread | None = None
-        self._tx_err: threading.Thread | None = None
+        self._err: threading.Thread | None = None
         # Set by the reader thread on the FIRST non-empty candump chunk: proof
         # the ssh link is up and streaming. The startup probe waits on it.
         self._rx_started = threading.Event()
-        # Last _STDERR_CAP bytes of each proc's stderr, kept live by the drain
-        # threads so the startup probe / reconnect supervisor can read WHY a
-        # link failed (host key / auth / unreachable) instead of guessing.
-        self._rx_stderr_tail = b""
-        self._tx_stderr_tail = b""
+        # Last _STDERR_CAP bytes of the session's stderr, kept live by the drain
+        # thread so the startup probe / reconnect supervisor can read WHY a link
+        # failed (host key / auth / unreachable) instead of guessing.
+        self._stderr_tail = b""
+        # Cleaned tail already handed to a caller: one report per transport.
+        self._reported_tail = ""
         # Observability for dropped RX lines (parse failures and oversized
         # carry). Public attributes so the codec/supervisor can surface them.
         self._parse_drops = 0
@@ -172,79 +258,26 @@ class SshTransport:
 
         user, host, iface = parse_ssh_channel(channel)
         if not IFACE_RE.match(iface):
-            raise can.exceptions.CanInitializationError(
+            raise SshPermanentError(
                 f"invalid CAN interface name {iface!r} (must match {IFACE_RE.pattern})"
             )
-        self._iface = iface
+        self._user, self._host, self._iface = user, host, iface
+        self._ssh_port = ssh_port
+        self._ssh_key_path = ssh_key_path
 
         # Discard any periodic backlog left in the outlet by a prior transport.
         bus.drain_tx()
 
         try:
-            base_argv = self._build_argv(user, host, ssh_port, ssh_key_path, ssh_extra_opts)
-
-            # RX: candump + a two-way watchdog. The guarantee is symmetric —
-            # if ANY party dies (us, candump, or the wrapper shell), every
-            # remote holder of the ssh channel dies too, so the local reader
-            # always sees EOF instead of a silent, healthy-looking RX starve.
-            #
-            # Construction notes (verified under /bin/sh, dash, and bash):
-            #  * `exec 3<&0` dups the real channel stdin to fd 3 BEFORE the
-            #    watchdog is backgrounded. This is load-bearing: POSIX assigns
-            #    /dev/null as stdin to backgrounded lists in non-interactive
-            #    shells, so a bare `{ cat >/dev/null; } &` EOFs instantly and
-            #    would kill candump at startup. `cat <&3` reads the real stdin.
-            #  * The trap covers TERM/INT/HUP as well as EXIT because dash and
-            #    busybox-ash do NOT run the EXIT trap on an untrapped fatal
-            #    signal; `trap - ...` first prevents handler re-entry when
-            #    `kill 0` TERMs the shell itself.
-            #  * `kill 0` signals the whole remote process group (candump, the
-            #    watchdog subshell, cat, shell) — non-interactive shells keep
-            #    background jobs in the shell's own group.
-            #
-            # Death paths:
-            #  1. Local teardown (we close stdin) -> cat sees EOF -> watchdog
-            #     kills candump -> `wait $p` returns -> shell exits -> trap
-            #     `kill 0` reaps the watchdog subshell -> no channel-fd holder
-            #     left -> channel closes. Orphan-safe, as before.
-            #  2. candump dies (crash, pkill, iface down) -> `wait $p` returns
-            #     immediately -> trap `kill 0` kills cat + watchdog -> channel
-            #     closes -> local reader gets EOF -> `_eof=True` -> `healthy`
-            #     False -> supervisor rebuilds the transport. (The two-way
-            #     guarantee the old cat-only watchdog lacked.)
-            #  3. Wrapper shell killed externally -> TERM/HUP trap fires (EXIT
-            #     alone is not enough on dash/ash) -> `kill 0` nukes candump +
-            #     cat -> channel closes -> EOF.
-            rx_cmd = (
-                "exec 3<&0; "
-                "trap 'trap - EXIT TERM INT HUP; kill 0 2>/dev/null' EXIT TERM INT HUP; "
-                f"candump -L {iface} & p=$!; "
-                "{ cat <&3 >/dev/null; kill $p 2>/dev/null; } & wait $p"
+            argv = self._build_argv(
+                user, host, ssh_port, ssh_key_path, ssh_extra_opts, ssh_host_key_policy
             )
-            self._rx_proc = subprocess.Popen(
-                base_argv + [rx_cmd],
+            self._proc = subprocess.Popen(
+                argv + [self._remote_command(iface)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
-            )
-
-            # TX: read frames on stdin, cansend each. stdin EOF ends the loop
-            # (orphan-safe). The TX side has no equivalent of the RX detection
-            # gap: the read-loop IS the remote command (no background child to
-            # orphan), so if it dies the command exits, sshd closes the
-            # session, the local ssh client exits, and `proc.poll()` goes
-            # non-None -> `healthy` False. If the pipe breaks mid-write, the
-            # writer thread gets BrokenPipeError/OSError -> `_eof=True`. A
-            # failing `cansend` (iface down) is deliberately tolerated
-            # (`2>/dev/null`, loop continues); that surfaces on the RX side
-            # instead, where candump on a dead iface exits -> path 2 above.
-            tx_cmd = f'while IFS= read -r f; do cansend {iface} "$f" 2>/dev/null; done'
-            self._tx_proc = subprocess.Popen(
-                base_argv + [tx_cmd],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
             )
 
             self._reader = threading.Thread(
@@ -253,26 +286,16 @@ class SshTransport:
             self._writer = threading.Thread(
                 target=self._write_loop, name=f"ssh-can-tx-{iface}", daemon=False
             )
-            # Continuous stderr drains: without them >64 KB of ssh/candump
-            # stderr fills the pipe, blocks the remote write, and stalls RX/TX
-            # while `healthy` still reads True. Daemon so they can never wedge
-            # teardown; each keeps only the last few KB and logs it on EOF.
-            self._rx_err = threading.Thread(
-                target=self._drain_stderr,
-                args=(self._rx_proc, "candump", "_rx_stderr_tail"),
-                name=f"ssh-can-rx-err-{iface}",
-                daemon=True,
-            )
-            self._tx_err = threading.Thread(
-                target=self._drain_stderr,
-                args=(self._tx_proc, "cansend", "_tx_stderr_tail"),
-                name=f"ssh-can-tx-err-{iface}",
-                daemon=True,
+            # Continuous stderr drain: without it >64 KB of ssh/candump stderr
+            # fills the pipe, blocks the remote write, and stalls RX/TX while
+            # `healthy` still reads True. Daemon so it can never wedge teardown;
+            # keeps only the last few KB and reports it once on EOF.
+            self._err = threading.Thread(
+                target=self._drain_stderr, name=f"ssh-can-err-{iface}", daemon=True
             )
             self._reader.start()
             self._writer.start()
-            self._rx_err.start()
-            self._tx_err.start()
+            self._err.start()
         except Exception as e:
             self._teardown()
             raise can.exceptions.CanInitializationError(
@@ -290,22 +313,70 @@ class SshTransport:
         while time.monotonic() < deadline:
             if self._rx_started.is_set():
                 break  # candump is streaming — connected
-            if self._rx_proc.poll() is not None:
-                # candump exited before streaming a frame. Give the stderr drain
-                # a brief moment to record the exit reason, then classify it into
-                # an actionable error and tear the partial transport down.
+            if self._proc.poll() is not None:
+                # The session exited before streaming a frame. Give the stderr
+                # drain a brief moment to record the exit reason, then classify it
+                # into an actionable error and tear the partial transport down.
                 settle = time.monotonic() + _STARTUP_STDERR_SETTLE
-                while time.monotonic() < settle and not self._rx_stderr_tail:
+                while time.monotonic() < settle and not self._stderr_tail:
                     time.sleep(0.01)
-                tail = bytes(self._rx_stderr_tail).decode("utf-8", "replace").strip()
+                failure = self.classify_failure()
                 self._teardown()
-                raise _classify_ssh_failure(host, iface, ssh_port, tail)
+                raise failure
             time.sleep(0.05)
         # Grace elapsed with candump still alive: idle-but-connected bus, or a
         # slow-but-valid connect. Assume connected and proceed.
 
     @staticmethod
-    def _build_argv(user, host, ssh_port, ssh_key_path, ssh_extra_opts) -> list[str]:
+    def _remote_command(iface: str) -> str:
+        """The single remote shell running BOTH directions, dying as one unit.
+
+        ``candump`` streams RX on the channel's stdout while a read-loop consumes
+        TX lines from the channel's stdin and hands each to ``cansend``. The
+        guarantee is symmetric: if ANY party dies (us, candump, or the wrapper
+        shell), every remote holder of the channel dies too, so the local reader
+        always sees EOF instead of a silent, healthy-looking RX starve.
+
+        Construction notes (executed under /bin/sh, dash and bash by
+        ``tests/test_ssh_remote_shell.py``):
+         * ``exec 3<&0`` dups the real channel stdin to fd 3 BEFORE the read-loop
+           is backgrounded. Load-bearing: POSIX assigns /dev/null as stdin to
+           backgrounded lists in non-interactive shells, so a loop reading fd 0
+           would EOF instantly and kill candump at startup.
+         * The trap covers TERM/INT/HUP as well as EXIT because dash and
+           busybox-ash do NOT run the EXIT trap on an untrapped fatal signal;
+           ``trap - ...`` first prevents handler re-entry when ``kill 0`` TERMs
+           the shell itself.
+         * ``kill 0`` signals the whole remote process group (candump, the
+           read-loop subshell, the shell) — non-interactive shells keep
+           background jobs in the shell's own group.
+         * The read-loop discards cansend's output so a stray write can never
+           corrupt candump's share of stdout. A failing cansend (iface down) is
+           deliberately tolerated and the loop continues; that surfaces on the RX
+           side, where candump on a dead iface exits (death path 2).
+
+        Death paths, each ending in a closed channel -> local EOF -> ``healthy``
+        False -> the supervisor rebuilds or classifies:
+         1. Local teardown (we close stdin) -> read-loop EOF -> kills candump ->
+            ``wait $p`` returns -> shell exits -> trap ``kill 0`` reaps the
+            subshell -> no channel-fd holder left. Orphan-safe.
+         2. candump dies (crash, pkill, iface down) -> ``wait $p`` returns ->
+            trap ``kill 0`` kills the read-loop -> channel closes.
+         3. Wrapper shell killed externally -> TERM/HUP trap fires (EXIT alone is
+            not enough on dash/ash) -> ``kill 0`` nukes candump + the loop.
+        """
+        return (
+            "exec 3<&0; "
+            "trap 'trap - EXIT TERM INT HUP; kill 0 2>/dev/null' EXIT TERM INT HUP; "
+            f"candump -L {iface} & p=$!; "
+            f'{{ while IFS= read -r f; do cansend {iface} "$f" >/dev/null 2>&1; done <&3; '
+            "kill $p 2>/dev/null; } & wait $p"
+        )
+
+    @staticmethod
+    def _build_argv(
+        user, host, ssh_port, ssh_key_path, ssh_extra_opts, ssh_host_key_policy="auto"
+    ) -> list[str]:
         argv = [
             "ssh",
             "-T",
@@ -322,10 +393,20 @@ class SshTransport:
             "-o",
             "ServerAliveCountMax=3",
         ]
+        # "auto" trusts whatever key the device presents and records nothing, so a
+        # reimaged edge (new host key) reconnects with no manual step. "strict"
+        # defers to ssh's own ~/.ssh/known_hosts, where an unknown or changed key
+        # is a permanent failure. BatchMode stays either way: the transport is
+        # key-only and can never answer a prompt.
+        if ssh_host_key_policy == "strict":
+            argv += ["-o", "StrictHostKeyChecking=yes"]
+        else:
+            argv += ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
         if ssh_port != 22:
             argv += ["-p", str(ssh_port)]
         if ssh_key_path:
             argv += ["-i", ssh_key_path, "-o", "IdentitiesOnly=yes"]
+        # Last, so an operator can still override any option we set above.
         argv += shlex.split(ssh_extra_opts or "")
         argv.append(f"{user}@{host}" if user else host)
         return argv
@@ -340,7 +421,7 @@ class SshTransport:
         and dropped the bus, so we wind the thread down. Unparseable lines and
         an oversized (newline-less) carry are dropped and counted, not fatal.
         """
-        fd = self._rx_proc.stdout.fileno()
+        fd = self._proc.stdout.fileno()
         carry = b""
         while not self._stop.is_set():
             try:
@@ -394,7 +475,7 @@ class SshTransport:
         ``BrokenPipeError``/``OSError`` means the ssh pipe died. Either ends the
         thread — frames then pool harmlessly in the bounded outlet.
         """
-        stdin = self._tx_proc.stdin
+        stdin = self._proc.stdin
         while not self._stop.is_set():
             try:
                 frame = self._bus.next_tx(timeout=_NEXT_TX_TIMEOUT)
@@ -423,19 +504,21 @@ class SshTransport:
             self._overflow_drops,
         )
 
-    def _drain_stderr(self, proc: subprocess.Popen | None, label: str, tail_attr: str) -> None:
-        """Continuously drain a proc's stderr into a bounded ring; log on EOF.
+    def _drain_stderr(self) -> None:
+        """Continuously drain the session's stderr into a bounded ring.
 
         Draining prevents the >64 KB pipe-fill deadlock that would otherwise
-        stall the remote write. Only the last ``_STDERR_CAP`` bytes are kept,
-        and they are logged once at WARNING when the pipe EOFs (proc died) —
-        but not during an intentional teardown, where ssh's "Killed by signal"
-        noise is expected rather than diagnostic.
+        stall the remote write. Only the last ``_STDERR_CAP`` bytes are kept, and
+        this thread logs NONE of it: a dead session is always reported by the
+        party that acts on it (the startup probe raises, the supervisor logs
+        before reconnecting), and logging here too meant the same 4 KB banner
+        landed in the log three times.
 
-        The live tail is mirrored onto ``self.<tail_attr>`` (an immutable
+        The live tail is mirrored onto ``self._stderr_tail`` (an immutable
         ``bytes`` snapshot) after every read so the startup probe and reconnect
         supervisor can read WHY a link failed without racing this thread.
         """
+        proc = self._proc
         if proc is None or proc.stderr is None:
             return
         fd = proc.stderr.fileno()
@@ -452,26 +535,18 @@ class SshTransport:
                 del ring[: len(ring) - _STDERR_CAP]
             # Publish an immutable snapshot; attribute assignment is atomic, so a
             # concurrent reader always sees a consistent (if slightly stale) tail.
-            setattr(self, tail_attr, bytes(ring))
-        if ring and not self._stop.is_set():
-            logger.warning(
-                "ssh-socketcan (%s) %s stderr: %s",
-                self.channel,
-                label,
-                ring.decode("utf-8", "replace").strip(),
-            )
+            self._stderr_tail = bytes(ring)
 
     # ── State / teardown ─────────────────────────────────────────────────
 
     @property
     def healthy(self) -> bool:
-        """True iff both procs are running and both threads alive; TOTAL."""
+        """True iff the ssh proc is running and both RX/TX threads alive; TOTAL."""
         try:
             if self._eof:
                 return False
-            for proc in (self._rx_proc, self._tx_proc):
-                if proc is None or proc.poll() is not None:
-                    return False
+            if self._proc is None or self._proc.poll() is not None:
+                return False
             for thread in (self._reader, self._writer):
                 if thread is None or not thread.is_alive():
                     return False
@@ -480,11 +555,33 @@ class SshTransport:
             return False
 
     def stderr_tail(self) -> str:
-        """Decoded tail of the rx (candump) stderr — the last diagnostic bytes
-        ssh/candump wrote. Empty when there is none. The reconnect supervisor
-        logs this so an unhealthy link reads as "unreachable"/"timed out" rather
-        than a bare "unhealthy"."""
-        return bytes(self._rx_stderr_tail).decode("utf-8", "replace").strip()
+        """The session's last diagnostic bytes, banner-stripped — reported ONCE.
+
+        ssh's 4 KB host-key banner reduces to the fingerprint plus the final
+        cause, and the "Permanently added" line every ``auto`` connection emits
+        is dropped. Returns "" when there is nothing to say or when this
+        transport already handed the same tail out — the supervisor asks on every
+        failed tick, and a transport that outlives a failed rebuild would
+        otherwise re-log an unchanged tail forever.
+        """
+        tail = _clean_stderr_tail(bytes(self._stderr_tail).decode("utf-8", "replace"))
+        if not tail or tail == self._reported_tail:
+            return ""
+        self._reported_tail = tail
+        return tail
+
+    def classify_failure(self) -> can.exceptions.CanInitializationError:
+        """Why this link failed, as an actionable error whose CLASS is the verdict
+        (:class:`SshPermanentError` means an operator must act; retrying is futile).
+        Does not consume the tail — :meth:`stderr_tail` does that."""
+        return _classify_ssh_failure(
+            self._host,
+            self._iface,
+            self._ssh_port,
+            bytes(self._stderr_tail).decode("utf-8", "replace").strip(),
+            user=self._user,
+            ssh_key_path=self._ssh_key_path,
+        )
 
     def teardown(self) -> None:
         """Idempotent, orphan-safe, best-effort teardown (never raises)."""
@@ -492,47 +589,39 @@ class SshTransport:
 
     def _teardown(self) -> None:
         self._stop.set()
-        # Close stdins first: RX close → cat EOF → trap reaps candump;
-        # TX close → read-loop EOF.
-        for proc in (self._rx_proc, self._tx_proc):
-            if proc is None or proc.stdin is None:
-                continue
-            with contextlib.suppress(Exception):
-                proc.stdin.close()
-        # terminate → proc death → stdout/stderr EOF → every thread unblocks.
-        for proc in (self._rx_proc, self._tx_proc):
-            if proc is None:
-                continue
+        proc = self._proc
+        if proc is not None:
+            # Close stdin first: read-loop EOF → it kills candump → trap reaps
+            # the rest of the remote process group.
+            if proc.stdin is not None:
+                with contextlib.suppress(Exception):
+                    proc.stdin.close()
+            # terminate → proc death → stdout/stderr EOF → every thread unblocks.
             with contextlib.suppress(Exception):
                 proc.terminate()
-        # Join ALL threads (reader, writer, both stderr drains) before closing
-        # their fds, so no thread is mid-read on an fd we close (fd-reuse race).
-        for thread in (self._reader, self._writer, self._rx_err, self._tx_err):
+        # Join ALL threads (reader, writer, stderr drain) before closing their
+        # fds, so no thread is mid-read on an fd we close (fd-reuse race).
+        for thread in (self._reader, self._writer, self._err):
             if thread is None:
                 continue
             with contextlib.suppress(Exception):
                 thread.join(timeout=_JOIN_TIMEOUT)
-        for proc in (self._rx_proc, self._tx_proc):
-            if proc is None:
-                continue
+        if proc is not None:
             try:
                 proc.wait(timeout=_WAIT_TIMEOUT)
             except Exception:
                 with contextlib.suppress(Exception):
                     proc.kill()
-        # Close the stdout/stderr pipe fds — Popen.__del__ would eventually,
-        # but a flapping link rebuilds often enough to march toward EMFILE
-        # before GC runs. stdin is already closed above.
-        for proc in (self._rx_proc, self._tx_proc):
-            if proc is None:
-                continue
+            # Close the stdout/stderr pipe fds — Popen.__del__ would eventually,
+            # but a flapping link rebuilds often enough to march toward EMFILE
+            # before GC runs. stdin is already closed above.
             for stream in (proc.stdout, proc.stderr):
                 if stream is not None:
                     with contextlib.suppress(Exception):
                         stream.close()
         # Break the Thread→bound-method→self reference cycle so this disposable
         # transport refcounts away promptly instead of waiting for the cyclic GC.
-        self._reader = self._writer = self._rx_err = self._tx_err = None
+        self._reader = self._writer = self._err = None
 
 
 def _to_zelos_message(msg) -> zelos_can.Message:  # noqa: ANN001 — duck-typed can.Message
