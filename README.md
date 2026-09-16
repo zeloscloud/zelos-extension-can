@@ -1,5 +1,7 @@
 # Zelos extension for CAN (Controller Area Network)
 
+![CAN frames on a Zelos raw panel](assets/raw-panel-overview.png)
+
 ## Features
 
 - 📊 **Visualizing CAN frames** - Real-time decoding of CAN messages
