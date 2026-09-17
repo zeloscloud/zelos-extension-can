@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import itertools
 import json
+import logging
 from pathlib import Path
 
 import can.exceptions
@@ -91,7 +92,7 @@ def make_ssh_codec(stub_transports):
         cfg = {
             "interface": "ssh-socketcan",
             "channel": "zelos@edge:vcan0",
-            "database_file": TEST_DBC,
+            "database_files": [TEST_DBC],
         }
         if overrides:
             cfg.update(overrides)
@@ -146,7 +147,7 @@ def test_start_threads_ssh_kwargs_to_transport(make_ssh_codec, stub_transports):
 
 def test_ssh_flags_set_in_init():
     codec = CanCodec(
-        {"interface": "ssh-socketcan", "channel": "h:can0", "database_file": TEST_DBC},
+        {"interface": "ssh-socketcan", "channel": "h:can0", "database_files": [TEST_DBC]},
         bus_name=f"ssh_itest_{next(_name_counter)}",
     )
     assert codec._use_ssh is True
@@ -342,8 +343,8 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
     # start/run path; capture the real codecs it builds so we can stop them.
     created: list[CanCodec] = []
 
-    def capture_create(config, dbc):
-        pairs = _create_codecs(config, dbc)
+    def capture_create(config, dbc, advanced=None, source=None):
+        pairs = _create_codecs(config, dbc, advanced, source)
         created.extend(c for c, _ in pairs)
         return pairs
 
@@ -353,7 +354,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
         lambda: {
             "log_level": "INFO",
             "buses": [
-                {"interface": "ssh-socketcan", "remote_host": "edge", "database_file": TEST_DBC}
+                {"interface": "ssh-socketcan", "remote_host": "edge", "database_files": [TEST_DBC]}
             ],
         },
     )
@@ -361,6 +362,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
     monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
     monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
 
     try:
         with pytest.raises(SystemExit) as ei:
@@ -432,7 +434,7 @@ def test_prepare_bus_config_channel_with_user():
             "remote_host": "edge",
             "ssh_user": "zelos",
             "remote_channel": "vcan0",
-            "database_file": TEST_DBC,
+            "database_files": [TEST_DBC],
         },
         Path("/nonexistent/demo.dbc"),
     )
@@ -444,7 +446,7 @@ def test_prepare_bus_config_channel_without_user_defaults_can0():
         {
             "interface": "ssh-socketcan",
             "remote_host": "edge",
-            "database_file": TEST_DBC,
+            "database_files": [TEST_DBC],
         },
         Path("/nonexistent/demo.dbc"),
     )
@@ -454,7 +456,7 @@ def test_prepare_bus_config_channel_without_user_defaults_can0():
 def test_prepare_bus_config_missing_host_exits():
     with pytest.raises(SystemExit):
         _prepare_bus_config(
-            {"interface": "ssh-socketcan", "database_file": TEST_DBC},
+            {"interface": "ssh-socketcan", "database_files": [TEST_DBC]},
             Path("/nonexistent/demo.dbc"),
         )
 
@@ -472,14 +474,14 @@ def test_create_codecs_sanitizes_dotted_ssh_source_names():
             {
                 "interface": "ssh-socketcan",
                 "remote_host": "192.168.1.10",
-                "database_file": TEST_DBC,
+                "database_files": [TEST_DBC],
             },
             {
                 "interface": "ssh-socketcan",
                 "remote_host": "10.0.0.5",
                 "ssh_user": "zelos",
                 "remote_channel": "can1",
-                "database_file": TEST_DBC,
+                "database_files": [TEST_DBC],
             },
         ]
     }
@@ -517,7 +519,7 @@ def test_schema_enum_includes_ssh_socketcan():
 def test_schema_ssh_branch_structure():
     """Structural check (always runs, no jsonschema dep needed)."""
     branch = _ssh_branch(_load_schema())
-    assert branch["required"] == ["interface", "remote_host", "database_file"]
+    assert branch["required"] == ["interface", "remote_host"]
     props = branch["properties"]
     for field in (
         "remote_host",
@@ -526,12 +528,10 @@ def test_schema_ssh_branch_structure():
         "ssh_port",
         "ssh_key_path",
         "ssh_extra_opts",
-        "database_file",
+        "database_files",
+        "dbc_conflict",
         "name",
         "fd_mode",
-        "timestamp_mode",
-        "log_raw_frames",
-        "emit_schemas_on_init",
     ):
         assert field in props, f"ssh branch missing property {field!r}"
     assert props["remote_channel"]["default"] == "can0"
@@ -550,7 +550,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
             {
                 "interface": "ssh-socketcan",
                 "remote_host": "edge",
-                "database_file": TEST_DBC,
+                "database_files": [TEST_DBC],
             }
         ]
     }
@@ -566,16 +566,14 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
                 "ssh_port": 2222,
                 "ssh_key_path": "/home/z/id_ed25519",
                 "ssh_extra_opts": "-o StrictHostKeyChecking=no",
-                "database_file": TEST_DBC,
+                "database_files": [TEST_DBC],
                 "name": "edge-bus",
                 "fd_mode": False,
-                "timestamp_mode": "auto",
-                "log_raw_frames": True,
-                "emit_schemas_on_init": False,
+                "dbc_conflict": "error",
             }
         ]
     }
     assert validator.is_valid(full)
 
-    missing_host = {"buses": [{"interface": "ssh-socketcan", "database_file": TEST_DBC}]}
+    missing_host = {"buses": [{"interface": "ssh-socketcan", "database_files": [TEST_DBC]}]}
     assert not validator.is_valid(missing_host)

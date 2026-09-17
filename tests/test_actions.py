@@ -24,7 +24,7 @@ def _make_codec(bus_name: str, channel: str) -> CanCodec:
             "interface": "virtual",
             "channel": channel,
             "bitrate": 500_000,
-            "database_file": str(DBC_PATH),
+            "database_files": [str(DBC_PATH)],
         }
         codec = CanCodec(cfg, bus_name=bus_name)
         codec.start()
@@ -95,9 +95,7 @@ class TestDispatch:
         assert desc["message"]["name"] == msg_name
 
     def test_encode_preview_routes_to_named_codec(self, two_codecs):
-        # Use Signalless_Message — no required signals, so the encode round-trips
-        # without us having to hand-curate a payload for the DBC under test.
-        result = actions.encode_preview("busA", "Signalless_Message", "{}")
+        result = actions.encode_preview("busA", "DUT_Command", '{"state_request": 1}')
         assert "data_hex" in result
         assert "can_id" in result
 
@@ -176,7 +174,7 @@ class TestStandaloneConvert:
     def test_no_database_anywhere_raises(self, tmp_path):
         src = self._log(tmp_path)
         with (
-            patch.object(actions, "_configured_database_file", return_value=None),
+            patch.object(actions, "_configured_database_files", return_value=[]),
             pytest.raises(ValueError, match="No database_file given"),
         ):
             actions.convert(input_file=str(src))

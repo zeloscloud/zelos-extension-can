@@ -29,7 +29,7 @@ from zelos_extension_can.codec import (
     _derive_bus_status,
     _describe_dbc_signal,
     _encode_dbc,
-    _hash_dbc_file,
+    _hash_dbc_files,
     _parse_can_id,
     _parse_data_hex,
     _parse_mux,
@@ -55,7 +55,7 @@ def _make_codec(bus_name: str = "busA", channel: str = "vcan0") -> CanCodec:
             "interface": "virtual",
             "channel": channel,
             "bitrate": 500_000,
-            "database_file": str(DBC_PATH),
+            "database_files": [str(DBC_PATH)],
         }
         codec = CanCodec(cfg, bus_name=bus_name)
         codec.start()
@@ -208,9 +208,18 @@ class TestListMessages:
         names = {m["name"] for m in result["messages"]}
         assert {"DUT_Status", "DUT_Command", "DUT_Logging"} <= names
         status = next(m for m in result["messages"] if m["name"] == "DUT_Status")
-        # Summary shape — identifiers only.
-        assert set(status.keys()) == {"name", "can_id", "is_extended", "dlc", "cycle_time_ms"}
+        # Summary shape — identifiers plus the file it came from.
+        assert set(status.keys()) == {
+            "name",
+            "can_id",
+            "is_extended",
+            "dlc",
+            "cycle_time_ms",
+            "database",
+        }
+        assert status["database"] == "test.dbc"
         assert "signals" not in status
+        assert result["dbcs"] == ["test.dbc"]
 
 
 class TestDescribeMessage:
@@ -507,17 +516,17 @@ class TestValueTableForTrace:
 
 class TestHashDbcFile:
     def test_same_file_same_hash(self):
-        assert _hash_dbc_file(DBC_PATH) == _hash_dbc_file(DBC_PATH)
+        assert _hash_dbc_files([DBC_PATH]) == _hash_dbc_files([DBC_PATH])
 
     def test_different_contents_different_hash(self, tmp_path):
         a = tmp_path / "a.dbc"
         b = tmp_path / "b.dbc"
         a.write_bytes(b'VERSION "a"\n')
         b.write_bytes(b'VERSION "b"\n')
-        assert _hash_dbc_file(a) != _hash_dbc_file(b)
+        assert _hash_dbc_files([a]) != _hash_dbc_files([b])
 
     def test_returns_16_hex_chars(self):
-        h = _hash_dbc_file(DBC_PATH)
+        h = _hash_dbc_files([DBC_PATH])
         assert len(h) == 16
         assert all(c in "0123456789abcdef" for c in h)
 

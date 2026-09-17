@@ -38,7 +38,7 @@ def test_zelos_socketcan_rejected_off_linux(platform):
     config = {
         "interface": "zelos-socketcan",
         "channel": "can0",
-        "database_file": TEST_DBC,
+        "database_files": [TEST_DBC],
     }
     with patch("zelos_sdk.TraceSource"):
         codec = CanCodec(config)
@@ -86,7 +86,7 @@ def zelos_codec():
     config = {
         "interface": "zelos-socketcan",
         "channel": IFACE,
-        "database_file": TEST_DBC,
+        "database_files": [TEST_DBC],
         "receive_own_messages": False,
     }
     codec = CanCodec(config, bus_name=f"zsc_{int(time.time() * 1000) % 100000}")
