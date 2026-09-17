@@ -19,11 +19,13 @@ import contextlib
 import itertools
 import json
 import logging
+import time
 from pathlib import Path
 
 import can.exceptions
 import pytest
 import zelos_can
+import zelos_sdk
 
 from zelos_extension_can import ssh_socketcan
 from zelos_extension_can.cli import app as app_mod
@@ -153,6 +155,41 @@ def test_ssh_flags_set_in_init():
     assert codec._use_ssh is True
     assert codec._use_native is False
     assert codec._use_rust is True
+
+
+# ── naming: the Rust codec nests decoded events under the bus ───────────────
+
+
+@pytest.mark.parametrize("with_prefix", [True, False])
+def test_rust_path_nests_events_under_the_bus(
+    tmp_path, trace_event_paths, stub_transports, with_prefix
+):
+    """Same layout as the python-can path: `<prefix>/<bus>/<id>_<Msg>` on a
+    shared source, `<bus>/<id>_<Msg>` on the bus's own."""
+    namespace = zelos_sdk.TraceNamespace("ssh_naming")
+    output = tmp_path / "out.trz"
+    config = {
+        "interface": "ssh-socketcan",
+        "channel": "zelos@edge:vcan0",
+        "database_files": [TEST_DBC],
+        "log_raw_frames": True,
+    }
+
+    with zelos_sdk.TraceWriter(str(output), namespace=namespace):
+        source = zelos_sdk.TraceSource("CAN", namespace=namespace) if with_prefix else None
+        codec = CanCodec(config, namespace=namespace, bus_name="can0", source=source)
+        try:
+            codec.start()
+            codec._ebus.inject(0x64, bytes(8), timestamp=1704067200.0)
+            deadline = time.monotonic() + 2.0
+            while codec._native.metrics().messages_decoded == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            codec._native.flush()
+        finally:
+            codec.stop()
+
+    prefix = "CAN/" if with_prefix else ""
+    assert {f"{prefix}can0/Frame", f"{prefix}can0/0064_DUT_Status"} <= trace_event_paths(output)
 
 
 # ── health supervisor delegates to the transport via the adapter ─────────────

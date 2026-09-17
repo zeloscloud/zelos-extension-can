@@ -545,19 +545,6 @@ class CanCodec(can.Listener):
         else:
             logger.info("Raw CAN frame logging is DISABLED")
 
-        # The Rust codec names decoded events `{id:0Nx}_{Name}` with no bus
-        # segment, so a shared prefix source cannot nest them per bus the way
-        # the python-can path does — two Rust-path buses on one prefix share
-        # each decoded event.
-        if self.event_prefix and self._use_rust:
-            logger.warning(
-                "[%s] %s decodes in Rust: decoded events land directly under the prefix, "
-                "not under '%s'",
-                source_name,
-                self.config.get("interface"),
-                self.event_prefix.rstrip("/"),
-            )
-
         self.bus: Any = None
         # python-can's CyclicSendTask. Owns its own thread, exposes `.stop()`
         # and `.modify_data()`; we don't manage an asyncio loop here because
@@ -643,12 +630,17 @@ class CanCodec(can.Listener):
         `source_name` only names an auto-created source, which never happens
         here — `source` and `raw_source` are always supplied — but it is passed
         for diagnostics.
+
+        `event_prefix` nests decoded events under this bus on a shared source,
+        matching the python-can path; cleared, it is None and events sit
+        directly under the bus's own source.
         """
         kwargs: dict[str, Any] = {
             "database_file": [str(p) for p in self.database_files] or None,
             "dbc_conflict": self.dbc_conflict,
             "source_name": self.bus_name if self.bus_name else "can_codec",
             "source": self.source,
+            "event_prefix": self.event_prefix.rstrip("/") or None,
         }
         if self.log_raw_frames:
             kwargs["raw_source"] = self.source

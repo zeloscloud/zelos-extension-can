@@ -113,9 +113,9 @@ def _make_decoder(
     routing conversions through `zelos_can` rather than the Python `CanCodec`.
 
     Naming matches a live bus: with a prefix, the source is the prefix and
-    events nest under the input file's own segment (`<prefix>/<bus>/...`);
-    with the prefix cleared, the source is that segment and events sit
-    directly under it.
+    every event — raw and decoded — nests under the input file's own segment
+    (`<prefix>/<bus>/...`); with the prefix cleared, the source is that segment
+    and events sit directly under it.
 
     `timestamp_mode="absolute"` preserves each frame's own timestamp verbatim.
     The Rust side treats `absolute` as an alias for `hardware`; anything it
@@ -133,6 +133,7 @@ def _make_decoder(
         emit_schemas_on_init=emit_schemas_on_init,
         log_raw_frames=True,
         raw_event_name=f"{bus}/Frame" if prefix else "Frame",
+        event_prefix=bus if prefix else None,
         source=source,
         raw_source=source,
     )

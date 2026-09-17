@@ -16,7 +16,6 @@ import can
 import cantools
 import pytest
 import zelos_can
-import zelos_sdk
 
 from zelos_extension_can.cli import app as app_mod
 from zelos_extension_can.cli.app import (
@@ -416,32 +415,19 @@ def test_create_codecs_shares_one_source_across_buses():
 # ── converter naming ─────────────────────────────────────────────────────────
 
 
-def _trace_event_paths(trz: Path) -> set[str]:
-    """`source/event` for every event in a written trace."""
-    with zelos_sdk.TraceReader(str(trz)) as reader:
-        return {
-            f"{source.name}/{event.name}"
-            for segment in reader.list_data_segments()
-            for source in reader.list_fields(segment.id)
-            for event in source.events
-        }
-
-
 @pytest.mark.parametrize(
     "prefix,expected",
     [
-        ("CAN", {"CAN/my capture/Frame", "CAN/0064_DUT_Status"}),
+        ("CAN", {"CAN/my capture/Frame", "CAN/my capture/0064_DUT_Status"}),
         ("", {"my capture/Frame", "my capture/0064_DUT_Status"}),
     ],
 )
-def test_convert_names_the_source_and_events_by_the_prefix(tmp_path, prefix, expected):
+def test_convert_names_the_source_and_events_by_the_prefix(
+    tmp_path, trace_event_paths, prefix, expected
+):
     """A conversion is named off the prefix, with the input file's own
-    (sanitized) stem as the raw-frame segment; clearing the prefix names the
-    source after that stem instead.
-
-    Decoded event names come from the Rust decoder, which does not carry a bus
-    segment, so they sit directly under the source either way.
-    """
+    (sanitized) stem as the event segment; clearing the prefix names the
+    source after that stem instead."""
     source_log = tmp_path / "my capture.log"
     source_log.write_text("(1704067200.0) can0 064#0000000000000000\n")
     output = tmp_path / "out.trz"
@@ -449,17 +435,17 @@ def test_convert_names_the_source_and_events_by_the_prefix(tmp_path, prefix, exp
     stats = convert_can_trace(source_log, [TEST_DBC], output, prefix=prefix)
 
     assert stats.messages_converted == 1
-    assert expected <= _trace_event_paths(output)
+    assert expected <= trace_event_paths(output)
 
 
-def test_convert_without_a_database_writes_raw_frames_only(tmp_path):
+def test_convert_without_a_database_writes_raw_frames_only(tmp_path, trace_event_paths):
     source_log = tmp_path / "raw.log"
     source_log.write_text("(1704067200.0) can0 064#0000000000000000\n")
     output = tmp_path / "raw.trz"
 
     convert_can_trace(source_log, [], output)
 
-    assert _trace_event_paths(output) == {"CAN/raw/Frame"}
+    assert trace_event_paths(output) == {"CAN/raw/Frame"}
 
 
 def test_log_handler_target_follows_the_prefix(monkeypatch):

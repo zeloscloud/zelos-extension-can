@@ -49,17 +49,18 @@ One value each, applied to every bus. Collapsed by default.
 
 ### Trace layout
 
-With the default prefix, one source carries every bus:
+With the default prefix, one source carries every bus. Every interface names
+events the same way; a conversion uses the input file's stem as its segment.
 
-```
-CAN/can0/0064_DUT_Status    decoded signals
-CAN/can0/Frame              undecoded frames
-CAN/log                     extension logs
-```
+| What | Prefix `CAN` | Prefix cleared |
+|---|---|---|
+| Decoded signals | `CAN/can0/0064_DUT_Status` | `can0/0064_DUT_Status` |
+| Undecoded frames | `CAN/can0/Frame` | `can0/Frame` |
+| Extension logs | `CAN/log` | `can_log/log` |
+| Converted `capture.log` | `CAN/capture/0064_DUT_Status` | `capture/0064_DUT_Status` |
 
-Clear **Prefix** in Advanced settings to keep the previous per-bus layout:
-one source named after each bus, events unprefixed (`can0/0064_DUT_Status`,
-`can0/Frame`), and logs on their own `can_log` source.
+Clear **Prefix** in Advanced settings to keep the previous layout: one source
+per bus (or per converted file) with events unprefixed.
 
 ## Remote CAN over SSH (`ssh-socketcan`)
 

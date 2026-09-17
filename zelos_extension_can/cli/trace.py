@@ -106,7 +106,8 @@ def trace(
         output_file = file
         logger.info(f"Recording trace to: {output_file}")
 
-    # Create CAN codec
+    # Create CAN codec. Prefix-less by construction: pure CLI mode traces one
+    # bus, so there is nothing to nest and the source is the codec itself.
     codec = CanCodec(config)
 
     setup_shutdown_handler(codec)
