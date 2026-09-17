@@ -18,8 +18,11 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    # Tracks zelos-can's own `zelos-sdk` floor, which is now a formal release.
-    "zelos-sdk>=0.0.10",
+    # Standalone actions need the at-rest harness (`zelos_sdk.extensions.actions`),
+    # which first ships in 0.0.11a1. Naming a prerelease here is what lets a
+    # resolver pick one at all: without it, an installed extension resolves the
+    # newest final release and its at-rest actions simply do not appear.
+    "zelos-sdk>=0.0.11a1",
     "python-can",
     "cantools",
     "rich-click>=1.8.0",

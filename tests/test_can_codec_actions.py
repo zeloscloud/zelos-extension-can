@@ -3,9 +3,9 @@ free-floating action surface in ``zelos_extension_can.actions``).
 
 The on-wire action surface is a single global namespace:
 
-    can/list_codecs
-    can/get_tx_state           (codec=<bus>)
-    can/send_message           (codec=<bus>, message=..., signals_json=..., mux=...)
+    CAN/list_codecs
+    CAN/get_tx_state           (codec=<bus>)
+    CAN/send_message           (codec=<bus>, message=..., signals_json=..., mux=...)
     ...
 
 These tests exercise the methods directly on a ``CanCodec`` instance with a
