@@ -355,12 +355,13 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         # A bus that can't start (bad interface, unreachable / unauthenticated
         # ssh host, missing remote can-utils, ...) raises can.exceptions.CanError
         # — CanInitializationError and CanInterfaceNotImplementedError are
-        # subclasses; a bad `config_json` raises ValueError and the Rust-side
-        # loader RuntimeError. Exit cleanly with a one-line reason instead of a
-        # traceback that looks like a crash. _run_codecs_async's try/finally has
-        # already stopped any bus that DID start before the failing one.
+        # subclasses, as is the mid-run SshPermanentError; a bad `config_json`
+        # raises ValueError and the Rust-side loader RuntimeError. Exit cleanly
+        # with a one-line reason instead of a traceback that looks like a crash.
+        # _run_codecs_async's try/finally has already stopped every bus it
+        # started, so cleanup is complete by the time we get here.
         try:
             asyncio.run(_run_codecs_async(codecs))
         except (can.exceptions.CanError, ValueError, FileNotFoundError, RuntimeError) as e:
-            logger.error("CAN bus failed to start: %s", e)
+            logger.error("CAN bus failed: %s", e)
             sys.exit(1)

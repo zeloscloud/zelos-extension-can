@@ -29,6 +29,7 @@ import zelos_can
 import zelos_sdk
 from conftest import trace_event_paths
 
+from zelos_extension_can import codec as codec_mod
 from zelos_extension_can import ssh_socketcan
 from zelos_extension_can.cli import app as app_mod
 from zelos_extension_can.cli.app import _create_codecs, _prepare_bus_config, _run_codecs_async
@@ -54,6 +55,7 @@ class _StubTransport:
         ssh_port=22,
         ssh_key_path=None,
         ssh_extra_opts=None,
+        ssh_host_key_policy="auto",
         fd_mode=False,
     ):
         self.bus = bus
@@ -61,16 +63,21 @@ class _StubTransport:
         self.ssh_port = ssh_port
         self.ssh_key_path = ssh_key_path
         self.ssh_extra_opts = ssh_extra_opts
+        self.ssh_host_key_policy = ssh_host_key_policy
         self.fd_mode = fd_mode
         self.healthy = True
         self.teardowns = 0
         self.stderr = ""
+        self.failure = can.exceptions.CanInitializationError("transient")
 
     def teardown(self):
         self.teardowns += 1
 
     def stderr_tail(self):
         return self.stderr
+
+    def classify_failure(self):
+        return self.failure
 
 
 @pytest.fixture
@@ -138,15 +145,23 @@ def test_start_threads_ssh_kwargs_to_transport(make_ssh_codec, stub_transports):
         {
             "ssh_port": 2222,
             "ssh_key_path": "/home/z/id_ed25519",
-            "ssh_extra_opts": "-o StrictHostKeyChecking=no",
+            "ssh_extra_opts": "-J bastion",
+            "ssh_host_key_policy": "strict",
             "fd_mode": True,
         }
     )
     transport = stub_transports[0]
     assert transport.ssh_port == 2222
     assert transport.ssh_key_path == "/home/z/id_ed25519"
-    assert transport.ssh_extra_opts == "-o StrictHostKeyChecking=no"
+    assert transport.ssh_extra_opts == "-J bastion"
+    assert transport.ssh_host_key_policy == "strict"
     assert transport.fd_mode is True
+
+
+def test_start_defaults_host_key_policy_to_auto(make_ssh_codec, stub_transports):
+    """Unset in config → "auto", so a reimaged edge needs no manual step."""
+    make_ssh_codec()
+    assert stub_transports[0].ssh_host_key_policy == "auto"
 
 
 def test_ssh_flags_set_in_init():
@@ -272,13 +287,14 @@ def test_reconnect_transport_build_failure_preserves_codec_then_recovers(
     ok = asyncio.run(codec._reconnect_bus())
 
     assert ok is False
-    # Old transport reaped, but NOTHING else changed — no second codec, no
-    # object-identity churn, periodic still armed.
+    # Old transport reaped and dropped (nothing must read a torn-down ring), but
+    # NOTHING else changed — no second codec, no object-identity churn, periodic
+    # still armed.
     assert old_transport.teardowns == 1
+    assert codec._transport is None
     assert codec._native is native_before
     assert codec._ebus is ebus_before
     assert codec.bus is bus_before
-    assert codec._transport is old_transport  # not replaced on failure
     assert shim.is_active is True
     assert len(stub_transports) == 1  # no new transport was constructed
 
@@ -326,8 +342,45 @@ def test_reconnect_stop_during_teardown_does_not_resurrect(make_ssh_codec, stub_
 
     assert ok is False
     assert len(stub_transports) == 1  # re-check bailed before building
-    assert codec._transport is old_transport
+    assert codec._transport is None  # the dead one was reaped and dropped
     assert codec.bus is bus_before
+
+
+# ── permanent failure mid-run: report once and exit, never retry forever ─────
+
+
+def test_reconnect_propagates_permanent_failure(make_ssh_codec, monkeypatch):
+    """A rebuild that fails for a reason retrying cannot fix (auth, host key,
+    no can-utils, no iface) must NOT be swallowed into "retrying next tick" —
+    it propagates so the app layer reports it once and exits."""
+    codec = make_ssh_codec()
+
+    def denied(bus, channel, **kwargs):
+        raise ssh_socketcan.SshPermanentError("ssh authentication to edge failed")
+
+    monkeypatch.setattr(ssh_socketcan, "SshTransport", denied)
+
+    with pytest.raises(ssh_socketcan.SshPermanentError):
+        asyncio.run(codec._reconnect_bus())
+
+
+def test_supervisor_raises_on_permanent_failure(make_ssh_codec, monkeypatch):
+    """An unhealthy link whose cause is permanent ends the supervision loop with
+    the actionable CanError instead of backing off 5 s → 60 s forever."""
+    codec = make_ssh_codec()
+    codec._transport.healthy = False
+    codec._transport.failure = ssh_socketcan.SshPermanentError(
+        "ssh host key for edge is not trusted"
+    )
+
+    # Collapse the 5 s health tick; the loop's only await is this sleep.
+    async def _no_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(codec_mod.asyncio, "sleep", _no_sleep)
+
+    with pytest.raises(ssh_socketcan.SshPermanentError):
+        asyncio.run(codec._run_async())
 
 
 # ── clean failure: a doomed transport surfaces a CanError, not a traceback ───
@@ -565,6 +618,7 @@ def test_schema_ssh_branch_structure():
         "ssh_user",
         "ssh_port",
         "ssh_key_path",
+        "ssh_host_key_policy",
         "ssh_extra_opts",
         "fd_mode",
     ):
@@ -572,6 +626,9 @@ def test_schema_ssh_branch_structure():
     assert props["remote_channel"]["default"] == "can0"
     assert props["ssh_port"]["default"] == 22
     assert props["ssh_key_path"]["ui:widget"] == "file-picker"
+    # Default "auto": a reimaged edge reconnects with no manual host-key step.
+    assert props["ssh_host_key_policy"]["enum"] == ["auto", "strict"]
+    assert props["ssh_host_key_policy"]["default"] == "auto"
     # The remote kernel loopback always echoes TX; there is no receive_own_messages.
     assert "receive_own_messages" not in props
 
@@ -600,7 +657,8 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
                 "ssh_user": "zelos",
                 "ssh_port": 2222,
                 "ssh_key_path": "/home/z/id_ed25519",
-                "ssh_extra_opts": "-o StrictHostKeyChecking=no",
+                "ssh_host_key_policy": "strict",
+                "ssh_extra_opts": "-J bastion",
                 "database_files": [TEST_DBC],
                 "name": "edge-bus",
                 "fd_mode": False,

@@ -81,13 +81,8 @@ loopback, so every transmit is traced exactly once.
 - **Key-based SSH auth** to the edge. The extension connects non-interactively
   (`BatchMode`), so password prompts are not possible — set up a key
   (`ssh-copy-id user@host`) or point **SSH Key Path** at your private key.
-- **A trusted host key.** On the *first* connection to a new edge, SSH must
-  already know its host key or the connection fails with
-  `Host key verification failed`. Resolve it once, up front, by either:
-  - connecting manually a single time to accept the key: `ssh user@host`, or
-  - adding it non-interactively: `ssh-keyscan -H host >> ~/.ssh/known_hosts`, or
-  - adding `-o StrictHostKeyChecking=accept-new` to **SSH Extra Options**
-    (trust-on-first-use; still detects a later key change).
+- **Nothing to do about host keys** on the default **SSH Host Key Policy**
+  (`auto`) — including after a reimage, which gives the device a new one.
 
 ### Settings
 - **Remote Host** (required): edge hostname or IP (or an `~/.ssh/config` alias).
@@ -95,16 +90,25 @@ loopback, so every transmit is traced exactly once.
 - **SSH User**: login user on the edge (optional if set in `~/.ssh/config`).
 - **SSH Port**: default `22`.
 - **SSH Key Path**: private key to authenticate with (optional).
-- **SSH Extra Options**: extra `ssh` flags, e.g.
-  `-o StrictHostKeyChecking=accept-new` or a `-J bastion` jump host.
+- **SSH Host Key Policy**: `auto` (default) trusts whatever host key the edge
+  presents and records nothing, so a reimaged device reconnects with no manual
+  step; `strict` uses your `~/.ssh/known_hosts`, where an unknown or changed key
+  stops the bus with the command that fixes it.
+- **SSH Extra Options**: extra `ssh` flags, e.g. a `-J bastion` jump host.
+  Placed before the options above; `ssh` honours the first `-o` it sees, so
+  these win over the settings above.
 - Plus the shared **Database Files** setting and the global **Advanced** ones.
 
 ### Notes
-- If a connection fails, the extension reports a specific reason (untrusted host
-  key, authentication, unreachable host, or missing `can-utils` on the edge)
-  rather than retrying silently.
-- If the link drops mid-capture, it reconnects automatically; decoded state and
-  any armed periodic transmissions are preserved across the reconnect.
+- A failure nothing but an operator can fix — authentication, an untrusted host
+  key under `strict`, or missing `can-utils` on the edge — is reported once with
+  the exact command that fixes it (resolved for this bus and your OS) and the
+  bus stops, rather than retrying behind your back.
+- Such a permanent failure on ONE ssh bus stops the extension, and so every
+  other bus with it — the same as a bus that cannot start at all.
+- Transient failures (unreachable, DNS, a dropped link, a CAN interface the edge
+  has not configured yet) reconnect automatically with backoff; decoded state
+  and any armed periodic transmissions are preserved across the reconnect.
 - Timestamps in `auto`/`absolute` mode come from the **edge's** clock — keep the
   edge's time in sync (NTP) if absolute timestamps matter.
 
