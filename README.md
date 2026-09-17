@@ -65,18 +65,21 @@ loopback, so every transmit is traced exactly once.
   step; `strict` uses your `~/.ssh/known_hosts`, where an unknown or changed key
   stops the bus with the command that fixes it.
 - **SSH Extra Options**: extra `ssh` flags, e.g. a `-J bastion` jump host.
-  Appended after the options above, so they can override them.
+  Placed before the options above; `ssh` honours the first `-o` it sees, so
+  these win over the settings above.
 - Plus the shared **Database File**, **Timestamp Mode**, **Raw Frame Logging**,
   and **Schema Emission** settings.
 
 ### Notes
 - A failure nothing but an operator can fix — authentication, an untrusted host
-  key under `strict`, missing `can-utils`, or no such interface on the edge — is
-  reported once with the exact command that fixes it (resolved for this bus and
-  your OS) and the bus stops, rather than retrying behind your back.
-- Transient failures (unreachable, DNS, a dropped link) reconnect automatically
-  with backoff; decoded state and any armed periodic transmissions are preserved
-  across the reconnect.
+  key under `strict`, or missing `can-utils` on the edge — is reported once with
+  the exact command that fixes it (resolved for this bus and your OS) and the
+  bus stops, rather than retrying behind your back.
+- Such a permanent failure on ONE ssh bus stops the extension, and so every
+  other bus with it — the same as a bus that cannot start at all.
+- Transient failures (unreachable, DNS, a dropped link, a CAN interface the edge
+  has not configured yet) reconnect automatically with backoff; decoded state
+  and any armed periodic transmissions are preserved across the reconnect.
 - Timestamps in `auto`/`absolute` mode come from the **edge's** clock — keep the
   edge's time in sync (NTP) if absolute timestamps matter.
 

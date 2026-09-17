@@ -820,7 +820,7 @@ class CanCodec(can.Listener):
             logger.info("ssh transport rebuilt, codec preserved")
             return True
         except SshPermanentError:
-            # Retrying cannot fix this (auth, host key, no can-utils, no iface).
+            # Retrying cannot fix this (auth, host key, no can-utils).
             # Propagate so the app's CanError handler reports it once and exits,
             # instead of looping on an unfixable config until someone notices.
             raise

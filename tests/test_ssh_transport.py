@@ -583,8 +583,9 @@ def test_clean_stderr_tail_strips_auto_policy_warning():
         ("Host key verification failed.", "host key", True),
         ("zelos@edge: Permission denied (publickey).", "authentication", True),
         ("bash: candump: command not found", "can-utils", True),
-        ("SIOCGIFINDEX: No such device", "no CAN interface can0", True),
         # transient: keep reconnecting with backoff
+        # sshd can be up before the edge has configured can0 after a reboot
+        ("SIOCGIFINDEX: No such device", "no CAN interface can0", False),
         ("ssh: Could not resolve hostname edge: nodename nor servname", "resolve", False),
         ("ssh: connect to host edge port 22: Connection refused", "cannot reach", False),
         ("ssh: connect to host edge port 22: Operation timed out", "cannot reach", False),
@@ -597,6 +598,22 @@ def test_classification_class_is_the_verdict(stderr, expect, permanent):
     assert expect in str(err)
     assert isinstance(err, ssh_socketcan.SshPermanentError) is permanent
     assert isinstance(err, can.exceptions.CanError)  # the app layer's handler
+
+
+def test_classification_never_permanent_once_a_frame_streamed(fake_ssh, make_codec, make_transport):
+    """The stderr ring holds the WHOLE session, so pre-auth noise (a login-script
+    line, a host-key banner ssh connected through anyway) plus a later drop must
+    not read as permanent. Streaming a frame proves auth/can-utils were fine."""
+    ebus, codec = make_codec(database_file=TEST_DBC)
+    fake_ssh.rx_born_frame = f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode()
+    transport = make_transport(ebus)
+    assert _wait_until(lambda: transport._rx_started.is_set())
+
+    transport._stderr_tail = b"edge: Permission denied (publickey).\r\nConnection closed\r\n"
+    err = transport.classify_failure()
+
+    assert isinstance(err, can.exceptions.CanInitializationError)
+    assert not isinstance(err, ssh_socketcan.SshPermanentError)
 
 
 def test_host_key_error_quotes_the_offending_file():
@@ -612,7 +629,8 @@ def test_host_key_error_quotes_the_offending_file():
     [
         ("darwin", "ssh-copy-id -i /home/z/id_ed25519 -p 2222 zelos@edge"),
         ("linux", "ssh-copy-id -i /home/z/id_ed25519 -p 2222 zelos@edge"),
-        ("win32", "type %USERPROFILE%\\.ssh\\id_ed25519.pub | ssh -p 2222 zelos@edge"),
+        # cmd.exe form, with the .pub derived from the configured key
+        ("win32", "type /home/z/id_ed25519.pub | ssh -p 2222 zelos@edge"),
     ],
 )
 def test_auth_error_carries_platform_remedy(monkeypatch, platform, expect):
@@ -663,7 +681,7 @@ def test_argv_options(fake_ssh, make_codec, make_transport):
     assert "IdentitiesOnly=yes" in argv
     assert "StrictHostKeyChecking=no" in argv
     assert "zelos@edge" in argv
-    assert "candump -L can1 &" in argv[-1]
+    assert "candump -L can1" in argv[-1]
 
 
 def test_argv_omits_default_port_and_key(fake_ssh, make_codec, make_transport):
@@ -672,22 +690,15 @@ def test_argv_omits_default_port_and_key(fake_ssh, make_codec, make_transport):
     argv = fake_ssh.proc.argv
     assert "-p" not in argv
     assert "-i" not in argv
-    assert argv[-1] == (
-        "exec 3<&0; "
-        "trap 'trap - EXIT TERM INT HUP; kill 0 2>/dev/null' EXIT TERM INT HUP; "
-        "candump -L can0 & p=$!; "
-        '{ while IFS= read -r f; do cansend can0 "$f" >/dev/null 2>&1; done <&3; '
-        "kill $p 2>/dev/null; } & wait $p"
-    )
 
 
 def test_remote_command_two_way_watchdog_shape(fake_ssh, make_codec, make_transport):
-    """The one remote command must close the channel when ANY party dies.
+    """The one remote command must close the channel when EITHER side dies.
 
     Structural requirements: a process-group kill (`kill 0`) armed on both
     normal exit and fatal signals (dash/ash skip the EXIT trap on untrapped
-    signals), the shell parked on `wait $p` so candump's death ends the
-    command, the TX read-loop consuming the real stdin via a pre-dup'd fd
+    signals), candump signalling the shell when it exits, the TX read-loop as
+    the shell's own foreground body reading the real stdin via a pre-dup'd fd
     (backgrounded lists get /dev/null stdin), cansend's output kept off
     candump's stdout, and the iface interpolated once per direction.
     (`tests/test_ssh_remote_shell.py` runs this string under real shells.)
@@ -697,8 +708,8 @@ def test_remote_command_two_way_watchdog_shape(fake_ssh, make_codec, make_transp
     cmd = fake_ssh.proc.argv[-1]
     assert "kill 0" in cmd
     assert "EXIT TERM INT HUP" in cmd  # signal-hardened trap, not EXIT-only
-    assert "wait $p" in cmd  # shell lives exactly as long as candump
-    assert "exec 3<&0" in cmd and "done <&3" in cmd  # TX loop reads the real stdin
+    assert "kill -TERM $$" in cmd  # candump's exit ends the shell
+    assert "exec 3<&0" in cmd and cmd.endswith("done <&3")  # TX loop IS the shell's body
     assert 'cansend can2 "$f" >/dev/null 2>&1' in cmd  # never corrupts RX stdout
     assert cmd.count("can2") == 2  # candump + cansend, nothing else
 
@@ -714,6 +725,9 @@ def test_argv_policy_auto_trusts_any_key(fake_ssh, make_codec, make_transport):
     argv = fake_ssh.proc.argv
     assert "StrictHostKeyChecking=no" in argv
     assert "UserKnownHostsFile=/dev/null" in argv
+    # A stale /etc/ssh/ssh_known_hosts entry would otherwise print the CHANGED
+    # banner into the stderr ring on a connection ssh allows anyway.
+    assert "GlobalKnownHostsFile=/dev/null" in argv
 
 
 def test_argv_policy_strict_defers_to_known_hosts(fake_ssh, make_codec, make_transport):
@@ -724,9 +738,9 @@ def test_argv_policy_strict_defers_to_known_hosts(fake_ssh, make_codec, make_tra
     assert "UserKnownHostsFile=/dev/null" not in argv  # ssh's own known_hosts
 
 
-def test_argv_extra_opts_appended_after_policy(fake_ssh, make_codec, make_transport):
-    """ssh_extra_opts lands after our options (later ssh -o wins), and still
-    before the target + remote command."""
+def test_argv_extra_opts_precede_our_options(fake_ssh, make_codec, make_transport):
+    """ssh_extra_opts must come FIRST to be able to override anything: ssh honours
+    the first occurrence of an option (`ssh -o X=yes -o X=accept-new -G` says yes)."""
     ebus, codec = make_codec()
     make_transport(
         ebus,
@@ -735,8 +749,9 @@ def test_argv_extra_opts_appended_after_policy(fake_ssh, make_codec, make_transp
         ssh_extra_opts="-o StrictHostKeyChecking=accept-new -J bastion",
     )
     argv = fake_ssh.proc.argv
-    assert argv.index("StrictHostKeyChecking=accept-new") > argv.index("StrictHostKeyChecking=yes")
-    assert argv[-4:-2] == ["-J", "bastion"]
+    assert argv.index("StrictHostKeyChecking=accept-new") < argv.index("StrictHostKeyChecking=yes")
+    assert argv[2:6] == ["-o", "StrictHostKeyChecking=accept-new", "-J", "bastion"]
+    assert argv[:2] == ["ssh", "-T"]
     assert argv[-2] == "zelos@edge"  # target, then the remote command
 
 

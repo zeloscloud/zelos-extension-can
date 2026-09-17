@@ -1,11 +1,11 @@
 """Runs the single-session remote shell under every POSIX shell on this box.
 
-``SshTransport._remote_command`` is the one piece of this transport that executes
-on the EDGE, under whatever ``/bin/sh`` it happens to have (dash, busybox ash,
-bash). It is a string, so nothing else can check it: these tests run it for real
-with stand-in ``candump``/``cansend`` on PATH and assert the three death paths
-that keep a dead link from looking healthy — plus that TX lines actually reach
-``cansend`` now that both directions share one session.
+``SshTransport._remote_command`` is a STRING that executes on the EDGE under
+whatever ``/bin/sh`` it has, so nothing but execution can check it. Each test
+runs it for real with stand-in ``candump``/``cansend`` on PATH and asserts, for
+every death path, that our stdout reaches EOF (the local reader's only signal)
+and that nothing is orphaned on the edge — plus that TX lines reach ``cansend``
+now that both directions share one session.
 
 ``kill 0`` signals the shell's whole process group, so every shell here is
 started with ``start_new_session=True`` — which is how sshd runs a remote command
@@ -45,6 +45,24 @@ def _alive(pid: int) -> bool:
     return "sleep" in ps.stdout
 
 
+def _stdout_eof(proc: subprocess.Popen) -> bool:
+    """Did the channel's stdout close? The local reader treats EOF, not the
+    wrapper's exit status, as "the link is gone" — so every death path must
+    reach it (i.e. no remote process is still holding the fd)."""
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+
+    def closed() -> bool:
+        try:
+            return os.read(fd, 4096) == b""
+        except BlockingIOError:
+            return False  # still open, nothing to read
+        except OSError:
+            return True
+
+    return _wait_until(closed)
+
+
 class _Edge:
     """A fake edge: candump/cansend stand-ins on PATH plus their receipts."""
 
@@ -65,8 +83,9 @@ class _Edge:
 
     def start(self, shell: str, *, candump_lives: bool) -> subprocess.Popen:
         """Spawn the remote shell. candump records its pid, then either sleeps
-        (a live capture) or exits (death path 2)."""
-        tail = "exec sleep 5\n" if candump_lives else "exit 3\n"
+        (a live capture) or exits (death path 2). The sleep outlasts every
+        assertion here, so a reap that never happened cannot pass by timing."""
+        tail = "exec sleep 30\n" if candump_lives else "exit 3\n"
         self._script("candump", f"echo $$ > {self.pid_file}\n" + tail)
         self.proc = subprocess.Popen(
             [shell, "-c", CMD],
@@ -102,15 +121,13 @@ class _Edge:
         return [ln.split()[-1] for ln in self.tx_log.read_text().splitlines() if ln.strip()]
 
     def cleanup(self) -> None:
-        """Kill the shell's session, and ONLY while the shell is alive — once it
-        has been reaped its pid is free to be recycled onto anything, and no test
-        may fire SIGKILL at a pid it no longer owns. A stand-in leaked by a failed
-        assertion expires on its own (``sleep 5``)."""
+        """Kill the shell's process group, which is where every stand-in lives.
+        Safe after the shell is reaped: a process-group id is not reused while
+        the group still has a member."""
         if self.proc is None:
             return
-        if self.proc.poll() is None:
-            with contextlib.suppress(Exception):
-                os.killpg(self.proc.pid, 9)  # start_new_session → pid is the pgid
+        with contextlib.suppress(Exception):
+            os.killpg(self.proc.pid, 9)  # start_new_session → pid is the pgid
         with contextlib.suppress(Exception):
             self.proc.wait(timeout=2)
 
@@ -125,8 +142,8 @@ def edge(tmp_path):
 @pytest.mark.parametrize("shell", SHELLS)
 def test_tx_flows_then_stdin_close_reaps_candump(shell, edge):
     """Death path 1: TX lines reach cansend on the shared session, and closing
-    our stdin (local teardown) ends the read-loop, which kills candump, which
-    ends the session — nothing orphaned on the edge."""
+    our stdin (local teardown) ends the read loop, whose EXIT trap reaps
+    candump — nothing orphaned on the edge, stdout closed."""
     proc = edge.start(shell, candump_lives=True)
     pid = edge.candump_pid()
 
@@ -139,14 +156,35 @@ def test_tx_flows_then_stdin_close_reaps_candump(shell, edge):
         f"session outlived its stdin: {edge.diag()}"
     )
     assert _wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
+    assert _stdout_eof(proc), "stdout still held open after the session ended"
 
 
 @pytest.mark.parametrize("shell", SHELLS)
 def test_candump_death_ends_the_session(shell, edge):
-    """Death path 2: candump exiting (crash, iface down) must end the whole
-    session so the local reader sees EOF instead of a silent RX starve."""
+    """Death path 2: candump exiting (crash, iface down) signals the shell, which
+    must end the session so the local reader sees EOF, not a silent RX starve."""
     proc = edge.start(shell, candump_lives=False)
     assert _wait_until(lambda: proc.poll() is not None), f"session survived candump: {edge.diag()}"
+    assert _stdout_eof(proc), "stdout still held open after candump died"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_tx_loop_death_ends_the_session(shell, edge):
+    """Death path 4: the TX side dying must not leave RX streaming on a session
+    that silently drops every frame it is handed. The read loop is the shell's
+    own body, so here cansend kills it mid-frame; the trap reaps candump."""
+    edge._script("cansend", "kill -TERM $PPID\n")  # the TX loop blows up on a frame
+    proc = edge.start(shell, candump_lives=True)
+    pid = edge.candump_pid()
+
+    proc.stdin.write(b"123#AABB\n")
+    proc.stdin.flush()
+
+    assert _wait_until(lambda: proc.poll() is not None), (
+        f"session survived its TX loop: {edge.diag()}"
+    )
+    assert _wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
+    assert _stdout_eof(proc), "RX kept streaming after the TX loop died"
 
 
 @pytest.mark.parametrize("shell", SHELLS)
@@ -161,3 +199,4 @@ def test_signalled_shell_reaps_candump(shell, edge):
 
     assert _wait_until(lambda: proc.poll() is not None)
     assert _wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
+    assert _stdout_eof(proc), "stdout still held open after the shell was signalled"
