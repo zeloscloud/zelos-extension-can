@@ -1,7 +1,7 @@
 """Several DBCs per bus, the shared `prefix` source, and the Advanced section.
 
-The parity test is the real gate: the extension's cantools merge and the Rust
-`zelos_can` merge must agree on which definition of a CAN id survives.
+The merge rule itself is the Rust decoder's — `CanCodec` asks `zelos_can` which
+definition of a CAN id survives — so there is nothing to test for parity.
 """
 
 from __future__ import annotations
@@ -13,19 +13,17 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import can
-import cantools
 import pytest
-import zelos_can
+from conftest import trace_event_paths
 
-from zelos_extension_can.cli import app as app_mod
 from zelos_extension_can.cli.app import (
     ADVANCED_DEFAULTS,
     _create_codecs,
     _prepare_bus_config,
-    _resolve_prefix,
+    _validate_name,
     resolve_advanced,
 )
-from zelos_extension_can.codec import CanCodec, merge_dbc_messages
+from zelos_extension_can.codec import CanCodec
 from zelos_extension_can.converter import convert_can_trace
 
 FILES = Path(__file__).parent / "files"
@@ -36,105 +34,58 @@ MERGE_SET = [DBC_A, DBC_B, DBC_C]
 TEST_DBC = FILES / "test.dbc"
 
 
-def _load(paths):
-    return [cantools.database.load_file(str(p)) for p in paths]
+def _merged_config(**extra) -> dict:
+    return {
+        "interface": "virtual",
+        "channel": "vcan0",
+        "database_files": [str(p) for p in MERGE_SET],
+        **extra,
+    }
 
 
 # ── merge: dedupe, conflict, policy ──────────────────────────────────────────
 
 
-def test_merge_dedupes_identical_and_lets_the_later_file_win(caplog):
-    with caplog.at_level(logging.WARNING, logger="zelos_extension_can.codec"):
-        messages, origin, deduped, conflicts = merge_dbc_messages(MERGE_SET, _load(MERGE_SET))
+def test_merge_dedupes_identical_and_reports_the_conflict(caplog):
+    """merge_a/merge_b define 0x301 identically (silent dedupe) and 0x302
+    differently (the later file wins, with one warning)."""
+    with (
+        caplog.at_level(logging.WARNING, logger="zelos_extension_can.codec"),
+        patch("zelos_sdk.TraceSource"),
+    ):
+        codec = CanCodec(_merged_config(), bus_name="busA")
 
-    assert [m.name for m in messages] == [
+    assert [m.name for m in codec.messages] == [
         "Merge_A",
         "Merge_Same",
         "Merge_Conflict_B",
         "Merge_B",
         "Merge_C",
     ]
-    assert deduped == 1  # Merge_Same, defined the same way in A and B
-    assert [c["frame_id"] for c in conflicts] == [770]
-    assert conflicts[0] == {
-        "frame_id": 770,
-        "is_extended": False,
-        "kept": {"file": "merge_b.dbc", "name": "Merge_Conflict_B"},
-        "dropped": {"file": "merge_a.dbc", "name": "Merge_Conflict_A"},
-    }
-    # Origin tracks which file each surviving definition came from.
-    assert origin[(768, False)] == DBC_A
-    assert origin[(770, False)] == DBC_B
+    assert codec.dbc_conflicts == [
+        {
+            "frame_id": 770,
+            "is_extended": False,
+            "kept": {"file": "merge_b.dbc", "name": "Merge_Conflict_B"},
+            "dropped": {"file": "merge_a.dbc", "name": "Merge_Conflict_A"},
+        }
+    ]
+    assert codec.message_origin[(768, False)] == DBC_A
+    assert codec.message_origin[(770, False)] == DBC_B
 
+    # One warning, naming both files and the winner.
     warning = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
-    for fragment in ("0x302", "merge_a.dbc", "merge_b.dbc", "Merge_Conflict_A", "Merge_Conflict_B"):
+    for fragment in (str(DBC_A), str(DBC_B), "keeping 'Merge_Conflict_B'"):
         assert fragment in warning
-    assert "keeping 'Merge_Conflict_B' from merge_b.dbc" in warning
-
-
-def test_merge_error_policy_refuses_the_load():
-    with pytest.raises(ValueError, match="conflicting definitions of CAN id 0x302"):
-        merge_dbc_messages(MERGE_SET, _load(MERGE_SET), conflict="error")
 
 
 def test_codec_error_policy_refuses_the_load():
-    config = {
-        "interface": "virtual",
-        "channel": "vcan0",
-        "database_files": [str(p) for p in MERGE_SET],
-        "dbc_conflict": "error",
-    }
-    with pytest.raises(ValueError, match="conflicting definitions"), patch("zelos_sdk.TraceSource"):
-        CanCodec(config, bus_name="busA")
-
-
-# ── parity: the extension's merge vs the Rust merge ──────────────────────────
-
-
-def test_merge_matches_the_rust_decoder():
-    """Same (frame_id, is_extended) -> event name set, for the same file order.
-
-    `zelos_can.CanDecoder.message_keys()` exposes exactly
-    `(frame_id, is_extended, event_name)` for the surviving definitions, so the
-    comparison is over that triple: it pins both WHICH ids survive and WHICH
-    definition won (the event name carries the message name). Signal-level
-    parity is not exposed by the Rust side and is not compared here.
-    """
-    config = {
-        "interface": "virtual",
-        "channel": "vcan0",
-        "database_files": [str(p) for p in MERGE_SET],
-    }
-    with patch("zelos_sdk.TraceSource"):
-        codec = CanCodec(config, bus_name="parity")
-
-    extension = {
-        (msg.frame_id, msg.is_extended_frame, f"{msg.frame_id:04x}_{msg.name}")
-        for msg in codec.messages
-    }
-    decoder = zelos_can.CanDecoder(
-        database_file=[str(p) for p in MERGE_SET],
-        source_name="parity_rust",
-        timestamp_mode="ignore",
-    )
-    assert extension == set(decoder.message_keys())
-
-
-def test_merge_matches_the_rust_decoder_on_an_intra_file_conflict():
-    """test.dbc defines CAN id 800 twice; both sides must keep the same one."""
-    config = {"interface": "virtual", "channel": "vcan0", "database_files": [str(TEST_DBC)]}
-    with patch("zelos_sdk.TraceSource"):
-        codec = CanCodec(config, bus_name="parity")
-
-    width = lambda msg: 8 if msg.is_extended_frame else 4  # noqa: E731
-    extension = {
-        (msg.frame_id, msg.is_extended_frame, f"{msg.frame_id:0{width(msg)}x}_{msg.name}")
-        for msg in codec.messages
-    }
-    decoder = zelos_can.CanDecoder(
-        database_file=[str(TEST_DBC)], source_name="parity_rust_single", timestamp_mode="ignore"
-    )
-    assert extension == set(decoder.message_keys())
+    """`dbc_conflict: error` is the Rust loader's refusal, surfaced verbatim."""
+    with (
+        pytest.raises(RuntimeError, match="conflicting DBC message definitions"),
+        patch("zelos_sdk.TraceSource"),
+    ):
+        CanCodec(_merged_config(dbc_conflict="error"), bus_name="busA")
 
 
 # ── config normalisation ─────────────────────────────────────────────────────
@@ -183,16 +134,25 @@ def test_prepare_bus_config_keeps_a_legacy_per_bus_override():
     assert prepared["timestamp_mode"] == "absolute"
 
 
-def test_schema_advanced_section_shape():
+def test_schema_is_valid_and_carries_the_per_bus_block():
     jsonschema = pytest.importorskip("jsonschema")
     schema = json.loads((Path(__file__).parents[1] / "config.schema.json").read_text())
-    assert list(schema["properties"]) == ["buses", "advanced"]
+    jsonschema.Draft7Validator.check_schema(schema)
 
     advanced = schema["properties"]["advanced"]
-    assert advanced["ui:options"] == {"collapsed": True}
     assert advanced["additionalProperties"] is False
     assert advanced["default"] == {}
     assert {k: v["default"] for k, v in advanced["properties"].items()} == ADVANCED_DEFAULTS
+    # An emptied text field is saved as "" rather than dropped, so the prefix
+    # can be cleared from the app.
+    assert advanced["properties"]["prefix"]["ui:emptyValue"] == ""
+
+    # The interface-independent per-bus block is hoisted out of the branches, so
+    # it is declared exactly once.
+    bus_props = schema["properties"]["buses"]["items"]["properties"]
+    assert {"name", "database_files", "dbc_conflict", "database_file"} <= bus_props.keys()
+    branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
+    assert not any(set(b["properties"]) - {"interface"} & bus_props.keys() for b in branches)
 
     validator = jsonschema.Draft7Validator(schema)
     # A pre-list, pre-advanced config still validates; a DBC list is optional.
@@ -206,24 +166,6 @@ def test_schema_advanced_section_shape():
     assert validator.is_valid({"buses": [{"interface": "demo"}], "advanced": {"prefix": ""}})
     assert not validator.is_valid({"buses": [{"interface": "demo"}], "advanced": {"nope": 1}})
 
-    # Every bus branch that takes databases takes the list, the conflict policy,
-    # and keeps the legacy key hidden for old configs.
-    branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
-    with_dbc = [b for b in branches if "database_files" in b["properties"]]
-    assert len(with_dbc) == 7
-    for branch in with_dbc:
-        props = branch["properties"]
-        assert props["database_files"]["type"] == "array"
-        assert props["database_files"]["items"]["ui:widget"] == "file-picker"
-        assert props["database_files"]["ui:orderable"] is True
-        assert props["database_files"]["default"] == []
-        assert props["dbc_conflict"]["enum"] == ["warn", "error"]
-        assert props["database_file"]["ui:widget"] == "hidden"
-        assert "database_files" not in branch.get("required", [])
-        assert "database_file" not in branch.get("required", [])
-        # The globals moved out of every bus branch.
-        assert not ({"log_raw_frames", "receive_own_messages", "timestamp_mode"} & props.keys())
-
 
 def test_resolve_advanced_honours_a_legacy_top_level_log_level():
     assert resolve_advanced({"log_level": "DEBUG"})["log_level"] == "DEBUG"
@@ -235,15 +177,27 @@ def test_resolve_advanced_honours_a_legacy_top_level_log_level():
     )
 
 
-@pytest.mark.parametrize("prefix", ["CAN", "My Bus-1", "", "   "])
-def test_resolve_prefix_accepts_source_names_and_clearing(prefix):
-    _resolve_prefix({"prefix": prefix})
+def test_resolve_advanced_distinguishes_a_cleared_prefix_from_an_absent_one():
+    assert resolve_advanced({})["prefix"] == "CAN"
+    assert resolve_advanced({"advanced": {"prefix": ""}})["prefix"] == ""
 
 
-@pytest.mark.parametrize("prefix", ["CAN/x", "can.0", "a@b", "x:y"])
-def test_resolve_prefix_rejects_path_separators(prefix):
+def test_validate_name_rejects_a_catalog_separator():
     with pytest.raises(SystemExit):
-        _resolve_prefix({"prefix": prefix})
+        _validate_name("CAN/x", "Prefix")
+
+
+def test_create_codecs_rejects_a_bus_name_with_a_catalog_separator():
+    config = {"buses": [{"name": "can.0", "interface": "virtual", "channel": "vcan0"}]}
+    with pytest.raises(SystemExit), patch("zelos_sdk.TraceSource"):
+        _create_codecs(config, TEST_DBC, resolve_advanced({}))
+
+
+def test_create_codecs_sanitizes_a_channel_derived_bus_name():
+    config = {"buses": [{"interface": "ssh-socketcan", "remote_host": "host", "ssh_user": "user"}]}
+    with patch("zelos_sdk.TraceSource"):
+        pairs = _create_codecs(config, TEST_DBC, resolve_advanced({}))
+    assert [name for _, name in pairs] == ["user_host_can0"]
 
 
 # ── wire contract ────────────────────────────────────────────────────────────
@@ -251,13 +205,8 @@ def test_resolve_prefix_rejects_path_separators(prefix):
 
 @pytest.fixture
 def merged_codec():
-    config = {
-        "interface": "virtual",
-        "channel": "vcan0",
-        "database_files": [str(p) for p in MERGE_SET],
-    }
     with patch("zelos_sdk.TraceSource"), patch("can.Bus"):
-        codec = CanCodec(config, bus_name="busA")
+        codec = CanCodec(_merged_config(), bus_name="busA")
         codec.start()
     yield codec
     codec.stop()
@@ -276,14 +225,7 @@ def test_get_tx_state_keeps_the_single_dbc_view_and_adds_the_list(merged_codec):
     assert [d["message_count"] for d in bus["dbcs"]] == [3, 3, 1]
     assert {d["path"] for d in bus["dbcs"]} == {str(p) for p in MERGE_SET}
     assert all(len(d["hash"]) == 16 for d in bus["dbcs"])
-    assert bus["dbc_conflicts"] == [
-        {
-            "frame_id": 770,
-            "is_extended": False,
-            "kept": {"file": "merge_b.dbc", "name": "Merge_Conflict_B"},
-            "dropped": {"file": "merge_a.dbc", "name": "Merge_Conflict_A"},
-        }
-    ]
+    assert bus["dbc_conflicts"] == merged_codec.dbc_conflicts
 
 
 def test_list_and_describe_report_the_owning_file(merged_codec):
@@ -422,9 +364,7 @@ def test_create_codecs_shares_one_source_across_buses():
         ("", {"my capture/Frame", "my capture/0064_DUT_Status"}),
     ],
 )
-def test_convert_names_the_source_and_events_by_the_prefix(
-    tmp_path, trace_event_paths, prefix, expected
-):
+def test_convert_names_the_source_and_events_by_the_prefix(tmp_path, prefix, expected):
     """A conversion is named off the prefix, with the input file's own
     (sanitized) stem as the event segment; clearing the prefix names the
     source after that stem instead."""
@@ -438,7 +378,7 @@ def test_convert_names_the_source_and_events_by_the_prefix(
     assert expected <= trace_event_paths(output)
 
 
-def test_convert_without_a_database_writes_raw_frames_only(tmp_path, trace_event_paths):
+def test_convert_without_a_database_writes_raw_frames_only(tmp_path):
     source_log = tmp_path / "raw.log"
     source_log.write_text("(1704067200.0) can0 064#0000000000000000\n")
     output = tmp_path / "raw.trz"
@@ -446,19 +386,3 @@ def test_convert_without_a_database_writes_raw_frames_only(tmp_path, trace_event
     convert_can_trace(source_log, [], output)
 
     assert trace_event_paths(output) == {"CAN/raw/Frame"}
-
-
-def test_log_handler_target_follows_the_prefix(monkeypatch):
-    """Logs ride the shared source when a prefix is set (`<prefix>/log`) and a
-    standalone `can_log` source when it is cleared."""
-    seen: list = []
-    monkeypatch.setattr(
-        app_mod,
-        "TraceLoggingHandler",
-        lambda source, **_: seen.append(source) or logging.NullHandler(),
-    )
-
-    shared = MagicMock()
-    app_mod.trace_log_handler(shared)
-    app_mod.trace_log_handler(None)
-    assert seen == [shared, "can_log"]

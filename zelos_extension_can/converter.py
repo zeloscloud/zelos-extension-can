@@ -12,6 +12,8 @@ from typing import Any
 import can
 import zelos_sdk
 
+from .codec import DEFAULT_PREFIX, trace_layout
+
 logger = logging.getLogger(__name__)
 
 # Supported file extensions and their python-can reader classes
@@ -87,17 +89,14 @@ def _get_reader_config(input_file: Path) -> tuple[type, dict[str, Any]]:
     return reader_class, reader_kwargs
 
 
-DEFAULT_PREFIX = "CAN"
-
-
 def bus_segment(input_file: Path) -> str:
     """Trace-name segment for a converted file — its stem, sanitized.
 
     Arbitrary filenames reach this, and trace names are an allow-list, so the
-    SDK's sanitizer does the rewrite (it maps the catalog separators `. @ :`
-    to `_` like a bus name does, plus everything else).
+    SDK's sanitizer does the rewrite. Same `kind` as a bus name: the segment
+    becomes the source name when the prefix is cleared.
     """
-    return zelos_sdk.sanitize_name(input_file.stem, kind="event")
+    return zelos_sdk.sanitize_name(input_file.stem, kind="source")
 
 
 def _make_decoder(
@@ -112,10 +111,8 @@ def _make_decoder(
     Decoding happens in Rust with the GIL released, which is the whole point of
     routing conversions through `zelos_can` rather than the Python `CanCodec`.
 
-    Naming matches a live bus: with a prefix, the source is the prefix and
-    every event — raw and decoded — nests under the input file's own segment
-    (`<prefix>/<bus>/...`); with the prefix cleared, the source is that segment
-    and events sit directly under it.
+    Naming is `trace_layout`'s, same as a live bus, with the input file's own
+    segment standing in for the bus.
 
     `timestamp_mode="absolute"` preserves each frame's own timestamp verbatim.
     The Rust side treats `absolute` as an alias for `hardware`; anything it
@@ -124,16 +121,15 @@ def _make_decoder(
     """
     from zelos_can import CanDecoder
 
-    source_name = prefix or bus
+    source_name, event_prefix, raw_event_name = trace_layout(prefix, bus)
     source = zelos_sdk.TraceSource(source_name, namespace=namespace)
     return CanDecoder(
         database_file=[str(p) for p in database_files] or None,
-        source_name=source_name,
         timestamp_mode="absolute",
         emit_schemas_on_init=emit_schemas_on_init,
         log_raw_frames=True,
-        raw_event_name=f"{bus}/Frame" if prefix else "Frame",
-        event_prefix=bus if prefix else None,
+        raw_event_name=raw_event_name,
+        event_prefix=event_prefix,
         source=source,
         raw_source=source,
     )

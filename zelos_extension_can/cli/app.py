@@ -1,9 +1,9 @@
 """App-based configuration mode for CAN tracing."""
 
 import asyncio
+import contextlib
 import json
 import logging
-import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,7 +16,7 @@ from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from .. import ACTION_PREFIX
 from .. import actions as can_actions
-from ..codec import CanCodec
+from ..codec import DEFAULT_PREFIX, CanCodec, bus_database_files, trace_layout
 from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 #: still honoured per-bus (see `_prepare_bus_config`) so old configs keep their
 #: settings, but they are no longer offered in the schema.
 ADVANCED_DEFAULTS: dict = {
-    "prefix": "CAN",
+    "prefix": DEFAULT_PREFIX,
     "log_raw_frames": True,
     "receive_own_messages": True,
     "emit_schemas_on_init": False,
@@ -43,14 +43,11 @@ _BUS_LEVEL_ADVANCED = (
     "timestamp_mode",
 )
 
-#: Trace source names are an allow-list: letters, digits, space, `_`, `-`.
-#: `/` is a catalog path separator and would silently re-nest the whole tree.
-_SOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
-
 
 def resolve_advanced(config: dict) -> dict:
     """Merge the `advanced` object over its defaults.
 
+    An absent `prefix` takes the default; a present-but-empty one clears it.
     A top-level `log_level` from a pre-`advanced` config is still honoured.
     """
     supplied = config.get("advanced") or {}
@@ -60,28 +57,26 @@ def resolve_advanced(config: dict) -> dict:
     return advanced
 
 
-def trace_log_handler(shared_source: Any) -> logging.Handler:
-    """Handler that mirrors extension logs into the trace.
+def _validate_name(value: str, label: str) -> None:
+    """Exit unless `value` is already a legal trace name.
 
-    With a prefix, logs ride the shared source and read `<prefix>/log`;
-    with it cleared they get their own `can_log` source, as before.
+    Trace names are an allow-list — letters, digits, space, `_`, `-`. A prefix
+    or bus name is user-typed and becomes a source name or an event segment, so
+    a catalog separator (`/ . @ :`) in it would silently re-nest the tree. The
+    SDK's sanitizer is the allow-list; anything it rewrites is rejected here
+    rather than quietly renamed.
     """
-    handler = TraceLoggingHandler(shared_source if shared_source is not None else "can_log")
-    handler.setLevel(logging.INFO)
-    return handler
-
-
-def _resolve_prefix(advanced: dict) -> str:
-    """Validate the configured prefix as a trace source name. Empty clears it."""
-    prefix = str(advanced.get("prefix") or "").strip()
-    if prefix and not _SOURCE_NAME_RE.match(prefix):
-        logger.error(
-            "Invalid Prefix %r: use letters, digits, space, '_' or '-' only (no '/'), "
-            "or clear it to keep one trace source per bus.",
-            prefix,
-        )
-        sys.exit(1)
-    return prefix
+    clean = zelos_sdk.sanitize_name(value, kind="source")
+    if clean == value:
+        return
+    offender = next((c for c, ok in zip(value, clean, strict=False) if c != ok), value[-1])
+    logger.error(
+        "Invalid %s %r: %r is not allowed. Use letters, digits, space, '_' or '-'.",
+        label,
+        value,
+        offender,
+    )
+    sys.exit(1)
 
 
 def _prepare_bus_config(
@@ -101,13 +96,8 @@ def _prepare_bus_config(
     bus_name = config.get("name", "bus")
     advanced = advanced if advanced is not None else dict(ADVANCED_DEFAULTS)
 
-    # A pre-list config carries one `database_file`; it takes precedence in the
-    # merge, so prepend it and drop the old key.
-    legacy = config.pop("database_file", None)
-    files = list(config.get("database_files") or [])
-    if legacy:
-        files = [legacy, *files]
-    config["database_files"] = files
+    config["database_files"] = bus_database_files(config)
+    config.pop("database_file", None)
 
     # Global advanced settings; a legacy per-bus value overrides.
     for key in _BUS_LEVEL_ADVANCED:
@@ -198,12 +188,18 @@ def _create_codecs(
 
     for i, (bus_config, prepared_config) in enumerate(zip(buses, prepared_configs, strict=True)):
         bus_name = (bus_config.get("name") or "").strip()
-        if not bus_name:
+        if bus_name:
+            # With a prefix the name becomes an event segment, without one a
+            # source name; either way it must already be a legal trace name.
+            _validate_name(bus_name, "bus Name")
+        else:
             # No explicit name: derive from the channel. Channels can contain
             # '.', '@', ':' (ssh-socketcan's "user@host:iface"), which are
             # catalog PATH SEPARATORS in Zelos trace names and would break
-            # catalog / `latest` lookups. Sanitize them to '_'.
-            bus_name = re.sub(r"[.@:]", "_", prepared_config.get("channel", f"bus{i}"))
+            # catalog / `latest` lookups.
+            bus_name = zelos_sdk.sanitize_name(
+                prepared_config.get("channel", f"bus{i}"), kind="source"
+            )
 
         if bus_name in seen_names:
             logger.error(f"Duplicate bus name '{bus_name}'. Each bus must have a unique name.")
@@ -257,7 +253,9 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     # Load and validate configuration
     config = load_config()
     advanced = resolve_advanced(config)
-    prefix = _resolve_prefix(advanced)
+    prefix = str(advanced.get("prefix") or "").strip()
+    if prefix:
+        _validate_name(prefix, "Prefix")
 
     # Apply log level from config (global setting)
     log_level_str = advanced["log_level"]
@@ -288,72 +286,81 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         output_file = file
         logger.info(f"Recording trace to: {output_file}")
 
-    # One shared trace source when a prefix is configured, so every bus's
-    # events nest under it as `<prefix>/<bus>/<event>`. It is created BEFORE the
-    # codecs (which need it) and before `zelos_sdk.init` below; the default
-    # prefix is the action prefix, so this is the same global source `init`
-    # would make — `init_global_source` is idempotent and returns it again.
-    shared_source = None
+    # Register the actions module once. `choices=` providers are evaluated at
+    # form-render time, so this does not need the codecs yet, and the address
+    # prefix is supplied by `init(name=ACTION_PREFIX, actions=True)` below.
+    can_actions.register_actions(zelos_sdk.actions_registry)
+
+    # The trace source and the log handler come up BEFORE the codecs, so the
+    # DBC merge summary and any conflict warnings the codecs log land in the
+    # trace. `init_global_source` is idempotent and ignores the name on later
+    # calls, so `init` below returns this same source rather than making an
+    # empty second one. Same layout rule as every other entry point: a prefix
+    # means one source for every bus; cleared, each bus owns its own and the
+    # logs get theirs.
+    log_source_name, _, _ = trace_layout(prefix, "can_log")
+    global_source = zelos_sdk.init_global_source(log_source_name)
+    shared_source = global_source if prefix else None
     if prefix:
-        shared_source = (
-            zelos_sdk.init_global_source(ACTION_PREFIX)
-            if prefix == ACTION_PREFIX
-            else zelos_sdk.TraceSource(prefix)
-        )
         logger.info("Trace prefix: %s", prefix)
     else:
         logger.info("Trace prefix cleared: one trace source per bus")
-
-    # Create all CAN codecs from buses array
-    codec_pairs = _create_codecs(config, demo_dbc_path, advanced, shared_source)
-    codecs = [codec for codec, _ in codec_pairs]
-
-    # Populate the shared codec registry that `actions.py` reads from. The
-    # action surface is a single global namespace — `CAN/send_message`,
-    # `CAN/get_tx_state`, etc. — with a `codec` parameter that selects which
-    # bus to operate on. CLI usage:
-    #
-    #   zelos actions execute CAN/send_raw \
-    #       --params '{"codec":"busA","can_id":"0x100","data":"01 02"}'
-    #
-    # Web apps discover the bus list by calling `CAN/list_codecs`.
-    # Codec-name uniqueness is already enforced inside _create_codecs (multi-bus
-    # path) and trivially satisfied in the single-bus path.
-    for codec, codec_name in codec_pairs:
-        can_actions.CAN_CODECS[codec_name] = codec
-
-    # Register the actions module once. The address prefix is supplied by
-    # `init(name=ACTION_PREFIX, actions=True)` below.
-    can_actions.register_actions(zelos_sdk.actions_registry)
 
     # Initialize SDK. `ACTION_PREFIX` is package-level so the live namespace and
     # the packaged at-rest inventory cannot drift apart.
     zelos_sdk.init(name=ACTION_PREFIX, log_level="info", actions=True)
 
-    logging.getLogger().addHandler(trace_log_handler(shared_source))
+    handler = TraceLoggingHandler(global_source)
+    handler.setLevel(logging.INFO)
+    logging.getLogger().addHandler(handler)
 
-    # Setup shutdown handler for all codecs.
-    for codec in codecs:
-        setup_shutdown_handler(codec)
-
-    # Log startup info
-    bus_count = len(codecs)
-    logger.info(f"Starting CAN extension with {bus_count} bus{'es' if bus_count > 1 else ''}")
-
-    # Run with optional trace writer. A bus that can't start (bad interface,
-    # unreachable / unauthenticated ssh host, missing remote can-utils, ...)
-    # raises can.exceptions.CanError — CanInitializationError and
-    # CanInterfaceNotImplementedError are subclasses. Catch it and exit cleanly
-    # with a one-line reason instead of dumping a raw traceback that looks like
-    # a crash. _run_codecs_async's try/finally has already stopped any bus that
-    # DID start before the failing one, so cleanup is complete by the time we
-    # get here.
-    try:
+    # A recording opens before the codecs, so it captures startup: the DBC merge
+    # summary and any conflict warnings land in `<prefix>/log` too.
+    with contextlib.ExitStack() as stack:
         if output_file:
-            with zelos_sdk.TraceWriter(str(output_file)):
-                asyncio.run(_run_codecs_async(codecs))
-        else:
+            stack.enter_context(zelos_sdk.TraceWriter(str(output_file)))
+
+        # Create all CAN codecs from buses array. A bad conflict policy, prefix
+        # or name raises ValueError, a missing DBC FileNotFoundError, and the
+        # Rust loader RuntimeError — all configuration mistakes, so report the
+        # reason and stop rather than dumping a traceback that reads like a
+        # crash.
+        try:
+            codec_pairs = _create_codecs(config, demo_dbc_path, advanced, shared_source)
+        except (ValueError, FileNotFoundError, RuntimeError) as e:
+            logger.error("CAN bus configuration is invalid: %s", e)
+            sys.exit(1)
+        codecs = [codec for codec, _ in codec_pairs]
+
+        # Populate the shared codec registry that `actions.py` reads from. The
+        # action surface is a single global namespace — `CAN/send_message`,
+        # `CAN/get_tx_state`, etc. — with a `codec` parameter that selects which
+        # bus to operate on. CLI usage:
+        #
+        #   zelos actions execute CAN/send_raw \
+        #       --params '{"codec":"busA","can_id":"0x100","data":"01 02"}'
+        #
+        # Web apps discover the bus list by calling `CAN/list_codecs`.
+        # Codec-name uniqueness is already enforced inside _create_codecs
+        # (multi-bus path) and trivially satisfied in the single-bus path.
+        for codec, codec_name in codec_pairs:
+            can_actions.CAN_CODECS[codec_name] = codec
+
+        for codec in codecs:
+            setup_shutdown_handler(codec)
+
+        bus_count = len(codecs)
+        logger.info(f"Starting CAN extension with {bus_count} bus{'es' if bus_count > 1 else ''}")
+
+        # A bus that can't start (bad interface, unreachable / unauthenticated
+        # ssh host, missing remote can-utils, ...) raises can.exceptions.CanError
+        # — CanInitializationError and CanInterfaceNotImplementedError are
+        # subclasses; a bad `config_json` raises ValueError and the Rust-side
+        # loader RuntimeError. Exit cleanly with a one-line reason instead of a
+        # traceback that looks like a crash. _run_codecs_async's try/finally has
+        # already stopped any bus that DID start before the failing one.
+        try:
             asyncio.run(_run_codecs_async(codecs))
-    except can.exceptions.CanError as e:
-        logger.error("CAN bus failed to start: %s", e)
-        sys.exit(1)
+        except (can.exceptions.CanError, ValueError, FileNotFoundError, RuntimeError) as e:
+            logger.error("CAN bus failed to start: %s", e)
+            sys.exit(1)

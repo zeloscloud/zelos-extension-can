@@ -26,9 +26,6 @@ click.rich_click.STYLE_ERRORS_SUGGESTION = "yellow italic"
 # Configure logging - INFO level prevents debug logs from being sent to backend
 logging.basicConfig(level=logging.INFO)
 
-# The trace log handler is attached in `cli/app.py`, once the configured prefix
-# is known: logs land on the shared prefix source, not a fixed `can_log` one.
-
 
 @click.group(invoke_without_command=True)
 @click.option(

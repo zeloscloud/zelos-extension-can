@@ -119,121 +119,115 @@ def _describe_dbc_message(msg: cantools.database.can.Message) -> dict[str, Any]:
     }
 
 
-def _hash_dbc_files(paths: Sequence[str | Path]) -> str:
-    """Cache-busting fingerprint for a DBC list — SHA1 over the files' bytes
-    concatenated in list order, so reordering the list flips the hash. The
-    webapp keys its list_messages React Query by this so any post-reload
-    change forces a re-fetch. Truncated to 16 hex chars: collision risk is
-    irrelevant here, the field is purely a same-vs-different signal."""
-    h = hashlib.sha1()
-    for path in paths:
-        h.update(Path(path).read_bytes())
-    return h.hexdigest()[:16]
+def _hash_dbc_file(path: Path) -> str:
+    """Cache-busting fingerprint for one DBC — SHA1 of its bytes, truncated to
+    16 hex chars. Collision risk is irrelevant: the field is purely a
+    same-vs-different signal the webapp keys its React Query by."""
+    return hashlib.sha1(path.read_bytes()).hexdigest()[:16]
 
 
-def _signal_signature(sig: cantools.database.can.Signal) -> tuple:
-    """Structural identity of a signal, for comparing two definitions of the
-    same message id. Everything that changes how a signal decodes, plus the
-    labels and routing metadata a consumer sees."""
-    return (
-        sig.name,
-        int(sig.start),
-        int(sig.length),
-        sig.byte_order,
-        bool(sig.is_signed),
-        bool(sig.is_float),
-        float(sig.scale) if sig.scale is not None else 1.0,
-        float(sig.offset) if sig.offset is not None else 0.0,
-        float(sig.minimum) if sig.minimum is not None else None,
-        float(sig.maximum) if sig.maximum is not None else None,
-        sig.unit,
-        tuple(sorted((int(k), str(v)) for k, v in (sig.choices or {}).items())),
-        tuple(sig.multiplexer_ids or ()),
-        sig.multiplexer_signal,
-        tuple(sorted(sig.receivers or ())),
-    )
+#: Default leading trace-source name. One constant for every entry point:
+#: the app's `advanced.prefix`, the `trace` and `convert` CLI commands.
+DEFAULT_PREFIX = "CAN"
 
 
-def _message_signature(msg: cantools.database.can.Message) -> tuple:
-    """Structural identity of a message. Two definitions with equal signatures
-    are the same message spelled twice (dedupe); unequal ones conflict.
+def trace_layout(prefix: str, bus: str) -> tuple[str, str | None, str]:
+    """The one trace-naming rule, shared by every entry point.
 
-    The NAME is part of it: the name becomes the trace event name, so two
-    same-shaped definitions under different names are not interchangeable.
+    With a prefix, a single source carries every bus and each bus's events nest
+    under it. Cleared, the bus owns the source and its events are unprefixed.
+
+    :return: (source name, event prefix or None, raw-frame event name)
     """
-    return (
-        int(msg.frame_id),
-        bool(msg.is_extended_frame),
-        msg.name,
-        int(msg.length),
-        tuple(sorted(msg.senders or ())),
-        tuple(_signal_signature(sig) for sig in sorted(msg.signals, key=lambda s: s.name)),
-    )
+    if prefix:
+        return prefix, bus, f"{bus}/Frame"
+    return bus, None, "Frame"
 
 
-def merge_dbc_messages(
+def bus_database_files(bus_config: dict[str, Any]) -> list[str]:
+    """A bus config's DBC list, in precedence order.
+
+    A pre-list config carries one `database_file`; it takes precedence, so it
+    is prepended to any list.
+    """
+    files = [str(p) for p in (bus_config.get("database_files") or [])]
+    legacy = bus_config.get("database_file")
+    return [str(legacy), *files] if legacy else files
+
+
+def _merge_dbcs(
     files: Sequence[Path],
     databases: Sequence[cantools.database.can.Database],
-    conflict: str = "warn",
+    conflict: str,
 ) -> tuple[
     list[cantools.database.can.Message],
     dict[tuple[int, bool], Path],
-    int,
     list[dict[str, Any]],
+    list[int],
 ]:
-    """Merge an ordered DBC list into one message set, keyed by (id, extended).
+    """Merge an ordered DBC list, deferring to the Rust decoder's rule.
 
-    Same rule as the Rust codec: the list order is precedence. An identical
-    redefinition is deduped silently; a differing one lets the LATER file win
-    with one warning. ``conflict="error"`` refuses the load instead.
+    A bus-less `zelos_can.CanDecoder` parses exactly the list the Rust codec
+    would — no socket, no trace — and reports which definition of each message
+    id survived; `conflict="error"` makes it refuse the load. The rule lives
+    there and nowhere else: a hand-mirrored copy here only bought two ways to
+    disagree about what `dbc_conflicts` and `dbc_conflict: error` mean.
 
-    :return: (messages in first-seen order, origin file per key, dedupe count,
-        conflict records)
+    :return: (surviving cantools messages, origin file per key, conflict
+        records, per-file message counts)
     """
-    kept: dict[tuple[int, bool], tuple[cantools.database.can.Message, Path]] = {}
-    order: list[tuple[int, bool]] = []
-    deduped = 0
-    conflicts: list[dict[str, Any]] = []
+    import zelos_can
 
-    for path, db in zip(files, databases, strict=True):
-        for msg in db.messages:
-            key = (msg.frame_id, msg.is_extended_frame)
-            previous = kept.get(key)
-            if previous is None:
-                kept[key] = (msg, path)
-                order.append(key)
-                continue
-
-            prev_msg, prev_path = previous
-            if _message_signature(prev_msg) == _message_signature(msg):
-                deduped += 1
-                continue
-
-            detail = (
-                f"conflicting definitions of CAN id 0x{msg.frame_id:x} "
-                f"(extended={msg.is_extended_frame}): "
-                f"'{prev_msg.name}' from {prev_path.name} vs "
-                f"'{msg.name}' from {path.name}"
-            )
-            if conflict == "error":
-                raise ValueError(detail)
-            logger.warning("%s - keeping '%s' from %s", detail, msg.name, path.name)
-            conflicts.append(
-                {
-                    "frame_id": int(msg.frame_id),
-                    "is_extended": bool(msg.is_extended_frame),
-                    "kept": {"file": path.name, "name": msg.name},
-                    "dropped": {"file": prev_path.name, "name": prev_msg.name},
-                }
-            )
-            kept[key] = (msg, path)
-
-    return (
-        [kept[key][0] for key in order],
-        {key: kept[key][1] for key in order},
-        deduped,
-        conflicts,
+    decoder = zelos_can.CanDecoder(
+        database_file=[str(p) for p in files] or None, dbc_conflict=conflict
     )
+
+    # The decoder names survivors, not objects; pair each back to the cantools
+    # Message the encode / describe paths need. Later files win, so index the
+    # definitions back to front and take the first match.
+    by_key: dict[tuple[int, bool], list[tuple[Path, cantools.database.can.Message]]] = {}
+    for path, db in reversed(list(zip(files, databases, strict=True))):
+        for msg in db.messages:
+            by_key.setdefault((msg.frame_id, msg.is_extended_frame), []).append((path, msg))
+
+    messages: list[cantools.database.can.Message] = []
+    origin: dict[tuple[int, bool], Path] = {}
+    for frame_id, is_extended, event_name in decoder.message_keys():
+        candidates = by_key.get((frame_id, is_extended))
+        if not candidates:
+            continue
+        # Event names are `{frame_id:0{4,8}x}_{name}`. Prefer the definition the
+        # name points at; fall back to the last file's if the decoder rewrote it
+        # (non-DBC formats can carry names a trace name cannot).
+        name = event_name.split("_", 1)[1]
+        path, msg = next((c for c in candidates if c[1].name == name), candidates[0])
+        messages.append(msg)
+        origin[(frame_id, is_extended)] = path
+
+    conflicts: list[dict[str, Any]] = []
+    for record in decoder.dbc_conflicts():
+        kept, dropped = record["kept"], record["dropped"]
+        logger.warning(
+            "conflicting definitions of CAN id 0x%x (extended=%s): '%s' from %s vs '%s' from %s "
+            "- keeping '%s'",
+            record["frame_id"],
+            record["is_extended"],
+            dropped["name"],
+            dropped["source"],
+            kept["name"],
+            kept["source"],
+            kept["name"],
+        )
+        conflicts.append(
+            {
+                "frame_id": record["frame_id"],
+                "is_extended": record["is_extended"],
+                "kept": {"file": Path(kept["source"]).name, "name": kept["name"]},
+                "dropped": {"file": Path(dropped["source"]).name, "name": dropped["name"]},
+            }
+        )
+
+    return messages, origin, conflicts, [db["message_count"] for db in decoder.databases()]
 
 
 def _derive_bus_status(running: bool, bus: Any) -> str:
@@ -371,7 +365,7 @@ class CanCodec(can.Listener):
         self,
         config: dict[str, Any],
         namespace: zelos_sdk.TraceNamespace | None = None,
-        bus_name: str | None = None,
+        bus_name: str = "can_codec",
         source: Any = None,
     ) -> None:
         """Initialize CAN codec.
@@ -467,37 +461,51 @@ class CanCodec(can.Listener):
             except Exception as e:
                 raise ValueError(f"Failed to load database file: {e}") from e
 
-        self.messages: list[cantools.database.can.Message]
-        self.message_origin: dict[tuple[int, bool], Path]
-        self.messages, self.message_origin, deduped, self.dbc_conflicts = merge_dbc_messages(
+        self.messages, self.message_origin, self.dbc_conflicts, counts = _merge_dbcs(
             self.database_files, self.databases, self.dbc_conflict
         )
+        # Every definition the merge dropped was either an identical duplicate
+        # or a reported conflict.
         logger.info(
             "DBC merge: %d files, %d messages, %d identical duplicates deduped, %d conflicts",
             len(self.database_files),
             len(self.messages),
-            deduped,
+            sum(counts) - len(self.messages) - len(self.dbc_conflicts),
             len(self.dbc_conflicts),
         )
 
-        self.dbc_hash = _hash_dbc_files(self.database_files)
+        # Hashed once: `get_tx_state` polls at 1 Hz and must not re-read DBCs.
+        self.dbc_entries: list[dict[str, Any]] = [
+            {
+                "path": str(path),
+                "name": path.name,
+                "hash": _hash_dbc_file(path),
+                "message_count": count,
+            }
+            for path, count in zip(self.database_files, counts, strict=True)
+        ]
+        # Fingerprint of the list: the per-file digests in order, so reordering
+        # the list flips it.
+        self.dbc_hash = hashlib.sha1(
+            "".join(entry["hash"] for entry in self.dbc_entries).encode()
+        ).hexdigest()[:16]
 
-        # Trace source. With a shared source (a prefix is configured) every
-        # event nests under this bus; without one the codec owns a source named
-        # after the bus and events are unprefixed — the pre-prefix layout.
-        source_name = self.bus_name if self.bus_name else "can_codec"
+        # Trace layout. A shared source means a prefix is configured and the
+        # caller already named that source after it, so `source_name` is only
+        # used on the prefix-less path (where it is the bus name).
+        source_name, self.event_prefix, self.raw_event_name = trace_layout(
+            DEFAULT_PREFIX if source is not None else "", self.bus_name
+        )
+        # The same nesting spelled for python-can event names.
+        self._event_prefix = f"{self.event_prefix}/" if self.event_prefix else ""
         if source is not None:
             self.source = source
-            self.event_prefix = f"{source_name}/"
         else:
             self.source = (
                 zelos_sdk.TraceSource(source_name, namespace=self.namespace)
                 if self.namespace
                 else zelos_sdk.TraceSource(source_name)
             )
-            self.event_prefix = ""
-        # Raw frames share the decoded source; there is no separate `_raw` one.
-        self.raw_event_name = f"{self.event_prefix}Frame"
 
         # On the Rust paths (zelos-socketcan / ssh-socketcan) the Rust codec
         # owns the raw-frame schema and emit (driven by `raw_event_name`), so
@@ -566,7 +574,7 @@ class CanCodec(can.Listener):
         :return: Event name string
         """
         width = 8 if msg.is_extended_frame else 4
-        return f"{self.event_prefix}{msg.frame_id:0{width}x}_{msg.name}"
+        return f"{self._event_prefix}{msg.frame_id:0{width}x}_{msg.name}"
 
     def get_timestamp(self, hw_timestamp: float | None) -> int | None:
         """Get timestamp in nanoseconds for logging, handling boot-relative timestamps.
@@ -627,10 +635,6 @@ class CanCodec(can.Listener):
     def _native_dbc_kwargs(self) -> dict[str, Any]:
         """DBC + trace-source kwargs shared by the two Rust codec paths.
 
-        `source_name` only names an auto-created source, which never happens
-        here — `source` and `raw_source` are always supplied — but it is passed
-        for diagnostics.
-
         `event_prefix` nests decoded events under this bus on a shared source,
         matching the python-can path; cleared, it is None and events sit
         directly under the bus's own source.
@@ -638,9 +642,8 @@ class CanCodec(can.Listener):
         kwargs: dict[str, Any] = {
             "database_file": [str(p) for p in self.database_files] or None,
             "dbc_conflict": self.dbc_conflict,
-            "source_name": self.bus_name if self.bus_name else "can_codec",
             "source": self.source,
-            "event_prefix": self.event_prefix.rstrip("/") or None,
+            "event_prefix": self.event_prefix,
         }
         if self.log_raw_frames:
             kwargs["raw_source"] = self.source
@@ -649,9 +652,8 @@ class CanCodec(can.Listener):
 
     def start(self) -> None:
         """Initialize CAN bus connection with retry logic."""
-        bus_id = f"[{self.bus_name}] " if self.bus_name else ""
         logger.info(
-            f"{bus_id}Starting CAN bus: interface={self.config['interface']}, "
+            f"[{self.bus_name}] Starting CAN bus: interface={self.config['interface']}, "
             f"channel={self.config['channel']}"
         )
 
@@ -793,8 +795,7 @@ class CanCodec(can.Listener):
 
     def stop(self) -> None:
         """Stop CAN bus and periodic tasks."""
-        bus_id = f"[{self.bus_name}] " if self.bus_name else ""
-        logger.info(f"{bus_id}Stopping CAN codec")
+        logger.info(f"[{self.bus_name}] Stopping CAN codec")
         self.running = False
 
         if self.demo_task:
@@ -828,7 +829,7 @@ class CanCodec(can.Listener):
             try:
                 flush()
             except Exception as e:
-                logger.debug("%sTraceSource.flush() raised during stop: %s", bus_id, e)
+                logger.debug("[%s] TraceSource.flush() raised during stop: %s", self.bus_name, e)
 
     def run(self) -> None:
         """Run async message reception loop."""
@@ -1111,18 +1112,25 @@ class CanCodec(can.Listener):
         if not self.log_raw_frames:
             return
 
-        fields = {
-            "arbitration_id": msg.arbitration_id,
-            "is_extended": msg.is_extended_id,
-            "is_fd": msg.is_fd,
-            "is_rx": msg.is_rx,
-            "dlc": msg.dlc,
-            "data": msg.data,
-        }
         if timestamp_ns is None:
-            self.raw_event.log(**fields)
+            self.raw_event.log(
+                arbitration_id=msg.arbitration_id,
+                is_extended=msg.is_extended_id,
+                is_fd=msg.is_fd,
+                is_rx=msg.is_rx,
+                dlc=msg.dlc,
+                data=msg.data,
+            )
         else:
-            self.raw_event.log_at(timestamp_ns, **fields)
+            self.raw_event.log_at(
+                timestamp_ns,
+                arbitration_id=msg.arbitration_id,
+                is_extended=msg.is_extended_id,
+                is_fd=msg.is_fd,
+                is_rx=msg.is_rx,
+                dlc=msg.dlc,
+                data=msg.data,
+            )
 
     def _decode_and_emit_message(self, msg: can.Message, timestamp_ns: int | None) -> None:
         """Decode CAN message and emit decoded signals to trace.
@@ -1462,18 +1470,6 @@ class CanCodec(can.Listener):
 
     # ─── DBC shapes shared by the wire-contract methods ────────────────────
 
-    def _dbc_entries(self) -> list[dict[str, Any]]:
-        """One record per configured DBC, in list (precedence) order."""
-        return [
-            {
-                "path": str(path),
-                "name": path.name,
-                "hash": _hash_dbc_files([path]),
-                "message_count": len(db.messages),
-            }
-            for path, db in zip(self.database_files, self.databases, strict=True)
-        ]
-
     def _first_dbc(self) -> Path | None:
         """First configured DBC, or None on a raw-only bus. Backs the legacy
         single-DBC fields the tx webapp still reads."""
@@ -1511,7 +1507,7 @@ class CanCodec(can.Listener):
         return {
             "captured_at_unix_ms": int(time.time() * 1000),
             "bus": {
-                "name": self.bus_name or "can_codec",
+                "name": self.bus_name,
                 "interface": self.config.get("interface", "unknown"),
                 "channel": self.config.get("channel"),
                 "status": _derive_bus_status(self.running, self.bus),
@@ -1523,7 +1519,7 @@ class CanCodec(can.Listener):
                     "hash": self.dbc_hash,
                     "message_count": len(self.messages),
                 },
-                "dbcs": self._dbc_entries(),
+                "dbcs": self.dbc_entries,
                 "dbc_conflicts": self.dbc_conflicts,
                 "metrics": {
                     "tx_errors": tx_errors,
@@ -1537,7 +1533,7 @@ class CanCodec(can.Listener):
     def list_messages(self) -> dict[str, Any]:
         db_path = self._first_dbc()
         return {
-            "bus": self.bus_name or "can_codec",
+            "bus": self.bus_name,
             "dbc_name": db_path.name if db_path else None,
             "dbcs": [path.name for path in self.database_files],
             "messages": [
@@ -1553,7 +1549,7 @@ class CanCodec(can.Listener):
         dbc_msg = self._resolve_dbc_message(message)
         db_path = self._first_dbc()
         return {
-            "bus": self.bus_name or "can_codec",
+            "bus": self.bus_name,
             "dbc_name": db_path.name if db_path else None,
             "dbcs": [path.name for path in self.database_files],
             "message": {
@@ -1701,7 +1697,7 @@ class CanCodec(can.Listener):
 
     def _require_running(self) -> None:
         if not self.running or not self.bus:
-            raise RuntimeError(f"bus '{self.bus_name or 'can_codec'}' is not running")
+            raise RuntimeError(f"bus '{self.bus_name}' is not running")
 
     def _resolve_dbc_message(self, message: str) -> cantools.database.can.Message:
         dbc_msg = self.messages_by_name.get(message)
@@ -1734,5 +1730,4 @@ class CanCodec(can.Listener):
             self.bus.send(msg)
         except can.CanError as e:
             self.metrics.tx_errors += 1
-            bus_name = self.bus_name or "can_codec"
-            raise RuntimeError(f"send failed on bus '{bus_name}': {e}") from e
+            raise RuntimeError(f"send failed on bus '{self.bus_name}': {e}") from e

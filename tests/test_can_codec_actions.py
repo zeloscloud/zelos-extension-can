@@ -29,7 +29,7 @@ from zelos_extension_can.codec import (
     _derive_bus_status,
     _describe_dbc_signal,
     _encode_dbc,
-    _hash_dbc_files,
+    _hash_dbc_file,
     _parse_can_id,
     _parse_data_hex,
     _parse_mux,
@@ -516,17 +516,17 @@ class TestValueTableForTrace:
 
 class TestHashDbcFile:
     def test_same_file_same_hash(self):
-        assert _hash_dbc_files([DBC_PATH]) == _hash_dbc_files([DBC_PATH])
+        assert _hash_dbc_file(DBC_PATH) == _hash_dbc_file(DBC_PATH)
 
     def test_different_contents_different_hash(self, tmp_path):
         a = tmp_path / "a.dbc"
         b = tmp_path / "b.dbc"
         a.write_bytes(b'VERSION "a"\n')
         b.write_bytes(b'VERSION "b"\n')
-        assert _hash_dbc_files([a]) != _hash_dbc_files([b])
+        assert _hash_dbc_file(a) != _hash_dbc_file(b)
 
     def test_returns_16_hex_chars(self):
-        h = _hash_dbc_files([DBC_PATH])
+        h = _hash_dbc_file(DBC_PATH)
         assert len(h) == 16
         assert all(c in "0123456789abcdef" for c in h)
 

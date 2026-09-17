@@ -7,7 +7,7 @@ from pathlib import Path
 import rich_click as click
 import zelos_sdk
 
-from ..codec import CanCodec
+from ..codec import DEFAULT_PREFIX, CanCodec
 from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,11 @@ logger = logging.getLogger(__name__)
     type=int,
     help="CAN-FD data phase bitrate",
 )
+@click.option(
+    "--prefix",
+    default=DEFAULT_PREFIX,
+    help="Leading trace-source name; pass '' to name the source after the bus",
+)
 def trace(
     interface: str,
     channel: str,
@@ -49,6 +54,7 @@ def trace(
     file: Path | None,
     fd: bool,
     data_bitrate: int | None,
+    prefix: str,
 ) -> None:
     """Trace CAN bus without app configuration.
 
@@ -75,6 +81,10 @@ def trace(
       # Several databases, later files win a conflicting message id
 
       zelos-extension-can trace socketcan can0 base.dbc overlay.dbc
+
+      # Name the source after the bus instead of the prefix
+
+      zelos-extension-can trace socketcan can0 vehicle.dbc --prefix ''
     """
     # Build config from CLI arguments
     config = {
@@ -106,9 +116,13 @@ def trace(
         output_file = file
         logger.info(f"Recording trace to: {output_file}")
 
-    # Create CAN codec. Prefix-less by construction: pure CLI mode traces one
-    # bus, so there is nothing to nest and the source is the codec itself.
-    codec = CanCodec(config)
+    # Same naming rule as app mode: with a prefix the source is the prefix and
+    # events nest under the channel-derived bus, cleared the bus owns the
+    # source. Channels carry catalog separators (`.`, `@`, `:`), so sanitize.
+    bus_name = zelos_sdk.sanitize_name(channel, kind="source")
+    codec = CanCodec(
+        config, bus_name=bus_name, source=zelos_sdk.TraceSource(prefix) if prefix else None
+    )
 
     setup_shutdown_handler(codec)
 

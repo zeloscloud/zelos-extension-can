@@ -21,11 +21,13 @@ import json
 import logging
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import can.exceptions
 import pytest
 import zelos_can
 import zelos_sdk
+from conftest import trace_event_paths
 
 from zelos_extension_can import ssh_socketcan
 from zelos_extension_can.cli import app as app_mod
@@ -161,9 +163,7 @@ def test_ssh_flags_set_in_init():
 
 
 @pytest.mark.parametrize("with_prefix", [True, False])
-def test_rust_path_nests_events_under_the_bus(
-    tmp_path, trace_event_paths, stub_transports, with_prefix
-):
+def test_rust_path_nests_events_under_the_bus(tmp_path, stub_transports, with_prefix):
     """Same layout as the python-can path: `<prefix>/<bus>/<id>_<Msg>` on a
     shared source, `<bus>/<id>_<Msg>` on the bus's own."""
     namespace = zelos_sdk.TraceNamespace("ssh_naming")
@@ -399,6 +399,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
     monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
     monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", lambda *a, **k: MagicMock())
     monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
 
     try:
@@ -565,9 +566,6 @@ def test_schema_ssh_branch_structure():
         "ssh_port",
         "ssh_key_path",
         "ssh_extra_opts",
-        "database_files",
-        "dbc_conflict",
-        "name",
         "fd_mode",
     ):
         assert field in props, f"ssh branch missing property {field!r}"

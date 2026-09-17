@@ -53,6 +53,12 @@ def _get_codec(name: str) -> CanCodec:
     return codec
 
 
+def _as_paths(value: str | list[str]) -> list[Path]:
+    """Normalize a DBC action parameter: one path or a list, empties dropped."""
+    values = [value] if isinstance(value, str) else list(value)
+    return [Path(v) for v in values if v]
+
+
 def _clear_destination(destination: Path, overwrite: bool) -> None:
     """Make `destination` writable, or refuse.
 
@@ -210,17 +216,17 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
 # ─── Bus-agnostic file utilities ────────────────────────────────────────────
 #
 # These don't take a `codec` *because* they're file-in / file-out conversions.
-# The DBC source is explicit via `database_path` for converter — if empty, the
-# user must select a `codec` whose loaded DBC will be used as the conversion
-# database. We don't silently default to "first registered codec" because that
-# silently couples a file conversion to whichever bus happened to start first.
+# The DBC source is explicit via `database_path`; a `codec` lends its loaded
+# list when that is empty. We don't silently default to "first registered
+# codec" because that couples a file conversion to whichever bus started first.
+# With neither, the conversion writes raw frames only, like the CLI.
 
 
 @action(
     "Convert Trace File",
     "Convert a CAN log (.asc / .blf / .trc / candump .log) to Zelos trace "
-    "format (.trz). Provide either an explicit `database_path` OR a `codec` "
-    "whose loaded DBC will be used.",
+    "format (.trz). Provide `database_path` (one path or several) OR a `codec` "
+    "whose loaded DBCs will be used; with neither, only raw frames are written.",
 )
 @action.text(
     "input_path",
@@ -233,7 +239,10 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     required=False,
     default="",
     title="CAN Database File (.dbc)",
-    description="Explicit database file. If empty, `codec` must be set.",
+    description=(
+        "Database file, or a list of them in precedence order. If empty, `codec` "
+        "lends its list; with neither, only raw frames are written."
+    ),
     placeholder="/path/to/file.dbc",
     widget="file-picker",
 )
@@ -243,7 +252,7 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     default="",
     title="Codec (fallback DBC source)",
     description=(
-        "Used only when `database_path` is empty — the named codec's DBC drives the conversion."
+        "Used only when `database_path` is empty — the named codec's DBCs drive the conversion."
     ),
     choices=_available_codecs,
 )
@@ -270,7 +279,7 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
 )
 def convert_trace_file(
     input_path: str,
-    database_path: str = "",
+    database_path: str | list[str] = "",
     codec: str = "",
     output_path: str = "",
     overwrite: bool = False,
@@ -282,21 +291,21 @@ def convert_trace_file(
         # Validate arguments before touching the filesystem so callers get a
         # clear "you need to pass X" error rather than a misleading
         # "input file not found" when the real problem is missing config.
-        if database_path:
-            database_file = Path(database_path).expanduser().resolve()
-            if not database_file.exists():
-                raise FileNotFoundError(f"CAN database file not found: {database_file}")
-            database_files = [database_file]
-            logger.info("Using user-specified database: %s", database_file)
+        supplied = _as_paths(database_path)
+        if supplied:
+            database_files = [p.expanduser().resolve() for p in supplied]
+            for database_file in database_files:
+                if not database_file.exists():
+                    raise FileNotFoundError(f"CAN database file not found: {database_file}")
+            logger.info("Using user-specified databases: %s", database_files)
         elif codec:
             # _get_codec raises ValueError on unknown codec — propagated
             # verbatim by the pass-through handler below.
             database_files = list(_get_codec(codec).database_files)
-            if not database_files:
-                raise ValueError(f"codec '{codec}' has no database configured")
             logger.info("Using codec '%s' databases: %s", codec, database_files)
         else:
-            raise ValueError("Provide either `database_path` or `codec`. Neither was given.")
+            database_files = []
+            logger.info("No database given: writing raw frames only")
 
         input_file = Path(input_path).expanduser().resolve()
         if not input_file.exists():
@@ -325,7 +334,7 @@ def convert_trace_file(
         return {
             "status": "success",
             "input_file": str(input_file),
-            "database_file": str(database_files[0]),
+            "database_file": str(database_files[0]) if database_files else None,
             "database_files": [str(p) for p in database_files],
             "output_file": str(output_file),
             **stats.to_dict(),
@@ -421,9 +430,10 @@ def _configured_database_files() -> list[str]:
     Config is at-rest state — it is written on Start and persists across stop —
     so this resolves whether or not the extension is running. It is applied in
     the action body rather than as a schema default because the inventory is
-    dumped at package time, before any config exists. A pre-list config's
-    single `database_file` is folded in the same way `_prepare_bus_config` does.
+    dumped at package time, before any config exists.
     """
+    from .codec import bus_database_files  # deferred: pulls in can/cantools
+
     try:
         from zelos_sdk.extensions.config import load_config
 
@@ -431,12 +441,7 @@ def _configured_database_files() -> list[str]:
     except Exception:  # no config yet, or schema mismatch — not an error here
         return []
     for bus in buses:
-        if not isinstance(bus, dict):
-            continue
-        files = [str(p) for p in (bus.get("database_files") or [])]
-        if bus.get("database_file"):
-            files = [str(bus["database_file"]), *files]
-        if files:
+        if isinstance(bus, dict) and (files := bus_database_files(bus)):
             return files
     return []
 
@@ -502,7 +507,11 @@ def _open_in_app(path: Path) -> None:
 @action.text(
     "database_file",
     title="Database (.dbc)",
-    description="Defaults to the databases configured for this extension's first bus",
+    description=(
+        "One path or several, in precedence order. Defaults to the databases "
+        "configured for this extension's first bus; with none, only raw frames "
+        "are written."
+    ),
     required=False,
     default="",
     widget="file_path_picker",
@@ -528,7 +537,7 @@ def _open_in_app(path: Path) -> None:
 )
 def convert(
     input_file: str,
-    database_file: str = "",
+    database_file: str | list[str] = "",
     output_file: str = "",
     force: bool = False,
     open_on_complete: bool = False,
@@ -545,10 +554,10 @@ def convert(
             f"Unsupported format: {source.suffix}. Supported: {', '.join(SUPPORTED_FORMATS.keys())}"
         )
 
-    databases = [database_file] if database_file else _configured_database_files()
-    if not databases:
-        raise ValueError("No database_file given and none configured for this extension")
-    database_paths = [Path(d).expanduser() for d in databases]
+    supplied = _as_paths(database_file)
+    database_paths = [p.expanduser() for p in supplied] or [
+        Path(d).expanduser() for d in _configured_database_files()
+    ]
     for database_path in database_paths:
         if not database_path.is_file():
             raise FileNotFoundError(f"Database file not found: {database_path}")
@@ -581,7 +590,7 @@ def convert(
     result = {
         "status": "success",
         "input_file": str(source),
-        "database_file": str(database_paths[0]),
+        "database_file": str(database_paths[0]) if database_paths else None,
         "database_files": [str(p) for p in database_paths],
         "output_file": str(destination),
         "opened": opened,

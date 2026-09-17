@@ -27,6 +27,37 @@
               "vector",
               "other"
             ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name to identify this bus (the trace-event segment for it). Letters, digits, space, '_' and '-' only. Defaults to the channel, sanitized.",
+            "ui:placeholder": "defaults to the channel"
+          },
+          "database_files": {
+            "type": "array",
+            "title": "Database Files (.dbc)",
+            "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
+            "items": {
+              "type": "string",
+              "ui:widget": "file-picker"
+            },
+            "default": [],
+            "ui:orderable": true
+          },
+          "dbc_conflict": {
+            "type": "string",
+            "title": "On Conflicting Definitions",
+            "description": "What to do when the same message id is defined differently twice, by two database files or twice inside one file: 'warn' keeps the later definition, 'error' refuses to start.",
+            "enum": [
+              "warn",
+              "error"
+            ],
+            "default": "warn"
+          },
+          "database_file": {
+            "type": "string",
+            "ui:widget": "hidden"
           }
         },
         "required": [
@@ -41,12 +72,6 @@
                     "enum": [
                       "demo"
                     ]
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
                   }
                 }
               },
@@ -62,37 +87,6 @@
                     "title": "Channel",
                     "description": "Virtual CAN channel identifier (e.g. vcan0)",
                     "default": "vcan0"
-                  },
-                  "database_files": {
-                    "type": "array",
-                    "title": "Database Files (.dbc)",
-                    "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
-                    "items": {
-                      "type": "string",
-                      "ui:widget": "file-picker"
-                    },
-                    "default": [],
-                    "ui:orderable": true
-                  },
-                  "dbc_conflict": {
-                    "type": "string",
-                    "title": "On Conflicting Definitions",
-                    "description": "What to do when two database files define the same message id differently: 'warn' keeps the later file's definition, 'error' refuses to start.",
-                    "enum": [
-                      "warn",
-                      "error"
-                    ],
-                    "default": "warn"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "ui:widget": "hidden"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
                   }
                 },
                 "required": [
@@ -112,37 +106,6 @@
                     "title": "Channel",
                     "description": "CAN channel identifier",
                     "default": "can0"
-                  },
-                  "database_files": {
-                    "type": "array",
-                    "title": "Database Files (.dbc)",
-                    "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
-                    "items": {
-                      "type": "string",
-                      "ui:widget": "file-picker"
-                    },
-                    "default": [],
-                    "ui:orderable": true
-                  },
-                  "dbc_conflict": {
-                    "type": "string",
-                    "title": "On Conflicting Definitions",
-                    "description": "What to do when two database files define the same message id differently: 'warn' keeps the later file's definition, 'error' refuses to start.",
-                    "enum": [
-                      "warn",
-                      "error"
-                    ],
-                    "default": "warn"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "ui:widget": "hidden"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -241,37 +204,6 @@
                     "title": "SSH Extra Options",
                     "description": "Additional ssh command-line options, space-separated (e.g. -o StrictHostKeyChecking=no)"
                   },
-                  "database_files": {
-                    "type": "array",
-                    "title": "Database Files (.dbc)",
-                    "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
-                    "items": {
-                      "type": "string",
-                      "ui:widget": "file-picker"
-                    },
-                    "default": [],
-                    "ui:orderable": true
-                  },
-                  "dbc_conflict": {
-                    "type": "string",
-                    "title": "On Conflicting Definitions",
-                    "description": "What to do when two database files define the same message id differently: 'warn' keeps the later file's definition, 'error' refuses to start.",
-                    "enum": [
-                      "warn",
-                      "error"
-                    ],
-                    "default": "warn"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "ui:widget": "hidden"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
-                  },
                   "fd_mode": {
                     "type": "boolean",
                     "title": "CAN-FD Mode",
@@ -298,31 +230,6 @@
                     "description": "CAN channel identifier",
                     "default": "PCAN_USBBUS1"
                   },
-                  "database_files": {
-                    "type": "array",
-                    "title": "Database Files (.dbc)",
-                    "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
-                    "items": {
-                      "type": "string",
-                      "ui:widget": "file-picker"
-                    },
-                    "default": [],
-                    "ui:orderable": true
-                  },
-                  "dbc_conflict": {
-                    "type": "string",
-                    "title": "On Conflicting Definitions",
-                    "description": "What to do when two database files define the same message id differently: 'warn' keeps the later file's definition, 'error' refuses to start.",
-                    "enum": [
-                      "warn",
-                      "error"
-                    ],
-                    "default": "warn"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "ui:widget": "hidden"
-                  },
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
@@ -334,12 +241,6 @@
                       1000000
                     ],
                     "default": 500000
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -412,31 +313,6 @@
                     "description": "CAN channel identifier",
                     "default": "0"
                   },
-                  "database_files": {
-                    "type": "array",
-                    "title": "Database Files (.dbc)",
-                    "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
-                    "items": {
-                      "type": "string",
-                      "ui:widget": "file-picker"
-                    },
-                    "default": [],
-                    "ui:orderable": true
-                  },
-                  "dbc_conflict": {
-                    "type": "string",
-                    "title": "On Conflicting Definitions",
-                    "description": "What to do when two database files define the same message id differently: 'warn' keeps the later file's definition, 'error' refuses to start.",
-                    "enum": [
-                      "warn",
-                      "error"
-                    ],
-                    "default": "warn"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "ui:widget": "hidden"
-                  },
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
@@ -448,12 +324,6 @@
                       1000000
                     ],
                     "default": 500000
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -526,31 +396,6 @@
                     "description": "CAN channel identifier",
                     "default": "0"
                   },
-                  "database_files": {
-                    "type": "array",
-                    "title": "Database Files (.dbc)",
-                    "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
-                    "items": {
-                      "type": "string",
-                      "ui:widget": "file-picker"
-                    },
-                    "default": [],
-                    "ui:orderable": true
-                  },
-                  "dbc_conflict": {
-                    "type": "string",
-                    "title": "On Conflicting Definitions",
-                    "description": "What to do when two database files define the same message id differently: 'warn' keeps the later file's definition, 'error' refuses to start.",
-                    "enum": [
-                      "warn",
-                      "error"
-                    ],
-                    "default": "warn"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "ui:widget": "hidden"
-                  },
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
@@ -562,12 +407,6 @@
                       1000000
                     ],
                     "default": 500000
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -634,41 +473,10 @@
                       "other"
                     ]
                   },
-                  "database_files": {
-                    "type": "array",
-                    "title": "Database Files (.dbc)",
-                    "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
-                    "items": {
-                      "type": "string",
-                      "ui:widget": "file-picker"
-                    },
-                    "default": [],
-                    "ui:orderable": true
-                  },
-                  "dbc_conflict": {
-                    "type": "string",
-                    "title": "On Conflicting Definitions",
-                    "description": "What to do when two database files define the same message id differently: 'warn' keeps the later file's definition, 'error' refuses to start.",
-                    "enum": [
-                      "warn",
-                      "error"
-                    ],
-                    "default": "warn"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "ui:widget": "hidden"
-                  },
                   "config_json": {
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
                     "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"slcan\", \"channel\": \"/dev/ttyUSB0\", \"bitrate\": 500000}"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (the trace-event segment for it). Defaults to the channel with '. @ :' replaced by '_'.",
-                    "ui:placeholder": "defaults to the channel"
                   }
                 },
                 "required": [
@@ -677,7 +485,14 @@
               }
             ]
           }
-        }
+        },
+        "ui:order": [
+          "interface",
+          "name",
+          "database_files",
+          "dbc_conflict",
+          "*"
+        ]
       },
       "default": []
     },
@@ -691,7 +506,8 @@
           "title": "Prefix",
           "description": "Leading trace source every bus publishes under, so events read '<prefix>/<bus>/<message>'. Clear it to give each bus its own trace source with unprefixed events.",
           "default": "CAN",
-          "ui:placeholder": "CAN"
+          "ui:placeholder": "CAN",
+          "ui:emptyValue": ""
         },
         "log_raw_frames": {
           "type": "boolean",

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import rich_click as click
 
+from ..codec import DEFAULT_PREFIX
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 )
 @click.option(
     "--prefix",
-    default="CAN",
+    default=DEFAULT_PREFIX,
     help="Leading trace-source name; pass '' to name the source after the input file",
 )
 @click.option(

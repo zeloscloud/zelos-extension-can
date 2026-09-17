@@ -30,13 +30,13 @@ All configuration is managed through the Zelos App settings interface.
 |---|---|
 | **Database Files (.dbc)** | Ordered list of CAN databases. Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus. |
 | **On Conflicting Definitions** | `warn` (default) keeps the later file's definition; `error` refuses to start. |
-| **Name** | Trace segment for this bus. Defaults to the channel with `. @ :` replaced by `_`. |
+| **Name** | Trace segment for this bus. Letters, digits, space, `_`, `-` only. Defaults to the sanitized channel. |
 | **Bitrate** | CAN bus bitrate (default 500000). |
 | **FD Mode** | Enable CAN-FD support. |
 
 ### Advanced Settings
 
-One value each, applied to every bus. Collapsed by default.
+One value each, applied to every bus.
 
 | Setting | What it does |
 |---|---|
@@ -112,14 +112,13 @@ loopback, so every transmit is traced exactly once.
 
 The extension provides several actions accessible from the Zelos App:
 
-- **Get Status**: View current CAN bus connection status and configuration
-- **Send Message**: Send a single CAN message with custom signal values
-- **Start Periodic Message**: Begin periodic transmission of a CAN message at a specified interval
-- **Stop Periodic Message**: Stop an active periodic transmission
-- **List Periodic Tasks**: View all currently running periodic transmissions
-- **Get Metrics**: View performance statistics (message counts, rates, errors)
-- **List Messages**: Browse all CAN messages defined in your DBC file
-- **Convert Trace File**: Convert CAN log files to Zelos trace format for offline analysis
+- **List Codecs**: Names of every configured bus
+- **Get TX State**: One bus's periodics, DBC list, and bus-health metrics
+- **List Messages** / **Describe Message**: Browse the merged DBC message set
+- **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
+- **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
+- **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
+- **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
 
 ## What is CAN?
 [See this tutorial](https://www.csselectronics.com/pages/can-bus-simple-intro-tutorial)
@@ -144,6 +143,9 @@ The extension includes a command-line interface for advanced use cases. No insta
 ```bash
 # Launch trace process (pass several DBCs to layer them, later files win)
 uv run main.py trace socketcan can0 /path/to/file.dbc
+
+# Name the trace source after the bus instead of the prefix
+uv run main.py trace socketcan can0 /path/to/file.dbc --prefix ''
 
 # Launch trace process and record to .trz file
 uv run main.py trace socketcan can0 /path/to/file.dbc --file

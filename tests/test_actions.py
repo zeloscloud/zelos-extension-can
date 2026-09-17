@@ -117,9 +117,11 @@ class TestDispatch:
 class TestConverterDbcResolution:
     # Failures must *raise* — the actions protocol derives its error verdict
     # from a raised exception, not from a payload key.
-    def test_requires_database_path_or_codec(self, two_codecs, tmp_path):
-        # No database_path, no codec — must error.
-        with pytest.raises(ValueError, match=r"`database_path` or `codec`"):
+    def test_no_database_converts_raw_only(self, two_codecs, tmp_path):
+        # No database_path, no codec — raw frames only, like the CLI. Input
+        # doesn't exist, so resolution getting as far as the file check proves
+        # there is no "neither was given" guard left.
+        with pytest.raises(FileNotFoundError, match="Input file not found"):
             actions.convert_trace_file(
                 input_path=str(tmp_path / "missing.log"),
                 database_path="",
@@ -171,13 +173,12 @@ class TestStandaloneConvert:
         with pytest.raises(ValueError, match="Unsupported format"):
             actions.convert(input_file=str(src))
 
-    def test_no_database_anywhere_raises(self, tmp_path):
+    def test_no_database_anywhere_converts_raw_only(self, tmp_path):
         src = self._log(tmp_path)
-        with (
-            patch.object(actions, "_configured_database_files", return_value=[]),
-            pytest.raises(ValueError, match="No database_file given"),
-        ):
-            actions.convert(input_file=str(src))
+        with patch.object(actions, "_configured_database_files", return_value=[]):
+            result = actions.convert(input_file=str(src))
+        assert result["database_files"] == []
+        assert Path(result["output_file"]).is_file()
 
     def test_missing_database_raises(self, tmp_path):
         src = self._log(tmp_path)
