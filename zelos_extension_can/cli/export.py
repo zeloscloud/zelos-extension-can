@@ -44,19 +44,24 @@ def _find_raw_sources(reader: zelos_sdk.TraceReader) -> list[tuple[str, str, str
     return raw_sources
 
 
-def _derive_channel_name(source_name: str, _event_name: str = "") -> str:
+def _derive_channel_name(source_name: str, event_name: str = "") -> str:
     """Derive CAN channel name from source/event naming.
 
     Handles various naming conventions:
+    - CAN + can0/Frame -> can0   (shared-prefix layout: the bus is the event's
+      leading segment, so several buses in one source stay distinct)
     - can_raw -> can0
     - vcan0_raw -> vcan0
     - can0-link -> can0
     - vehicle_raw -> vehicle
 
     :param source_name: Trace source name
-    :param _event_name: Event name (reserved for future use)
+    :param event_name: Event name
     :return: Channel name to use in candump log
     """
+    if "/" in event_name:
+        return event_name.split("/", 1)[0]
+
     # Try common suffixes
     for suffix in ("_raw", "-link", "-raw"):
         if source_name.endswith(suffix):

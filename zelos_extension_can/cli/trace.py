@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 @click.command()
 @click.argument("interface", type=str)
 @click.argument("channel", type=str)
-@click.argument("database_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("database_files", nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--bitrate",
     type=int,
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 def trace(
     interface: str,
     channel: str,
-    database_file: Path,
+    database_files: tuple[Path, ...],
     bitrate: int,
     file: Path | None,
     fd: bool,
@@ -71,12 +71,16 @@ def trace(
       # Trace CAN-FD
 
       zelos-extension-can trace socketcan can0 vehicle.dbc --fd --data-bitrate 2000000
+
+      # Several databases, later files win a conflicting message id
+
+      zelos-extension-can trace socketcan can0 base.dbc overlay.dbc
     """
     # Build config from CLI arguments
     config = {
         "interface": interface,
         "channel": channel,
-        "database_file": str(database_file),
+        "database_files": [str(p) for p in database_files],
         "bitrate": bitrate,
         "fd_mode": fd,
         "log_raw_frames": True,  # Enable raw logging in CLI mode
@@ -87,7 +91,7 @@ def trace(
         config["data_bitrate"] = data_bitrate
 
     logger.info(f"Tracing {interface} interface on {channel}")
-    logger.info(f"Database: {database_file}")
+    logger.info("Databases: %s", ", ".join(str(p) for p in database_files) or "(none)")
     logger.info(f"Bitrate: {bitrate}")
     if fd:
         logger.info(f"CAN-FD enabled, data bitrate: {data_bitrate}")

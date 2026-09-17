@@ -7,10 +7,12 @@ import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import can.exceptions
 import zelos_sdk
 from zelos_sdk.extensions import load_config
+from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from .. import ACTION_PREFIX
 from .. import actions as can_actions
@@ -19,16 +21,97 @@ from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
 
+#: `advanced` settings and their defaults. Everything here is global: one value
+#: applies to every bus. The four bus-level keys were per-bus before and are
+#: still honoured per-bus (see `_prepare_bus_config`) so old configs keep their
+#: settings, but they are no longer offered in the schema.
+ADVANCED_DEFAULTS: dict = {
+    "prefix": "CAN",
+    "log_raw_frames": True,
+    "receive_own_messages": True,
+    "emit_schemas_on_init": False,
+    "timestamp_mode": "auto",
+    "log_level": "INFO",
+}
 
-def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
+#: Advanced keys the codec reads off a bus config, so a legacy per-bus value
+#: still wins over the global one.
+_BUS_LEVEL_ADVANCED = (
+    "log_raw_frames",
+    "receive_own_messages",
+    "emit_schemas_on_init",
+    "timestamp_mode",
+)
+
+#: Trace source names are an allow-list: letters, digits, space, `_`, `-`.
+#: `/` is a catalog path separator and would silently re-nest the whole tree.
+_SOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9 _-]+$")
+
+
+def resolve_advanced(config: dict) -> dict:
+    """Merge the `advanced` object over its defaults.
+
+    A top-level `log_level` from a pre-`advanced` config is still honoured.
+    """
+    supplied = config.get("advanced") or {}
+    advanced = {**ADVANCED_DEFAULTS, **supplied}
+    if "log_level" not in supplied and config.get("log_level"):
+        advanced["log_level"] = config["log_level"]
+    return advanced
+
+
+def trace_log_handler(shared_source: Any) -> logging.Handler:
+    """Handler that mirrors extension logs into the trace.
+
+    With a prefix, logs ride the shared source and read `<prefix>/log`;
+    with it cleared they get their own `can_log` source, as before.
+    """
+    handler = TraceLoggingHandler(shared_source if shared_source is not None else "can_log")
+    handler.setLevel(logging.INFO)
+    return handler
+
+
+def _resolve_prefix(advanced: dict) -> str:
+    """Validate the configured prefix as a trace source name. Empty clears it."""
+    prefix = str(advanced.get("prefix") or "").strip()
+    if prefix and not _SOURCE_NAME_RE.match(prefix):
+        logger.error(
+            "Invalid Prefix %r: use letters, digits, space, '_' or '-' only (no '/'), "
+            "or clear it to keep one trace source per bus.",
+            prefix,
+        )
+        sys.exit(1)
+    return prefix
+
+
+def _prepare_bus_config(
+    bus_config: dict, demo_dbc_path: Path, advanced: dict | None = None
+) -> dict:
     """Prepare a bus configuration, handling demo and 'other' interface modes.
+
+    Folds a legacy single `database_file` into the `database_files` list and
+    applies the global `advanced` settings that used to live per-bus.
 
     :param bus_config: Raw bus configuration from the buses array
     :param demo_dbc_path: Path to demo DBC file
+    :param advanced: Resolved advanced settings (defaults applied when omitted)
     :return: Prepared configuration dict
     """
     config = bus_config.copy()
     bus_name = config.get("name", "bus")
+    advanced = advanced if advanced is not None else dict(ADVANCED_DEFAULTS)
+
+    # A pre-list config carries one `database_file`; it takes precedence in the
+    # merge, so prepend it and drop the old key.
+    legacy = config.pop("database_file", None)
+    files = list(config.get("database_files") or [])
+    if legacy:
+        files = [legacy, *files]
+    config["database_files"] = files
+
+    # Global advanced settings; a legacy per-bus value overrides.
+    for key in _BUS_LEVEL_ADVANCED:
+        config.setdefault(key, advanced[key])
 
     # Handle demo interface selection
     if config.get("interface") == "demo":
@@ -36,9 +119,8 @@ def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
         config["demo_mode"] = True
         config["interface"] = "virtual"
         config["channel"] = "vcan0"
-        config["database_file"] = str(demo_dbc_path)
+        config["database_files"] = [str(demo_dbc_path)]
         config["receive_own_messages"] = True
-        config["log_raw_frames"] = True
 
     # Handle "other" interface - merge config_json into main config
     if config.get("interface") == "other":
@@ -86,11 +168,18 @@ def _prepare_bus_config(bus_config: dict, demo_dbc_path: Path) -> dict:
     return config
 
 
-def _create_codecs(config: dict, demo_dbc_path: Path) -> list[tuple[CanCodec, str]]:
+def _create_codecs(
+    config: dict,
+    demo_dbc_path: Path,
+    advanced: dict | None = None,
+    source: Any = None,
+) -> list[tuple[CanCodec, str]]:
     """Create CanCodec instances for all buses in the configuration.
 
     :param config: Full configuration dict with 'buses' array
     :param demo_dbc_path: Path to demo DBC file
+    :param advanced: Resolved advanced settings
+    :param source: Shared TraceSource when a prefix is configured, else None
     :return: List of (codec, action_registry_name) tuples
     """
     codecs: list[tuple[CanCodec, str]] = []
@@ -100,51 +189,32 @@ def _create_codecs(config: dict, demo_dbc_path: Path) -> list[tuple[CanCodec, st
         logger.error("No buses configured. Add at least one bus to the 'buses' array.")
         sys.exit(1)
 
-    is_multi_bus = len(buses) > 1
+    advanced = advanced if advanced is not None else dict(ADVANCED_DEFAULTS)
 
     # Prepare all configs first to get channel names
-    prepared_configs = [_prepare_bus_config(bus, demo_dbc_path) for bus in buses]
+    prepared_configs = [_prepare_bus_config(bus, demo_dbc_path, advanced) for bus in buses]
 
     seen_names: set[str] = set()
 
     for i, (bus_config, prepared_config) in enumerate(zip(buses, prepared_configs, strict=True)):
-        # Determine bus name: empty/None means user left it blank
-        config_name = (bus_config.get("name") or "").strip() or None
+        bus_name = (bus_config.get("name") or "").strip()
+        if not bus_name:
+            # No explicit name: derive from the channel. Channels can contain
+            # '.', '@', ':' (ssh-socketcan's "user@host:iface"), which are
+            # catalog PATH SEPARATORS in Zelos trace names and would break
+            # catalog / `latest` lookups. Sanitize them to '_'.
+            bus_name = re.sub(r"[.@:]", "_", prepared_config.get("channel", f"bus{i}"))
 
-        if config_name:
-            # User provided an explicit name
-            bus_name = config_name
-        elif is_multi_bus:
-            # Multi-bus with no explicit name: derive from channel to avoid
-            # collisions. Channels can contain '.', '@', ':' (ssh-socketcan's
-            # "user@host:iface"), which are catalog PATH SEPARATORS in Zelos
-            # trace sources and would break catalog / `latest` lookups (and the
-            # inherited "{name}_raw" source). Sanitize them to '_'.
-            raw_name = prepared_config.get("channel", f"bus{i}")
-            bus_name = re.sub(r"[.@:]", "_", raw_name)
-        else:
-            # Single bus, no name: use None for backward compat ("can_codec")
-            bus_name = None
+        if bus_name in seen_names:
+            logger.error(f"Duplicate bus name '{bus_name}'. Each bus must have a unique name.")
+            sys.exit(1)
+        seen_names.add(bus_name)
 
-        # Validate uniqueness for multi-bus setups
-        if is_multi_bus:
-            if bus_name in seen_names:
-                logger.error(f"Duplicate bus name '{bus_name}'. Each bus must have a unique name.")
-                sys.exit(1)
-            seen_names.add(bus_name)
+        codec = CanCodec(prepared_config, bus_name=bus_name, source=source)
+        codecs.append((codec, bus_name))
 
-        # Create codec:
-        # - Single bus without name: bus_name=None → trace source "can_codec" (backward compatible)
-        # - Otherwise: bus_name=name → trace source "{name}"
-        codec = CanCodec(prepared_config, bus_name=bus_name)
-
-        # Action registry name: use exact bus_name, or "can_codec" for backward compat
-        action_name = bus_name if bus_name else "can_codec"
-        codecs.append((codec, action_name))
-
-        display_name = bus_name or "can_codec"
         logger.info(
-            f"Created bus codec: {display_name} "
+            f"Created bus codec: {bus_name} "
             f"({prepared_config['interface']}:{prepared_config.get('channel', 'N/A')})"
         )
 
@@ -186,9 +256,11 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     """
     # Load and validate configuration
     config = load_config()
+    advanced = resolve_advanced(config)
+    prefix = _resolve_prefix(advanced)
 
     # Apply log level from config (global setting)
-    log_level_str = config.get("log_level", "INFO")
+    log_level_str = advanced["log_level"]
     try:
         log_level = getattr(logging, log_level_str)
         logging.getLogger().setLevel(log_level)
@@ -216,8 +288,24 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         output_file = file
         logger.info(f"Recording trace to: {output_file}")
 
+    # One shared trace source when a prefix is configured, so every bus's
+    # events nest under it as `<prefix>/<bus>/<event>`. It is created BEFORE the
+    # codecs (which need it) and before `zelos_sdk.init` below; the default
+    # prefix is the action prefix, so this is the same global source `init`
+    # would make — `init_global_source` is idempotent and returns it again.
+    shared_source = None
+    if prefix:
+        shared_source = (
+            zelos_sdk.init_global_source(ACTION_PREFIX)
+            if prefix == ACTION_PREFIX
+            else zelos_sdk.TraceSource(prefix)
+        )
+        logger.info("Trace prefix: %s", prefix)
+    else:
+        logger.info("Trace prefix cleared: one trace source per bus")
+
     # Create all CAN codecs from buses array
-    codec_pairs = _create_codecs(config, demo_dbc_path)
+    codec_pairs = _create_codecs(config, demo_dbc_path, advanced, shared_source)
     codecs = [codec for codec, _ in codec_pairs]
 
     # Populate the shared codec registry that `actions.py` reads from. The
@@ -241,6 +329,8 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     # Initialize SDK. `ACTION_PREFIX` is package-level so the live namespace and
     # the packaged at-rest inventory cannot drift apart.
     zelos_sdk.init(name=ACTION_PREFIX, log_level="info", actions=True)
+
+    logging.getLogger().addHandler(trace_log_handler(shared_source))
 
     # Setup shutdown handler for all codecs.
     for codec in codecs:

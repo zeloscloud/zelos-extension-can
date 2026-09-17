@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 
 import rich_click as click
-from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from zelos_extension_can import ACTION_PREFIX as _ACTION_PREFIX
 from zelos_extension_can import cli as cli_commands
@@ -27,11 +26,8 @@ click.rich_click.STYLE_ERRORS_SUGGESTION = "yellow italic"
 # Configure logging - INFO level prevents debug logs from being sent to backend
 logging.basicConfig(level=logging.INFO)
 
-# Add the built-in handler to capture logs at INFO level and above
-# (DEBUG logs won't be sent to backend to avoid duplicate trace data)
-handler = TraceLoggingHandler("can_log")
-handler.setLevel(logging.INFO)
-logging.getLogger().addHandler(handler)
+# The trace log handler is attached in `cli/app.py`, once the configured prefix
+# is known: logs land on the shared prefix source, not a fixed `can_log` one.
 
 
 @click.group(invoke_without_command=True)
