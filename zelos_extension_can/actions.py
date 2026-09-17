@@ -286,12 +286,15 @@ def convert_trace_file(
             database_file = Path(database_path).expanduser().resolve()
             if not database_file.exists():
                 raise FileNotFoundError(f"CAN database file not found: {database_file}")
+            database_files = [database_file]
             logger.info("Using user-specified database: %s", database_file)
         elif codec:
             # _get_codec raises ValueError on unknown codec — propagated
             # verbatim by the pass-through handler below.
-            database_file = Path(_get_codec(codec).database_file_path)
-            logger.info("Using codec '%s' database: %s", codec, database_file)
+            database_files = list(_get_codec(codec).database_files)
+            if not database_files:
+                raise ValueError(f"codec '{codec}' has no database configured")
+            logger.info("Using codec '%s' databases: %s", codec, database_files)
         else:
             raise ValueError("Provide either `database_path` or `codec`. Neither was given.")
 
@@ -311,18 +314,19 @@ def convert_trace_file(
         _clear_destination(output_file, overwrite)
 
         logger.info(
-            "Converting %s -> %s using database: %s", input_file, output_file, database_file
+            "Converting %s -> %s using databases: %s", input_file, output_file, database_files
         )
         stats = convert_can_trace(
             input_file,
-            database_file,
+            database_files,
             output_file,
             emit_schemas_on_init=emit_all_schemas,
         )
         return {
             "status": "success",
             "input_file": str(input_file),
-            "database_file": str(database_file),
+            "database_file": str(database_files[0]),
+            "database_files": [str(p) for p in database_files],
             "output_file": str(output_file),
             **stats.to_dict(),
         }
@@ -411,24 +415,30 @@ def export_trace_to_log(
 # ─── Standalone (runs with the extension stopped) ───────────────────────────
 
 
-def _configured_database_file() -> str | None:
-    """First `database_file` from the saved extension config, if any.
+def _configured_database_files() -> list[str]:
+    """The first configured bus's database list, if any.
 
     Config is at-rest state — it is written on Start and persists across stop —
     so this resolves whether or not the extension is running. It is applied in
     the action body rather than as a schema default because the inventory is
-    dumped at package time, before any config exists.
+    dumped at package time, before any config exists. A pre-list config's
+    single `database_file` is folded in the same way `_prepare_bus_config` does.
     """
     try:
         from zelos_sdk.extensions.config import load_config
 
         buses = (load_config() or {}).get("buses") or []
     except Exception:  # no config yet, or schema mismatch — not an error here
-        return None
+        return []
     for bus in buses:
-        if isinstance(bus, dict) and bus.get("database_file"):
-            return str(bus["database_file"])
-    return None
+        if not isinstance(bus, dict):
+            continue
+        files = [str(p) for p in (bus.get("database_files") or [])]
+        if bus.get("database_file"):
+            files = [str(bus["database_file"]), *files]
+        if files:
+            return files
+    return []
 
 
 def _open_in_app(path: Path) -> None:
@@ -492,7 +502,7 @@ def _open_in_app(path: Path) -> None:
 @action.text(
     "database_file",
     title="Database (.dbc)",
-    description="Defaults to the first database_file configured for this extension",
+    description="Defaults to the databases configured for this extension's first bus",
     required=False,
     default="",
     widget="file_path_picker",
@@ -535,12 +545,13 @@ def convert(
             f"Unsupported format: {source.suffix}. Supported: {', '.join(SUPPORTED_FORMATS.keys())}"
         )
 
-    database = database_file or _configured_database_file()
-    if not database:
+    databases = [database_file] if database_file else _configured_database_files()
+    if not databases:
         raise ValueError("No database_file given and none configured for this extension")
-    database_path = Path(database).expanduser()
-    if not database_path.is_file():
-        raise FileNotFoundError(f"Database file not found: {database_path}")
+    database_paths = [Path(d).expanduser() for d in databases]
+    for database_path in database_paths:
+        if not database_path.is_file():
+            raise FileNotFoundError(f"Database file not found: {database_path}")
 
     # Resolved, not just expanded. Two reasons: a relative path would otherwise
     # resolve against the extension's working directory rather than the caller's,
@@ -551,7 +562,7 @@ def convert(
     )
     _clear_destination(destination, force)
 
-    stats = convert_can_trace(source, database_path, destination)
+    stats = convert_can_trace(source, database_paths, destination)
 
     # The trace exists on disk from here on. Failing to open it is a worse
     # outcome to report than it is a real one: the conversion succeeded, and
@@ -570,7 +581,8 @@ def convert(
     result = {
         "status": "success",
         "input_file": str(source),
-        "database_file": str(database_path),
+        "database_file": str(database_paths[0]),
+        "database_files": [str(p) for p in database_paths],
         "output_file": str(destination),
         "opened": opened,
         **stats.to_dict(),

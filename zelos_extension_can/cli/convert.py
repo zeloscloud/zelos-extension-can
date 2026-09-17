@@ -11,12 +11,17 @@ logger = logging.getLogger(__name__)
 
 @click.command()
 @click.argument("input_file", type=click.Path(exists=True, path_type=Path))
-@click.argument("database_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("database_files", nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.option(
     "-o",
     "--output",
     type=click.Path(path_type=Path),
     help="Output .trz file (default: input_file.trz)",
+)
+@click.option(
+    "--prefix",
+    default="CAN",
+    help="Leading trace-source name; pass '' to name the source after the input file",
 )
 @click.option(
     "-f",
@@ -32,8 +37,9 @@ logger = logging.getLogger(__name__)
 )
 def convert(
     input_file: Path,
-    database_file: Path,
+    database_files: tuple[Path, ...],
     output: Path | None,
+    prefix: str,
     force: bool,
     verbose: bool,
 ) -> None:
@@ -41,11 +47,22 @@ def convert(
 
     Supported formats: .asc, .blf, .trc, .log, .csv, .mf4
 
+    Databases are applied in order; a later file wins a message id defined
+    differently by an earlier one. With none, only raw frames are written.
+
     Examples:
 
       # Basic conversion (output defaults to input.trz)
 
       zelos-extension-can convert capture.asc decoder.dbc
+
+      # Several databases, later files win
+
+      zelos-extension-can convert capture.asc base.dbc overlay.dbc
+
+      # Raw frames only
+
+      zelos-extension-can convert capture.asc
 
       # Specify output file
 
@@ -90,7 +107,7 @@ def convert(
 
     try:
         # Perform conversion with progress bar
-        _convert_with_progress(input_file, database_file, output_file, verbose)
+        _convert_with_progress(input_file, list(database_files), output_file, verbose, prefix)
     except Exception as e:
         logger.error(f"Conversion failed: {e}")
         if verbose:
