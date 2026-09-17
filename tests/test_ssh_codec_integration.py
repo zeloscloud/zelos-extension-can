@@ -249,13 +249,14 @@ def test_reconnect_transport_build_failure_preserves_codec_then_recovers(
     ok = asyncio.run(codec._reconnect_bus())
 
     assert ok is False
-    # Old transport reaped, but NOTHING else changed — no second codec, no
-    # object-identity churn, periodic still armed.
+    # Old transport reaped and dropped (nothing must read a torn-down ring), but
+    # NOTHING else changed — no second codec, no object-identity churn, periodic
+    # still armed.
     assert old_transport.teardowns == 1
+    assert codec._transport is None
     assert codec._native is native_before
     assert codec._ebus is ebus_before
     assert codec.bus is bus_before
-    assert codec._transport is old_transport  # not replaced on failure
     assert shim.is_active is True
     assert len(stub_transports) == 1  # no new transport was constructed
 
@@ -303,7 +304,7 @@ def test_reconnect_stop_during_teardown_does_not_resurrect(make_ssh_codec, stub_
 
     assert ok is False
     assert len(stub_transports) == 1  # re-check bailed before building
-    assert codec._transport is old_transport
+    assert codec._transport is None  # the dead one was reaped and dropped
     assert codec.bus is bus_before
 
 

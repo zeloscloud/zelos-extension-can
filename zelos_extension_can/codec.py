@@ -781,23 +781,26 @@ class CanCodec(can.Listener):
         """
         if not self.running:
             return False
-        if self._native is None or self._ebus is None or self._transport is None:
+        if self._native is None or self._ebus is None:
             logger.error(
-                "ssh reconnect: codec/port not initialized "
-                "(native=%s ebus=%s transport=%s); cannot rebuild transport",
+                "ssh reconnect: codec not initialized (native=%s ebus=%s); "
+                "cannot rebuild transport",
                 self._native is not None,
                 self._ebus is not None,
-                self._transport is not None,
             )
             return False
 
         from .ssh_socketcan import SshPermanentError, SshTransport
 
-        # Reap the dead procs/threads first (idempotent + total).
-        try:
-            self._transport.teardown()
-        except Exception:
-            logger.exception("ssh reconnect: transport teardown raised (continuing)")
+        # Reap the dead procs/threads first (idempotent + total), then drop the
+        # reference: a failed rebuild below must not leave the supervisor reading
+        # a torn-down transport's stderr ring.
+        if self._transport is not None:
+            try:
+                self._transport.teardown()
+            except Exception:
+                logger.exception("ssh reconnect: transport teardown raised (continuing)")
+            self._transport = None
 
         # stop() may have raced us during the blocking teardown — bail before we
         # resurrect a transport on a codec that is shutting down.
@@ -820,10 +823,7 @@ class CanCodec(can.Listener):
             logger.info("ssh transport rebuilt, codec preserved")
             return True
         except SshPermanentError:
-            # Retrying cannot fix this (auth, host key, no can-utils).
-            # Propagate so the app's CanError handler reports it once and exits,
-            # instead of looping on an unfixable config until someone notices.
-            raise
+            raise  # the class is the verdict: propagate, never retry
         except Exception as e:
             logger.warning("ssh transport rebuild failed, retrying next tick: %s", e)
             return False
@@ -930,21 +930,15 @@ class CanCodec(can.Listener):
                     if self._check_bus_health():
                         interval = healthy_interval
                         continue
-                    # Classify WHY the link went unhealthy from the transport's
-                    # stderr tail, BEFORE reconnecting, so we judge the genuine
-                    # failure and not teardown "Killed" noise.
+                    # Judge the link BEFORE reconnecting, so the verdict comes from
+                    # the genuine failure and not teardown "Killed" noise.
                     failure = (
                         self._transport.classify_failure() if self._transport is not None else None
                     )
                     if isinstance(failure, SshPermanentError):
-                        # Unfixable without an operator; reconnecting forever would
-                        # only bury the one message that says what to do. Raise so
-                        # the app's CanError handler logs it once and exits, the
-                        # same way a startup failure does.
-                        raise failure
+                        raise failure  # the class is the verdict
                     # Transient: name the cause (unreachable / timed out / candump
-                    # died) instead of a bare "unhealthy". stderr_tail() self-mutes,
-                    # so a transport that outlives failed rebuilds says it once.
+                    # died) instead of a bare "unhealthy".
                     reason = self._transport.stderr_tail() if self._transport is not None else ""
                     if reason:
                         logger.error(

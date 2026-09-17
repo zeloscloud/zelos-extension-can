@@ -15,10 +15,10 @@ and the reason this file cannot take the test runner down with it.
 import contextlib
 import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
+from conftest import wait_until
 
 from zelos_extension_can.ssh_socketcan import SshTransport
 
@@ -27,13 +27,6 @@ CMD = SshTransport._remote_command(IFACE)
 # busybox ash is not installable on darwin; dash is the same ash lineage and is
 # the /bin/sh of the Debian-family images these edges usually run.
 SHELLS = [p for p in ("/bin/sh", "/bin/dash", "/bin/bash") if Path(p).exists()]
-
-
-def _wait_until(pred, timeout=4.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline and not pred():
-        time.sleep(0.02)
-    return pred()
 
 
 def _alive(pid: int) -> bool:
@@ -60,7 +53,7 @@ def _stdout_eof(proc: subprocess.Popen) -> bool:
         except OSError:
             return True
 
-    return _wait_until(closed)
+    return wait_until(closed)
 
 
 class _Edge:
@@ -99,7 +92,7 @@ class _Edge:
         return self.proc
 
     def candump_pid(self) -> int:
-        assert _wait_until(self.pid_file.exists), f"candump stand-in never ran: {self.diag()}"
+        assert wait_until(self.pid_file.exists), f"candump stand-in never ran: {self.diag()}"
         return int(self.pid_file.read_text().strip())
 
     def diag(self) -> str:
@@ -149,13 +142,11 @@ def test_tx_flows_then_stdin_close_reaps_candump(shell, edge):
 
     proc.stdin.write(b"123#AABB\n456#01\n")
     proc.stdin.flush()
-    assert _wait_until(lambda: edge.tx_lines() == ["123#AABB", "456#01"])
+    assert wait_until(lambda: edge.tx_lines() == ["123#AABB", "456#01"])
 
     proc.stdin.close()
-    assert _wait_until(lambda: proc.poll() is not None), (
-        f"session outlived its stdin: {edge.diag()}"
-    )
-    assert _wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
+    assert wait_until(lambda: proc.poll() is not None), f"session outlived its stdin: {edge.diag()}"
+    assert wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
     assert _stdout_eof(proc), "stdout still held open after the session ended"
 
 
@@ -164,7 +155,7 @@ def test_candump_death_ends_the_session(shell, edge):
     """Death path 2: candump exiting (crash, iface down) signals the shell, which
     must end the session so the local reader sees EOF, not a silent RX starve."""
     proc = edge.start(shell, candump_lives=False)
-    assert _wait_until(lambda: proc.poll() is not None), f"session survived candump: {edge.diag()}"
+    assert wait_until(lambda: proc.poll() is not None), f"session survived candump: {edge.diag()}"
     assert _stdout_eof(proc), "stdout still held open after candump died"
 
 
@@ -180,10 +171,10 @@ def test_tx_loop_death_ends_the_session(shell, edge):
     proc.stdin.write(b"123#AABB\n")
     proc.stdin.flush()
 
-    assert _wait_until(lambda: proc.poll() is not None), (
+    assert wait_until(lambda: proc.poll() is not None), (
         f"session survived its TX loop: {edge.diag()}"
     )
-    assert _wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
+    assert wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
     assert _stdout_eof(proc), "RX kept streaming after the TX loop died"
 
 
@@ -197,6 +188,6 @@ def test_signalled_shell_reaps_candump(shell, edge):
 
     proc.terminate()
 
-    assert _wait_until(lambda: proc.poll() is not None)
-    assert _wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
+    assert wait_until(lambda: proc.poll() is not None)
+    assert wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
     assert _stdout_eof(proc), "stdout still held open after the shell was signalled"

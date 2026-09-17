@@ -253,13 +253,11 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     # Run with optional trace writer. A bus that can't start (bad interface,
     # unreachable / unauthenticated ssh host, missing remote can-utils, ...)
     # raises can.exceptions.CanError — CanInitializationError and
-    # CanInterfaceNotImplementedError are subclasses. An ssh bus that hits a
-    # PERMANENT failure mid-run (SshPermanentError) lands here too, on purpose:
-    # retrying cannot fix it, so it reports the same way a startup failure does.
-    # Catch it and exit cleanly with a one-line reason instead of dumping a raw
-    # traceback that looks like a crash. _run_codecs_async's try/finally has
-    # already stopped every bus it started, so cleanup is complete by the time
-    # we get here.
+    # CanInterfaceNotImplementedError are subclasses, as is the mid-run
+    # SshPermanentError. Catch it and exit cleanly with a one-line reason instead
+    # of dumping a raw traceback that looks like a crash. _run_codecs_async's
+    # try/finally has already stopped every bus it started, so cleanup is
+    # complete by the time we get here.
     try:
         if output_file:
             with zelos_sdk.TraceWriter(str(output_file)):

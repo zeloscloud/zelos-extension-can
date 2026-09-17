@@ -75,13 +75,9 @@ _STARTUP_STDERR_SETTLE = 0.25
 
 
 class SshPermanentError(can.exceptions.CanInitializationError):
-    """An ssh failure retrying cannot fix: auth denied, host key rejected under
-    the ``strict`` policy, no ``can-utils`` on the edge, a malformed interface name.
-
-    The class IS the verdict. It stays a ``CanError`` subclass, so the app's
-    existing handler logs it once and exits — whether it is raised by the startup
-    probe or mid-run by the reconnect supervisor.
-    """
+    """An ssh failure retrying cannot fix, as judged from stderr: auth denied,
+    host key rejected under the ``strict`` policy, no ``can-utils`` on the edge.
+    See :func:`_classify_ssh_failure`."""
 
 
 # ssh's host-key banner is ~4 KB of boilerplate wrapped around two useful lines
@@ -95,8 +91,6 @@ _BANNER_NEEDLES = (
     "add correct host key",
     "remove with:",
     "offending",
-    # ssh emits this on EVERY connection under the "auto" host-key policy.
-    "permanently added",
 )
 _TAIL_CAP = 200  # chars of stderr appended to a reported error
 # "Offending ECDSA key in /home/u/.ssh/known_hosts:12" — the one banner line
@@ -156,9 +150,11 @@ def _classify_ssh_failure(
     """Turn an ssh failure's stderr tail into a classified, actionable error.
 
     Case-insensitive substring match on the last bytes ssh/candump wrote. The
-    returned CLASS is the verdict: :class:`SshPermanentError` needs an operator,
-    a plain ``CanInitializationError`` is transient and worth a reconnect —
-    including the default case, so an unrecognized failure keeps retrying.
+    returned CLASS is the verdict, and it is the ONLY channel that carries it:
+    :class:`SshPermanentError` means an operator must act, so the app layer logs
+    it once and exits; a plain ``CanInitializationError`` is transient and worth
+    a reconnect — including the default case, so an unrecognized failure keeps
+    retrying.
 
     ``streamed`` (this session got at least one frame out) vetoes every permanent
     verdict: the ring holds the WHOLE session, so a chatty login script or a
@@ -169,12 +165,13 @@ def _classify_ssh_failure(
     """
     low = stderr_tail.lower()
     target = f"{user}@{host}" if user else host
-    permanent = True
+    permanent = False
 
     def has(*needles: str) -> bool:
         return any(n in low for n in needles)
 
     if has("host key verification failed", "remote host identification has changed"):
+        permanent = True
         offending = _OFFENDING_RE.search(stderr_tail)
         where = f" (old key at {offending.group(1)})" if offending else ""
         msg = (
@@ -185,22 +182,22 @@ def _classify_ssh_failure(
             "key the device presents."
         )
     elif has("permission denied"):  # ssh's auth failure line always says this
+        permanent = True
         msg = (
             f"ssh authentication to {host} failed. BatchMode means the extension can never "
             f"prompt for a password. Fix: in your own terminal, "
             f"{_auth_remedy(target, ssh_port, ssh_key_path)} once, then restart this bus."
         )
     elif has("candump: not found", "cansend: not found", "command not found"):
+        permanent = True
         msg = f"the edge {host} is missing can-utils (candump/cansend); install can-utils on it."
     elif has("siocgifindex", "no such device"):
-        # Transient: after a reboot sshd can be up before can0 is configured.
-        permanent = False
+        # After a reboot sshd can be up before can0 is configured.
         msg = (
             f"the edge {host} has no CAN interface {iface} (yet); retrying — if it never "
             "appears, check remote_channel and `ip link` on the edge."
         )
     elif has("could not resolve", "name or service not known", "nodename nor servname"):
-        permanent = False
         msg = f"cannot resolve host {host}; check the remote_host value and your DNS."
     elif has(
         "connection refused",
@@ -208,13 +205,11 @@ def _classify_ssh_failure(
         "no route to host",
         "operation timed out",
     ):
-        permanent = False
         msg = (
             f"cannot reach {host}:{ssh_port}; check that the host is up and that "
             "ssh_port is correct."
         )
     else:
-        permanent = False
         msg = f"ssh-socketcan on {host}:{iface} failed."
 
     suffix = f" (ssh: {_clean_stderr_tail(stderr_tail) or '<no stderr>'})"
@@ -245,7 +240,6 @@ class SshTransport:
         self.channel = channel
         self._fd_mode = fd_mode
         self._stop = threading.Event()
-        self._eof = False
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
         self._writer: threading.Thread | None = None
@@ -257,8 +251,6 @@ class SshTransport:
         # thread so the startup probe / reconnect supervisor can read WHY a link
         # failed (host key / auth / unreachable) instead of guessing.
         self._stderr_tail = b""
-        # Cleaned tail already handed to a caller: one report per transport.
-        self._reported_tail = ""
         # Observability for dropped RX lines (parse failures and oversized
         # carry). Public attributes so the codec/supervisor can surface them.
         self._parse_drops = 0
@@ -272,7 +264,7 @@ class SshTransport:
 
         user, host, iface = parse_ssh_channel(channel)
         if not IFACE_RE.match(iface):
-            raise SshPermanentError(
+            raise can.exceptions.CanInitializationError(
                 f"invalid CAN interface name {iface!r} (must match {IFACE_RE.pattern})"
             )
         self._user, self._host, self._iface = user, host, iface
@@ -330,9 +322,9 @@ class SshTransport:
             if self._proc.poll() is not None:
                 # The session exited before streaming a frame. Wait for the whole
                 # reason, not the first chunk of it: the proc is gone, so its
-                # stderr pipe drains to EOF and the drain thread returns. Under
-                # "auto" ssh writes "Permanently added" BEFORE auth, so a
-                # non-empty ring proves nothing about the real cause.
+                # stderr pipe drains to EOF and the drain thread returns. ssh
+                # writes the CAUSE last (the host-key banner runs 4 KB ahead of
+                # it), so a non-empty ring proves nothing on its own.
                 self._err.join(timeout=_STARTUP_STDERR_SETTLE)
                 failure = self.classify_failure()
                 self._teardown()
@@ -346,10 +338,9 @@ class SshTransport:
         """The single remote shell running BOTH directions, dying as one unit.
 
         ``candump`` streams RX on the channel's stdout; the TX read-loop is the
-        shell's OWN foreground body, feeding stdin lines to ``cansend``. Either
-        side's death ends the session, so the local reader sees EOF instead of a
-        half-dead link that still reads ``healthy`` (a backgrounded read-loop
-        could die alone and silently swallow every TX frame).
+        shell's OWN foreground body, so either side's death ends the session and
+        the local reader sees EOF (a backgrounded read-loop could die alone and
+        silently swallow every TX frame).
 
         Load-bearing details (executed under sh/dash/bash by
         ``tests/test_ssh_remote_shell.py``):
@@ -358,11 +349,6 @@ class SshTransport:
          * The trap covers TERM/INT/HUP as well as EXIT — dash and busybox ash
            skip the EXIT trap on an untrapped fatal signal; ``trap - ...`` first
            blocks re-entry when ``kill 0`` TERMs this shell.
-         * ``kill 0`` signals the whole remote process group; non-interactive
-           shells keep background jobs in the shell's own group.
-         * cansend's output is discarded so it can never corrupt candump's share
-           of stdout. A failing cansend (iface down) is tolerated; that surfaces
-           on the RX side, where candump on a dead iface exits.
 
         Death paths, each ending in a closed channel -> local EOF:
          1. We close stdin -> ``read`` EOFs -> EXIT trap -> ``kill 0`` reaps candump.
@@ -420,6 +406,10 @@ class SshTransport:
                 # and that banner sits in the stderr ring misleading diagnosis.
                 "-o",
                 "GlobalKnownHostsFile=/dev/null",
+                # Silences the "Warning: Permanently added ..." this policy would
+                # emit on EVERY connect (it is INFO); real failures are ERROR.
+                "-o",
+                "LogLevel=ERROR",
             ]
         if ssh_port != 22:
             argv += ["-p", str(ssh_port)]
@@ -444,11 +434,9 @@ class SshTransport:
             try:
                 chunk = os.read(fd, _READ_CHUNK)
             except OSError:
-                self._eof = True
                 break
             if not chunk:
-                self._eof = True
-                break
+                break  # EOF
             # First bytes off candump prove the ssh link is up and streaming;
             # signal the startup probe (idempotent — set() is a no-op after).
             if not self._rx_started.is_set():
@@ -505,7 +493,6 @@ class SshTransport:
                 stdin.write(line.encode() + b"\n")
                 stdin.flush()
             except (BrokenPipeError, OSError):
-                self._eof = True
                 return
 
     def _maybe_log_drops(self) -> None:
@@ -553,10 +540,12 @@ class SshTransport:
 
     @property
     def healthy(self) -> bool:
-        """True iff the ssh proc is running and both RX/TX threads alive; TOTAL."""
+        """True iff the ssh proc is running and both RX/TX threads alive; TOTAL.
+
+        Every EOF / broken-pipe path returns from its thread, so the liveness
+        check below covers them.
+        """
         try:
-            if self._eof:
-                return False
             if self._proc is None or self._proc.poll() is not None:
                 return False
             for thread in (self._reader, self._writer):
@@ -567,26 +556,15 @@ class SshTransport:
             return False
 
     def stderr_tail(self) -> str:
-        """The session's last diagnostic bytes, banner-stripped — reported ONCE.
+        """The session's last diagnostic bytes, banner-stripped ("" when silent).
 
         ssh's 4 KB host-key banner reduces to the fingerprint plus the final
-        cause, and the "Permanently added" line every ``auto`` connection emits
-        is dropped. Returns "" when there is nothing to say or when this
-        transport already handed the same tail out — the supervisor asks on every
-        failed tick, and a transport that outlives a failed rebuild would
-        otherwise re-log an unchanged tail forever.
+        cause.
         """
-        tail = _clean_stderr_tail(bytes(self._stderr_tail).decode("utf-8", "replace"))
-        if not tail or tail == self._reported_tail:
-            return ""
-        self._reported_tail = tail
-        return tail
+        return _clean_stderr_tail(bytes(self._stderr_tail).decode("utf-8", "replace"))
 
     def classify_failure(self) -> can.exceptions.CanInitializationError:
-        """Why this link failed, as an actionable error whose CLASS is the verdict
-        (:class:`SshPermanentError` means an operator must act; retrying is futile).
-        A session that ever streamed a frame can only have failed transiently.
-        Does not consume the tail — :meth:`stderr_tail` does that."""
+        """Why this link failed; see :func:`_classify_ssh_failure` for the verdict."""
         return _classify_ssh_failure(
             self._host,
             self._iface,
