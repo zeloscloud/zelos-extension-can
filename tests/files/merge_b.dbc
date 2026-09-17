@@ -12,3 +12,6 @@ BO_ 769 Merge_Same: 2 DUT
 
 BO_ 770 Merge_Conflict_B: 2 DUT
  SG_ conflict_b : 0|16@1+ (1,0) [0|65535] "" DBG
+
+BO_ 820 Merge_Moved: 1 DUT
+ SG_ moved_value : 0|8@1+ (1,0) [0|255] "" DBG

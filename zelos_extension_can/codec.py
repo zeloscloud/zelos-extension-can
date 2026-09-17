@@ -183,26 +183,36 @@ def _merge_dbcs(
     )
 
     # The decoder names survivors, not objects; pair each back to the cantools
-    # Message the encode / describe paths need. Later files win, so index the
-    # definitions back to front and take the first match.
-    by_key: dict[tuple[int, bool], list[tuple[Path, cantools.database.can.Message]]] = {}
-    for path, db in reversed(list(zip(files, databases, strict=True))):
-        for msg in db.messages:
-            by_key.setdefault((msg.frame_id, msg.is_extended_frame), []).append((path, msg))
+    # Message the encode / describe paths need. Event names are
+    # `{frame_id:0{4,8}x}_{name}`.
+    survivors = {
+        (frame_id, is_extended): event_name.split("_", 1)[1]
+        for frame_id, is_extended, event_name in decoder.message_keys()
+    }
 
-    messages: list[cantools.database.can.Message] = []
+    # Walk the files in list order, each in definition order: the LAST definition
+    # of an id wins, so `messages_by_id` and `messages_by_name` are both
+    # later-file-wins even for a name that sits at two different ids. The
+    # decoder's key order is `(frame_id, is_extended)`, which would resolve such
+    # a name to the higher id instead. A repeated id keeps the position it first
+    # appeared at, so the list stays stable as files are appended.
+    kept: dict[tuple[int, bool], cantools.database.can.Message] = {}
     origin: dict[tuple[int, bool], Path] = {}
-    for frame_id, is_extended, event_name in decoder.message_keys():
-        candidates = by_key.get((frame_id, is_extended))
-        if not candidates:
-            continue
-        # Event names are `{frame_id:0{4,8}x}_{name}`. Prefer the definition the
-        # name points at; fall back to the last file's if the decoder rewrote it
-        # (non-DBC formats can carry names a trace name cannot).
-        name = event_name.split("_", 1)[1]
-        path, msg = next((c for c in candidates if c[1].name == name), candidates[0])
-        messages.append(msg)
-        origin[(frame_id, is_extended)] = path
+    for path, db in zip(files, databases, strict=True):
+        for msg in db.messages:
+            key = (msg.frame_id, msg.is_extended_frame)
+            name = survivors.get(key)
+            if name is None:
+                continue
+            # Prefer the definition the decoder's name points at over one it
+            # rewrote (non-DBC formats can carry names a trace name cannot).
+            incumbent = kept.get(key)
+            if incumbent is not None and incumbent.name == name and msg.name != name:
+                continue
+            kept[key] = msg
+            origin[key] = path
+
+    messages = list(kept.values())
 
     conflicts: list[dict[str, Any]] = []
     for record in decoder.dbc_conflicts():

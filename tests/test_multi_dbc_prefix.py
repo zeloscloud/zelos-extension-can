@@ -55,13 +55,19 @@ def test_merge_dedupes_identical_and_reports_the_conflict(caplog):
     ):
         codec = CanCodec(_merged_config(), bus_name="busA")
 
-    assert [m.name for m in codec.messages] == [
-        "Merge_A",
-        "Merge_Same",
-        "Merge_Conflict_B",
-        "Merge_B",
-        "Merge_C",
+    # File order, not id order: merge_a's 0x352 precedes merge_b's 0x310.
+    assert [(m.name, m.frame_id) for m in codec.messages] == [
+        ("Merge_A", 768),
+        ("Merge_Same", 769),
+        ("Merge_Conflict_B", 770),
+        ("Merge_Moved", 850),
+        ("Merge_B", 784),
+        ("Merge_Moved", 820),
+        ("Merge_C", 800),
     ]
+    # A name at two ids resolves to the LATER FILE's definition (merge_b, 0x334),
+    # not the higher id (merge_a, 0x352).
+    assert codec._resolve_dbc_message("Merge_Moved").frame_id == 820
     assert codec.dbc_conflicts == [
         {
             "frame_id": 770,
@@ -219,10 +225,10 @@ def test_get_tx_state_keeps_the_single_dbc_view_and_adds_the_list(merged_codec):
         "path": str(DBC_A),
         "name": "merge_a.dbc",
         "hash": merged_codec.dbc_hash,
-        "message_count": 5,
+        "message_count": 7,
     }
     assert [d["name"] for d in bus["dbcs"]] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
-    assert [d["message_count"] for d in bus["dbcs"]] == [3, 3, 1]
+    assert [d["message_count"] for d in bus["dbcs"]] == [4, 4, 1]
     assert {d["path"] for d in bus["dbcs"]} == {str(p) for p in MERGE_SET}
     assert all(len(d["hash"]) == 16 for d in bus["dbcs"])
     assert bus["dbc_conflicts"] == merged_codec.dbc_conflicts
