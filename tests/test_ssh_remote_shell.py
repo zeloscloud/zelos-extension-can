@@ -9,12 +9,16 @@ now that both directions share one session.
 
 ``kill 0`` signals the shell's whole process group, so every shell here is
 started with ``start_new_session=True`` — which is how sshd runs a remote command
-and the reason this file cannot take the test runner down with it.
+and the reason this file cannot take the test runner down with it. The one case
+that must NOT get a session for free (a daemon-hosted sshd hands its own group to
+every session) gets a stand-in caller group instead, never pytest's.
 """
 
 import contextlib
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,6 +31,26 @@ CMD = SshTransport._remote_command(IFACE)
 # busybox ash is not installable on darwin; dash is the same ash lineage and is
 # the /bin/sh of the Debian-family images these edges usually run.
 SHELLS = [p for p in ("/bin/sh", "/bin/dash", "/bin/bash") if Path(p).exists()]
+# darwin has no setsid, so the own-group case brings its own: util-linux and
+# busybox both exec in place when the caller does not lead its group, which is
+# the only case the remote command calls it in.
+SETSID_STANDIN = """\
+import os, sys
+
+if os.getpgrp() == os.getpid():
+    if os.fork():  # a group leader cannot setsid, so real setsid forks and exits
+        os._exit(0)
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+"""
+
+
+def _pgid(pid: int) -> int:
+    """The process group of ``pid``; raises if it is gone (no /proc on darwin)."""
+    ps = subprocess.run(
+        ["ps", "-o", "pgid=", "-p", str(pid)], capture_output=True, text=True, check=False
+    )
+    return int(ps.stdout.strip())  # never a default: callers signal what this returns
 
 
 def _alive(pid: int) -> bool:
@@ -64,6 +88,7 @@ class _Edge:
         self.bin = root / "bin"
         self.bin.mkdir()
         self.pid_file = root / "candump.pid"
+        self.sibling_file = root / "sibling.pid"
         self.tx_log = root / "tx.log"
         self.proc: subprocess.Popen | None = None
         # cansend appends every frame it is handed.
@@ -74,14 +99,16 @@ class _Edge:
         path.write_text("#!/bin/sh\n" + body)
         path.chmod(0o755)
 
-    def start(self, shell: str, *, candump_lives: bool) -> subprocess.Popen:
-        """Spawn the remote shell. candump records its pid, then either sleeps
-        (a live capture) or exits (death path 2). The sleep outlasts every
-        assertion here, so a reap that never happened cannot pass by timing."""
-        tail = "exec sleep 30\n" if candump_lives else "exit 3\n"
+    def _candump(self, lives: bool) -> None:
+        """candump records its pid, then either sleeps (a live capture) or exits
+        (death path 2). The sleep outlasts every assertion here, so a reap that
+        never happened cannot pass by timing."""
+        tail = "exec sleep 30\n" if lives else "exit 3\n"
         self._script("candump", f"echo $$ > {self.pid_file}\n" + tail)
+
+    def _spawn(self, argv: list[str]) -> subprocess.Popen:
         self.proc = subprocess.Popen(
-            [shell, "-c", CMD],
+            argv,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -90,6 +117,40 @@ class _Edge:
             start_new_session=True,  # `kill 0` must never reach pytest
         )
         return self.proc
+
+    def start(self, shell: str, *, candump_lives: bool) -> subprocess.Popen:
+        """Spawn the remote shell the way OpenSSH's sshd does: its own session."""
+        self._candump(candump_lives)
+        return self._spawn([shell, "-c", CMD])
+
+    def start_in_caller_group(self, shell: str) -> subprocess.Popen:
+        """Spawn the remote shell the way a daemon-hosted sshd does: sharing the
+        CALLER's process group, which already holds an unrelated sibling.
+
+        That is the Tailscale SSH shape (`tailscaled be-child ssh --cmd=...`),
+        where every session lands in the daemon's group. The caller group is a
+        session of its own, so a regression reaps the sibling, never pytest.
+        """
+        self._candump(True)
+        setsid_py = self.root / "setsid.py"
+        setsid_py.write_text(SETSID_STANDIN)
+        interp = f"{shlex.quote(sys.executable)} {shlex.quote(str(setsid_py))}"
+        self._script("setsid", f'exec {interp} "$@"\n')
+        caller = self.root / "caller.sh"
+        caller.write_text(
+            "#!/bin/sh\n"
+            # The sibling joins this group first (no job control, so it does) and
+            # drops the stdio it inherited, which the session's EOF is measured on.
+            f"sleep 30 >/dev/null 2>&1 &\necho $! > {self.sibling_file}\n"
+            '"$1" -c "$2"\n'
+            "exit $?\n"  # never the last command: the session must be a CHILD of ours
+        )
+        caller.chmod(0o755)
+        return self._spawn([str(caller), shell, CMD])
+
+    def sibling_pid(self) -> int:
+        assert wait_until(self.sibling_file.exists), f"caller never started: {self.diag()}"
+        return int(self.sibling_file.read_text().strip())
 
     def candump_pid(self) -> int:
         assert wait_until(self.pid_file.exists), f"candump stand-in never ran: {self.diag()}"
@@ -114,13 +175,19 @@ class _Edge:
         return [ln.split()[-1] for ln in self.tx_log.read_text().splitlines() if ln.strip()]
 
     def cleanup(self) -> None:
-        """Kill the shell's process group, which is where every stand-in lives.
-        Safe after the shell is reaped: a process-group id is not reused while
-        the group still has a member."""
+        """Kill the process groups the stand-ins live in — the one we spawned,
+        plus candump's own, which is a DIFFERENT group once the session moves
+        itself out of the caller's. Safe after the shell is reaped: a
+        process-group id is not reused while the group still has a member."""
         if self.proc is None:
             return
+        groups = {self.proc.pid}  # start_new_session → pid is the pgid
         with contextlib.suppress(Exception):
-            os.killpg(self.proc.pid, 9)  # start_new_session → pid is the pgid
+            groups.add(_pgid(int(self.pid_file.read_text().strip())))
+        for pgid in groups:
+            if pgid > 1:  # never 0 (pytest's own group) or -1 (every process)
+                with contextlib.suppress(Exception):
+                    os.killpg(pgid, 9)
         with contextlib.suppress(Exception):
             self.proc.wait(timeout=2)
 
@@ -191,3 +258,23 @@ def test_signalled_shell_reaps_candump(shell, edge):
     assert wait_until(lambda: proc.poll() is not None)
     assert wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
     assert _stdout_eof(proc), "stdout still held open after the shell was signalled"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_session_owns_its_process_group(shell, edge):
+    """The field case: a session handed the caller's process group must move out
+    of it before the trap is armed, or its `kill 0` reaps everything else in
+    there — the other buses' candumps on the same edge, and the operator's own
+    unrelated sessions. Death path 1 still has to reap OUR candump."""
+    proc = edge.start_in_caller_group(shell)
+    pid, sibling = edge.candump_pid(), edge.sibling_pid()
+    caller_pgid = proc.pid  # start_new_session → the caller leads the group
+
+    assert _pgid(sibling) == caller_pgid, "the sibling is not in the caller's group"
+    assert _pgid(pid) != caller_pgid, f"session still in the caller's group: {edge.diag()}"
+
+    proc.stdin.close()
+    assert wait_until(lambda: proc.poll() is not None), f"session outlived its stdin: {edge.diag()}"
+    assert wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
+    assert _alive(sibling), "the session reaped a sibling it does not own"
+    assert _stdout_eof(proc), "stdout still held open after the session ended"

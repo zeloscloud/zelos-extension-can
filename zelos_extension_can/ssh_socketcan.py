@@ -349,6 +349,22 @@ class SshTransport:
          * The trap covers TERM/INT/HUP as well as EXIT — dash and busybox ash
            skip the EXIT trap on an untrapped fatal signal; ``trap - ...`` first
            blocks re-entry when ``kill 0`` TERMs this shell.
+         * ``kill 0`` reaps candump AND anything it spawned, so the session must
+           OWN its process group. Not every server gives it one: under Tailscale
+           SSH (``tailscaled be-child ssh``) every session of every user runs in
+           the daemon's group, where one session's teardown reaped the other
+           buses' candumps and the operator's unrelated sessions. OpenSSH's sshd
+           ``setsid``s each command, which is why only the field saw this.
+         * ``kill -0 -$$`` asks whether a process group with our pid exists, i.e.
+           whether we lead our own group (a pgid IS its leader's pid). Only when
+           we do not is ``setsid`` wanted, and that is exactly the case where
+           util-linux and busybox ``setsid`` both exec in place rather than fork
+           — so the server keeps one child holding one stdin/stdout, and no
+           parent exits early and closes the channel under us. Without ``setsid``
+           on the edge we are no worse off than before.
+         * ``exec`` keeps it all one process, so ``$$`` is this same shell in
+           either branch, and ``reap`` is a function only to keep the command
+           free of nested single quotes.
 
         Death paths, each ending in a closed channel -> local EOF:
          1. We close stdin -> ``read`` EOFs -> EXIT trap -> ``kill 0`` reaps candump.
@@ -356,11 +372,18 @@ class SshTransport:
             ``kill 0``.
          3. Shell signalled from outside -> TERM/HUP trap -> ``kill 0`` reaps candump.
         """
-        return (
+        session = (
             "exec 3<&0; "
-            "trap 'trap - EXIT TERM INT HUP; kill 0 2>/dev/null' EXIT TERM INT HUP; "
+            "reap() { trap - EXIT TERM INT HUP; kill 0 2>/dev/null; }; "
+            "trap reap EXIT TERM INT HUP; "
             f"{{ candump -L {iface}; kill -TERM $$; }} & "
             f'while IFS= read -r f; do cansend {iface} "$f" >/dev/null 2>&1; done <&3'
+        )
+        # Single-quoted: every expansion above belongs to the shell that runs it.
+        return (
+            f"c='{session}'; "
+            "if ! kill -0 -$$ 2>/dev/null && command -v setsid >/dev/null 2>&1; "
+            'then exec setsid sh -c "$c"; else exec sh -c "$c"; fi'
         )
 
     @staticmethod
