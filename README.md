@@ -6,13 +6,14 @@
 - 📤 **Sending CAN frames** - Send CAN messages directly from the Zelos App
 - ⚙️ **Supports any CAN HW/SW stack** - Support for SocketCAN, PCAN, Kvaser, Vector, and virtual interfaces
 - 📄 **Multiple database formats** - Supports DBC, ARXML, KCD, and SYM formats
+- 🗂️ **Several databases per bus** - Layer DBCs in order; a later file wins a conflicting message id
 - 📁 **Trace file conversion** - Convert CAN logs to Zelos format for offline analysis
 - 🚗 **Demo mode** - Built-in EV simulation for testing without hardware
 
 ## Quick Start
 
 1. **Install** the extension from the Zelos App
-2. **Configure** your CAN connection and provide your database file (.dbc, .arxml, .kcd, or .sym)
+2. **Configure** your CAN connection and add your database files (.dbc, .arxml, .kcd, or .sym)
 3. **Start** the extension to begin streaming data
 4. **View** real-time data in your Zelos App
 
@@ -21,16 +22,44 @@
 All configuration is managed through the Zelos App settings interface.
 
 ### Required Settings
-- **Database File**: Upload your CAN database file (`.dbc`, `.arxml`, `.kcd`, or `.sym` format)
 - **Interface**: Choose your CAN adapter type (zelos-socketcan, ssh-socketcan, socketcan, pcan, kvaser, vector, virtual, or demo). On Linux, `zelos-socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
 - **Channel**: Specify the CAN channel/device name
 
-### Optional Settings
-- **Bitrate**: CAN bus bitrate (default: 500000)
-- **FD Mode**: Enable CAN-FD support
-- **Timestamp Mode**: Control how timestamps are interpreted (auto, absolute, ignore)
-- **Schema Emission**: Emit all schemas on startup or lazily as messages appear
-- **Raw Frame Logging**: Log undecoded raw CAN frames for debugging
+### Per-Bus Settings
+| Setting | What it does |
+|---|---|
+| **Database Files (.dbc)** | Ordered list of CAN databases. Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus. |
+| **On Conflicting Definitions** | `warn` (default) keeps the later file's definition; `error` refuses to start. |
+| **Name** | Trace segment for this bus. Defaults to the channel with `. @ :` replaced by `_`. |
+| **Bitrate** | CAN bus bitrate (default 500000). |
+| **FD Mode** | Enable CAN-FD support. |
+
+### Advanced Settings
+
+One value each, applied to every bus. Collapsed by default.
+
+| Setting | What it does |
+|---|---|
+| **Prefix** | Leading trace source every bus publishes under (default `CAN`). |
+| **Log Raw CAN Frames** | Log undecoded frames alongside the decoded signals (default on). |
+| **Receive Own Messages** | Receive frames this host transmits. |
+| **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
+| **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
+| **Log Level** | Logging verbosity for all buses. |
+
+### Trace layout
+
+With the default prefix, one source carries every bus:
+
+```
+CAN/can0/0064_DUT_Status    decoded signals
+CAN/can0/Frame              undecoded frames
+CAN/log                     extension logs
+```
+
+Clear **Prefix** in Advanced settings to keep the previous per-bus layout:
+one source named after each bus, events unprefixed (`can0/0064_DUT_Status`,
+`can0/Frame`), and logs on their own `can_log` source.
 
 ## Remote CAN over SSH (`ssh-socketcan`)
 
@@ -67,8 +96,7 @@ loopback, so every transmit is traced exactly once.
 - **SSH Key Path**: private key to authenticate with (optional).
 - **SSH Extra Options**: extra `ssh` flags, e.g.
   `-o StrictHostKeyChecking=accept-new` or a `-J bastion` jump host.
-- Plus the shared **Database File**, **Timestamp Mode**, **Raw Frame Logging**,
-  and **Schema Emission** settings.
+- Plus the shared **Database Files** setting and the global **Advanced** ones.
 
 ### Notes
 - If a connection fails, the extension reports a specific reason (untrusted host
@@ -113,7 +141,7 @@ The extension includes a command-line interface for advanced use cases. No insta
 ### CAN Bus Tracing
 
 ```bash
-# Launch trace process
+# Launch trace process (pass several DBCs to layer them, later files win)
 uv run main.py trace socketcan can0 /path/to/file.dbc
 
 # Launch trace process and record to .trz file
@@ -121,6 +149,13 @@ uv run main.py trace socketcan can0 /path/to/file.dbc --file
 
 # Convert candump log to Zelos trace format (supports .asc, .blf, .trc, .log, .csv, .mf4)
 uv run main.py convert capture.log vehicle.dbc
+
+# Convert against several DBCs, or none at all (raw frames only)
+uv run main.py convert capture.log base.dbc overlay.dbc
+uv run main.py convert capture.log
+
+# Name the trace source after the input file instead of the prefix
+uv run main.py convert capture.log vehicle.dbc --prefix ''
 ```
 
 ## Support
