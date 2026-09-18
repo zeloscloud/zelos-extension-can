@@ -76,9 +76,8 @@ def test_merge_dedupes_overlaps_and_reports_the_conflict(caplog):
         "Merge_Conflict_A",
         "Merge_Conflict_B",
     ]
-    # A name at two ids resolves to the LATER FILE's definition (merge_b, 0x334),
-    # not the higher id (merge_a, 0x352).
-    assert codec._resolve_dbc_message("Merge_Moved").frame_id == 820
+    # A name at two ids resolves to neither; each definition has its own key.
+    assert codec._resolve_dbc_message("0352_Merge_Moved").frame_id == 850
     # Same id AND same name, different layout: the only conflict shape left.
     assert codec.dbc_conflicts == [
         {
@@ -113,7 +112,7 @@ def test_unpaired_merge_keys_are_reported(caplog):
     db.messages[0].name = "Renamed_Long_Symbol"  # cantools' name, not the file's
 
     with caplog.at_level(logging.ERROR, logger="zelos_extension_can.codec"):
-        messages, _origin, _conflicts, _overlaps, counts = _merge_dbcs([DBC_C], [db], "warn")
+        messages, _origin, _keys, _conflicts, _overlaps, counts = _merge_dbcs([DBC_C], [db], "warn")
 
     errors = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
     for fragment in ("Renamed_Long_Symbol", "Merge_C", "merge_c.dbc", "0x320"):
@@ -287,32 +286,46 @@ def test_list_and_describe_report_the_owning_file(merged_codec):
     listed = merged_codec.list_messages()
     assert listed["dbc_name"] == "merge_a.dbc"
     assert listed["dbcs"] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
-    by_name = {m["name"]: m for m in listed["messages"]}
-    assert by_name["Merge_A"]["database"] == "merge_a.dbc"
-    assert by_name["Merge_C"]["database"] == "merge_c.dbc"
+    by_key = {m["key"]: m for m in listed["messages"]}
+    assert by_key["0300_Merge_A"]["database"] == "merge_a.dbc"
+    assert by_key["0320_Merge_C"]["database"] == "merge_c.dbc"
     # Different names on 0x302: two entries, each with its owning file.
-    assert by_name["Merge_Conflict_A"]["database"] == "merge_a.dbc"
-    assert by_name["Merge_Conflict_B"]["database"] == "merge_b.dbc"
-    assert by_name["Merge_Conflict_A"]["can_id"] == by_name["Merge_Conflict_B"]["can_id"] == 770
-    # One entry per NAME, so the name at two ids appears once — as the
-    # definition a transmit by that name reaches (merge_b, 0x334) — and the one
-    # it shadows is named, not silently missing.
-    assert [m["name"] for m in listed["messages"]].count("Merge_Moved") == 1
-    assert by_name["Merge_Moved"]["can_id"] == 820
-    assert by_name["Merge_Moved"]["database"] == "merge_b.dbc"
-    assert by_name["Merge_Moved"]["shadowed"] == [
-        {"file": "merge_a.dbc", "can_id": 850, "is_extended": False}
-    ]
-    assert by_name["Merge_A"]["shadowed"] == []
+    assert by_key["0302_Merge_Conflict_A"]["database"] == "merge_a.dbc"
+    assert by_key["0302_Merge_Conflict_B"]["database"] == "merge_b.dbc"
+    assert by_key["0302_Merge_Conflict_A"]["can_id"] == 770
+    assert by_key["0302_Merge_Conflict_B"]["can_id"] == 770
 
-    described = merged_codec.describe_message("Merge_C")
+    described = merged_codec.describe_message("0320_Merge_C")
     assert described["dbcs"] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
+    assert described["message"]["key"] == "0320_Merge_C"
     assert described["message"]["database"] == "merge_c.dbc"
-    assert described["message"]["shadowed"] == []
-    # describe names the SAME definition as the list entry, with the same list.
-    moved = merged_codec.describe_message("Merge_Moved")["message"]
-    assert moved["can_id"] == 820
-    assert moved["shadowed"] == by_name["Merge_Moved"]["shadowed"]
+
+
+def test_a_name_at_two_ids_is_addressed_by_key_only(merged_codec):
+    """merge_a puts Merge_Moved at 0x352, merge_b at 0x334. Both are listed and
+    both transmit — by key. The bare name refuses and names them."""
+    listed = merged_codec.list_messages()["messages"]
+    moved = [m for m in listed if m["name"] == "Merge_Moved"]
+    # File order: merge_a's definition precedes merge_b's.
+    assert [(m["key"], m["can_id"], m["database"]) for m in moved] == [
+        ("0352_Merge_Moved", 850, "merge_a.dbc"),
+        ("0334_Merge_Moved", 820, "merge_b.dbc"),
+    ]
+
+    for key, can_id in (("0352_Merge_Moved", 850), ("0334_Merge_Moved", 820)):
+        merged_codec.send_message(key, '{"moved_value": 7}')
+        assert merged_codec.bus.send.call_args.args[0].arbitration_id == can_id
+
+    # A name only one definition carries still works bare.
+    merged_codec.send_message("Merge_A", '{"a_value": 1}')
+    assert merged_codec.bus.send.call_args.args[0].arbitration_id == 768
+
+    with pytest.raises(ValueError) as excinfo:
+        merged_codec.send_message("Merge_Moved", '{"moved_value": 7}')
+    assert "0334_Merge_Moved" in str(excinfo.value)
+    assert "0352_Merge_Moved" in str(excinfo.value)
+
+    assert merged_codec.describe_message("0352_Merge_Moved")["message"]["can_id"] == 850
 
 
 # ── zero-DBC bus ─────────────────────────────────────────────────────────────

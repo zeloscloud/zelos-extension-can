@@ -98,11 +98,11 @@ def get_tx_state(codec: str) -> dict[str, Any]:
 
 @action(
     "List Messages",
-    "DBC message summary list for a bus — names + identifiers only, no "
-    "per-signal metadata. One entry per name: the definition a transmit by that "
-    "name reaches, with any same-name definition at another id under "
-    "`shadowed`. Use describe_message to fetch a specific message's "
-    "full signal detail on demand.",
+    "DBC message summary list for a bus — identifiers only, no per-signal "
+    "metadata. One entry per definition, keyed by `key` (`<id hex>_<Name>`, the "
+    "trace event name), which is what the transmit actions address. Use "
+    "describe_message to fetch a specific message's full signal detail on "
+    "demand.",
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 def list_messages(codec: str) -> dict[str, Any]:
@@ -112,10 +112,12 @@ def list_messages(codec: str) -> dict[str, Any]:
 @action(
     "Describe Message",
     "Full signal-level detail for a single DBC message (units, ranges, "
-    "value tables, mux structure).",
+    "value tables, mux structure). "
+    "`message` is a key from list_messages, or a name only one "
+    "definition carries.",
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
-@action.text("message", title="DBC message name")
+@action.text("message", title="DBC message key or name")
 def describe_message(codec: str, message: str) -> dict[str, Any]:
     return _get_codec(codec).describe_message(message)
 
@@ -166,9 +168,14 @@ def start_periodic_raw(
 # ─── Send (DBC) ─────────────────────────────────────────────────────────────
 
 
-@action("Send Message", "Send a one-shot DBC-encoded message")
+@action(
+    "Send Message",
+    "Send a one-shot DBC-encoded message. "
+    "`message` is a key from list_messages, or a name only one "
+    "definition carries.",
+)
 @action.select("codec", title="CAN bus", choices=_available_codecs)
-@action.text("message", title="DBC message name")
+@action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
 @action.text("mux", title="Multiplexer (optional)", required=False, default="")
 def send_message(codec: str, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
@@ -177,10 +184,13 @@ def send_message(codec: str, message: str, signals_json: str, mux: str = "") -> 
 
 @action(
     "Encode Preview",
-    "Encode a DBC message without transmitting. Returns the bytes that send_message would emit.",
+    "Encode a DBC message without transmitting. Returns the bytes that "
+    "send_message would emit. "
+    "`message` is a key from list_messages, or a name only one "
+    "definition carries.",
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
-@action.text("message", title="DBC message name")
+@action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
 @action.text("mux", title="Multiplexer (optional)", required=False, default="")
 def encode_preview(codec: str, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
@@ -189,10 +199,12 @@ def encode_preview(codec: str, message: str, signals_json: str, mux: str = "") -
 
 @action(
     "Start Periodic Message",
-    "Start DBC-encoded periodic transmission. Returns {task_id, replaced}.",
+    "Start DBC-encoded periodic transmission. Returns {task_id, replaced}. "
+    "`message` is a key from list_messages, or a name only one "
+    "definition carries.",
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
-@action.text("message", title="DBC message name")
+@action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
 @action.number(
     "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100

@@ -29,8 +29,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - DBC provenance on the wire: `dbcs`, `dbc_conflicts`, `dbc_overlaps`, and a
   per-message `database` on `get_tx_state` / `list_messages` /
   `describe_message`.
-- `list_messages` / `describe_message` carry `shadowed`: the same-name
-  definitions at other ids that a transmit by that name will NOT reach.
+- **Every definition is addressable by `key`** (`0334_Merge_Moved`, its trace
+  event name): `list_messages` lists them all, the transmit actions take a key
+  or a name only one definition carries, and a name at several ids refuses to
+  transmit rather than picking one.
 
 ### Changed
 - Default trace paths are `CAN/<bus>/...` — decoded signals, raw frames, and

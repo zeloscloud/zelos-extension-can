@@ -34,6 +34,7 @@ from zelos_extension_can.codec import (
     _parse_data_hex,
     _parse_mux,
     _parse_signals_json,
+    _raw_slot,
     _scale_precision,
     _task_id,
     _validate_id_range,
@@ -100,15 +101,15 @@ class TestPureHelpers:
             _validate_id_range(0x20000000, is_extended=True)
 
     def test_task_id_is_stable_across_payload_changes(self):
-        # Same key for the same CAN ID + frame kind on the same bus →
+        # Same slot for the same CAN ID + frame kind on the same bus →
         # starting the periodic twice replaces the prior slot.
-        a = _task_id(0x100, is_extended=False, mux="raw")
-        b = _task_id(0x100, is_extended=False, mux="raw")
+        a = _task_id(_raw_slot(0x100, is_extended=False), mux="raw")
+        b = _task_id(_raw_slot(0x100, is_extended=False), mux="raw")
         assert a == b == "0x100:std:raw"
 
     def test_task_id_distinguishes_std_vs_ext(self):
         # Standard vs extended frames with the same numeric ID stay separate slots.
-        assert _task_id(0x100, False) != _task_id(0x100, True)
+        assert _raw_slot(0x100, False) != _raw_slot(0x100, True)
 
     def test_parse_mux_returns_none_int_or_label(self):
         assert _parse_mux("") is None
@@ -208,33 +209,31 @@ class TestListMessages:
         names = {m["name"] for m in result["messages"]}
         assert {"DUT_Status", "DUT_Command", "DUT_Logging"} <= names
         status = next(m for m in result["messages"] if m["name"] == "DUT_Status")
-        # Summary shape — identifiers plus the file it came from.
+        # Summary shape — key + identifiers plus the file it came from.
         assert set(status.keys()) == {
+            "key",
             "name",
             "can_id",
             "is_extended",
             "dlc",
             "cycle_time_ms",
             "database",
-            "shadowed",
         }
+        assert status["key"] == f"{status['can_id']:04x}_DUT_Status"
         assert status["database"] == "test.dbc"
-        assert status["shadowed"] == []
         assert "signals" not in status
         assert result["dbcs"] == ["test.dbc"]
 
-    def test_one_entry_per_name_names_what_it_shadows(self, codec):
-        """test.dbc defines Duplicate_Message at two ids. The catalog is what
-        the TX webapp picks a row from, so it lists the name ONCE — the
-        definition a transmit by that name reaches — and names the other."""
+    def test_every_definition_is_listed_under_its_own_key(self, codec):
+        """test.dbc defines Duplicate_Message at two ids. Both are listed, each
+        addressable by key; the bare name is not."""
         messages = codec.list_messages()["messages"]
         dups = [m for m in messages if m["name"] == "Duplicate_Message"]
 
-        assert len(dups) == 1
-        assert dups[0]["can_id"] == codec._resolve_dbc_message("Duplicate_Message").frame_id == 500
-        assert dups[0]["shadowed"] == [{"file": "test.dbc", "can_id": 400, "is_extended": False}]
-        # The shadowed definition is still decoded on receive.
-        assert len(codec.messages_by_id[(400, False)]) == 1
+        assert [m["key"] for m in dups] == ["0190_Duplicate_Message", "01f4_Duplicate_Message"]
+        assert codec._resolve_dbc_message("0190_Duplicate_Message").frame_id == 400
+        with pytest.raises(ValueError, match="defined at several ids"):
+            codec._resolve_dbc_message("Duplicate_Message")
 
 
 class TestDescribeMessage:

@@ -52,6 +52,10 @@ Two databases that define one message id:
 | **Overlap** — same id, **different** names | Both definitions survive: a frame decodes under each, into its own table (`0302_Batt_Status` *and* `0302_Batt_Debug`). Logged at INFO, reported as `dbc_overlaps`. |
 | **Conflict** — same id, **same** name, different layout | One definition wins and the other is dropped. `warn` keeps the later file's and reports it as `dbc_conflicts`; `error` refuses to start. |
 
+One message name at two ids (a moved message) is neither: both definitions
+survive and both are listed. Address each by its `key` — a transmit by the bare
+name refuses and names the keys.
+
 ### Advanced Settings
 
 One value each, applied to every bus.
@@ -143,7 +147,7 @@ The extension provides several actions accessible from the Zelos App:
 
 - **List Codecs**: Names of every configured bus
 - **Get TX State**: One bus's periodics, DBC list, and bus-health metrics
-- **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per message *name*, the definition a transmit by that name reaches; any same-name definition at another id is listed under `shadowed` (address those by id). Every definition still decodes on receive.
+- **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key` (`0334_Merge_Moved`: its id and name, and the name of its trace event). The transmit actions take a key, or a name only one definition carries.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
 - **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
