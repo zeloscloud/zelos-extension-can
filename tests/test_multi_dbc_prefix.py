@@ -231,8 +231,9 @@ def test_validate_name_rejects_a_catalog_separator():
         _validate_name("CAN/x", "Prefix")
 
 
-def test_create_codecs_rejects_a_bus_name_with_a_catalog_separator():
-    config = {"buses": [{"name": "can.0", "interface": "virtual", "channel": "vcan0"}]}
+@pytest.mark.parametrize("name", ["can.0", "can_log"])  # separator, log-source name
+def test_create_codecs_rejects_an_illegal_bus_name(name):
+    config = {"buses": [{"name": name, "interface": "virtual", "channel": "vcan0"}]}
     with pytest.raises(SystemExit), patch("zelos_sdk.TraceSource"):
         _create_codecs(config, TEST_DBC, resolve_advanced({}))
 

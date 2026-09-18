@@ -6,7 +6,7 @@ from pathlib import Path
 
 import rich_click as click
 
-from ..codec import DEFAULT_PREFIX
+from ..codec import DEFAULT_PREFIX, name_error
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,9 @@ def convert(
       zelos-extension-can convert capture.trc decoder.dbc -f
     """
     from ..converter import SUPPORTED_FORMATS, _convert_with_progress
+
+    if error := name_error(prefix, "Prefix"):
+        raise click.BadParameter(error)
 
     # Setup logging
     log_level = logging.DEBUG if verbose else logging.INFO

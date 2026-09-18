@@ -8,7 +8,7 @@ import math
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
@@ -143,6 +143,10 @@ def _hash_dbc_file(path: Path) -> str:
 #: the app's `advanced.prefix`, the `trace` and `convert` CLI commands.
 DEFAULT_PREFIX = "CAN"
 
+#: Trace name the extension's own logs take: the source when the prefix is
+#: cleared, the event segment under it when set. Reserved as a bus name.
+LOG_SOURCE_NAME = "can_log"
+
 #: Event type stamped on every decoded message table, base and mux, matching
 #: what the Rust codec emits. A family type: the fields are the DBC message's
 #: own, so it only marks the table as a CAN decode.
@@ -160,6 +164,29 @@ def trace_layout(prefix: str, bus: str) -> tuple[str, str | None, str]:
     if prefix:
         return prefix, bus, f"{bus}/Frame"
     return bus, None, "Frame"
+
+
+def name_error(value: str, label: str, reserved: Collection[str] = ()) -> str | None:
+    """Why `value` is not usable as a trace name, or None if it is.
+
+    Trace names are an allow-list — letters, digits, space, `_`, `-`. A prefix
+    or bus name is user-typed and becomes a source name or an event segment, so
+    a catalog separator (`/ . @ :`) in it would silently re-nest the tree. The
+    SDK's sanitizer is the allow-list; anything it rewrites is rejected here
+    rather than quietly renamed.
+    """
+    if not value:
+        return None  # cleared prefix / unset bus name; the caller decides
+    if value in reserved:
+        return f"Invalid {label} {value!r}: reserved for the extension's own log source."
+    clean = zelos_sdk.sanitize_name(value, kind="source")
+    if clean == value:
+        return None
+    offender = next((c for c, ok in zip(value, clean, strict=False) if c != ok), value[-1])
+    return (
+        f"Invalid {label} {value!r}: {offender!r} is not allowed. "
+        "Use letters, digits, space, '_' or '-'."
+    )
 
 
 def bus_database_files(bus_config: dict[str, Any]) -> list[str]:
@@ -901,17 +928,26 @@ class CanCodec(can.Listener):
             bus=self._ebus,
         )
 
-        self._transport = SshTransport(
-            self._ebus,
-            self.config["channel"],
-            ssh_port=self.config.get("ssh_port", 22),
-            ssh_key_path=self.config.get("ssh_key_path"),
-            ssh_extra_opts=self.config.get("ssh_extra_opts"),
-            ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
-            ssh_hw_timestamps=self.config.get("ssh_hw_timestamps", True),
-            fd_mode=self.fd_mode,
-            ever_connected=self._ssh_ever_connected,
-        )
+        try:
+            self._transport = SshTransport(
+                self._ebus,
+                self.config["channel"],
+                ssh_port=self.config.get("ssh_port", 22),
+                ssh_key_path=self.config.get("ssh_key_path"),
+                ssh_extra_opts=self.config.get("ssh_extra_opts"),
+                ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
+                ssh_hw_timestamps=self.config.get("ssh_hw_timestamps", True),
+                fd_mode=self.fd_mode,
+                ever_connected=self._ssh_ever_connected,
+            )
+        except BaseException:
+            # A transport that never came up leaves a live Rust codec behind,
+            # and a bus whose start() raised is never handed to stop() (see
+            # _run_codecs_async). Tear it down as stop() would, then re-raise.
+            self._native.stop()
+            self._native = None
+            self._ebus = None
+            raise
         # Contact is proven by a streamed frame, never by construction: the
         # probe passes an idle-but-alive session too, and a wrong remote_channel
         # on a slow connect must not turn "no such device" transient forever. A

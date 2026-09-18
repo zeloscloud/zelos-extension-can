@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import sys
+from collections.abc import Collection
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,14 @@ from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from .. import ACTION_PREFIX
 from .. import actions as can_actions
-from ..codec import DEFAULT_PREFIX, CanCodec, bus_database_files, trace_layout
+from ..codec import (
+    DEFAULT_PREFIX,
+    LOG_SOURCE_NAME,
+    CanCodec,
+    bus_database_files,
+    name_error,
+    trace_layout,
+)
 from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
@@ -57,26 +65,12 @@ def resolve_advanced(config: dict) -> dict:
     return advanced
 
 
-def _validate_name(value: str, label: str) -> None:
-    """Exit unless `value` is already a legal trace name.
-
-    Trace names are an allow-list — letters, digits, space, `_`, `-`. A prefix
-    or bus name is user-typed and becomes a source name or an event segment, so
-    a catalog separator (`/ . @ :`) in it would silently re-nest the tree. The
-    SDK's sanitizer is the allow-list; anything it rewrites is rejected here
-    rather than quietly renamed.
-    """
-    clean = zelos_sdk.sanitize_name(value, kind="source")
-    if clean == value:
-        return
-    offender = next((c for c, ok in zip(value, clean, strict=False) if c != ok), value[-1])
-    logger.error(
-        "Invalid %s %r: %r is not allowed. Use letters, digits, space, '_' or '-'.",
-        label,
-        value,
-        offender,
-    )
-    sys.exit(1)
+def _validate_name(value: str, label: str, reserved: Collection[str] = ()) -> None:
+    """Exit with a one-line reason unless `value` is a legal trace name."""
+    error = name_error(value, label, reserved)
+    if error:
+        logger.error("%s", error)
+        sys.exit(1)
 
 
 def _prepare_bus_config(
@@ -191,7 +185,7 @@ def _create_codecs(
         if bus_name:
             # With a prefix the name becomes an event segment, without one a
             # source name; either way it must already be a legal trace name.
-            _validate_name(bus_name, "bus Name")
+            _validate_name(bus_name, "bus Name", (LOG_SOURCE_NAME,))
         else:
             # No explicit name: derive from the channel. Channels can contain
             # '.', '@', ':' (ssh-socketcan's "user@host:iface"), which are
@@ -254,8 +248,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     config = load_config()
     advanced = resolve_advanced(config)
     prefix = str(advanced.get("prefix") or "").strip()
-    if prefix:
-        _validate_name(prefix, "Prefix")
+    _validate_name(prefix, "Prefix")
 
     # Apply log level from config (global setting)
     log_level_str = advanced["log_level"]
@@ -298,7 +291,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     # empty second one. Same layout rule as every other entry point: a prefix
     # means one source for every bus; cleared, each bus owns its own and the
     # logs get theirs.
-    log_source_name, _, _ = trace_layout(prefix, "can_log")
+    log_source_name, _, _ = trace_layout(prefix, LOG_SOURCE_NAME)
     global_source = zelos_sdk.init_global_source(log_source_name)
     shared_source = global_source if prefix else None
     if prefix:

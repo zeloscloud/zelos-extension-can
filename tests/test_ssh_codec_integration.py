@@ -441,6 +441,8 @@ def test_start_raises_can_error_on_transport_failure(make_ssh_codec, monkeypatch
 
     with pytest.raises(can.exceptions.CanError):
         codec.start()
+    # The half-built native state is torn down, not left running.
+    assert (codec._native, codec._ebus) == (None, None)
 
 
 def test_run_codecs_async_propagates_can_error_and_cleans_up(make_ssh_codec, monkeypatch):

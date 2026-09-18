@@ -7,7 +7,7 @@ from pathlib import Path
 import rich_click as click
 import zelos_sdk
 
-from ..codec import DEFAULT_PREFIX, CanCodec
+from ..codec import DEFAULT_PREFIX, CanCodec, name_error
 from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,9 @@ def trace(
 
       zelos-extension-can trace socketcan can0 vehicle.dbc --prefix ''
     """
+    if error := name_error(prefix, "Prefix"):
+        raise click.BadParameter(error)
+
     # Build config from CLI arguments
     config = {
         "interface": interface,

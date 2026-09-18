@@ -239,7 +239,9 @@ def test_rx_frames_decode_through_codec(fake_ssh, make_codec, make_transport):
 
     fake_ssh.proc.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
 
-    assert wait_until(lambda: codec.metrics().messages_received >= 1)
+    # The two counters are independent atomics and decoded lands after the
+    # emit, so wait on the later one before reading the pair.
+    assert wait_until(lambda: codec.metrics().messages_decoded >= 1)
     m = codec.metrics()
     assert m.messages_received >= 1
     assert m.messages_decoded >= 1

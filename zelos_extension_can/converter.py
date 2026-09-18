@@ -12,7 +12,7 @@ from typing import Any
 import can
 import zelos_sdk
 
-from .codec import DEFAULT_PREFIX, trace_layout
+from .codec import DEFAULT_PREFIX, name_error, trace_layout
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +346,9 @@ Supported formats: .asc, .blf, .trc, .log, .csv, .mf4
         level=log_level,
         format="%(levelname)s: %(message)s",
     )
+
+    if error := name_error(args.prefix, "Prefix"):
+        parser.error(error)
 
     # Validate input file
     if not args.input_file.exists():
