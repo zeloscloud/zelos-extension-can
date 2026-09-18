@@ -301,6 +301,21 @@ def test_rx_oversized_carry_dropped(fake_ssh, make_codec, make_transport):
     assert transport.healthy is True
 
 
+def test_cansend_stderr_counts_tx_errors(fake_ssh, make_codec, make_transport):
+    """cansend's stderr is the ONLY evidence a remote write failed (the read
+    loop ignores its exit status on purpose), so each such line counts one
+    tx_error — and an unrelated ssh line counts none."""
+    ebus, _codec = make_codec()
+    transport = make_transport(ebus)
+
+    fake_ssh.proc.feed_stderr(
+        b"write: No buffer space available\nssh: connection noise\nsh: cansend: not found\n"
+    )
+
+    assert wait_until(lambda: transport.tx_errors == 2)
+    assert "No buffer space available" in transport.stderr_tail()
+
+
 def test_stderr_flood_does_not_stall_rx(fake_ssh, make_codec, make_transport):
     """>64 KB of stderr must be drained continuously, not block the remote
     write; RX keeps flowing while stderr floods."""
@@ -551,6 +566,8 @@ def test_clean_stderr_tail_keeps_only_fingerprint_and_cause():
         ("Host key verification failed.", "host key", True, False, False),
         ("zelos@edge: Permission denied (publickey).", "authentication", True, False, False),
         ("bash: candump: command not found", "can-utils", True, False, False),
+        # the session's own cansend preflight (missing can-utils on the edge)
+        ("cansend: not found", "can-utils", True, False, False),
         # a bus that never made contact names an interface the edge does not
         # have: retrying cannot conjure it
         ("SIOCGIFINDEX: No such device", "has no CAN interface can0;", True, False, False),
@@ -561,6 +578,9 @@ def test_clean_stderr_tail_keeps_only_fingerprint_and_cause():
         ("connect to host edge port 22: Connection refused", "cannot reach", False, False, False),
         ("connect to host edge port 22: Operation timed out", "cannot reach", False, False, False),
         ("Connection to edge closed by remote host.", "failed", False, False, False),
+        # a login profile's unrelated missing command is NOT a can-utils verdict:
+        # it would otherwise make every later transient drop on this bus permanent
+        ("sh: 1: motd-fortune: command not found", "failed", False, False, False),
         ("", "failed", False, False, False),  # EOF mid-capture, nothing written
         # a frame streamed => auth/can-utils were fine, so pre-auth noise still
         # in the whole-session ring can never read as permanent
@@ -588,6 +608,17 @@ def test_host_key_error_quotes_the_offending_file():
     assert "/Users/z/.ssh/known_hosts:12" in msg  # which entry is stale
     assert "ssh-keygen -R edge" in msg
     assert '"auto"' in msg  # the one-setting way out
+
+
+def test_host_key_remedy_is_port_qualified():
+    """known_hosts keys a non-default port as `[host]:port`, and a bare
+    `ssh host` would re-trust a DIFFERENT server, so both halves carry it."""
+    err = ssh_socketcan._classify_ssh_failure(
+        "edge", "can0", 2222, CHANGED_KEY_STDERR, user="zelos"
+    )
+    msg = str(err)
+    assert "ssh-keygen -R '[edge]:2222'" in msg
+    assert "ssh -p 2222 zelos@edge" in msg
 
 
 @pytest.mark.parametrize(
@@ -630,6 +661,22 @@ def test_remote_command_hardware_timestamps():
     assert "candump -h" not in off
     assert "$H" not in off
     assert "candump -L can0" in off
+
+
+def test_remote_command_requires_cansend_and_keeps_its_stderr():
+    """A missing cansend would drop every TX on a bus reporting healthy, so the
+    session refuses to start (127, pre-trap so no `kill 0`, with the needle the
+    classifier calls permanent). A cansend that RUNS and fails loses only its
+    stdout, so the errno line reaches the local stderr ring."""
+    cmd = ssh_socketcan.SshTransport._remote_command("can0")
+    preflight = "command -v cansend >/dev/null 2>&1 || { echo cansend: not found >&2; exit 127; }"
+
+    assert preflight in cmd
+    assert cmd.index(preflight) < cmd.index("trap reap")
+    assert 'cansend can0 "$f" >/dev/null; done' in cmd
+    assert "2>&1; done" not in cmd  # never a discarded stderr on the TX loop
+    # The session is single-quoted whole, so it may not contain a quote itself.
+    assert cmd.count("'") == 2
 
 
 # ── argv construction (pure; no proc, no threads) ────────────────────────────

@@ -56,6 +56,10 @@ os.execvp(sys.argv[1], sys.argv[1:])
 """
 
 
+# One candump output line, used where a test has to watch RX keep flowing.
+RX_LINE = b"(1.0) can0 064#0011223344556677"
+
+
 def _pgid(pid: int) -> int:
     """The process group of ``pid``; raises if it is gone (no /proc on darwin)."""
     ps = subprocess.run(
@@ -102,6 +106,8 @@ class _Edge:
         self.sibling_file = root / "sibling.pid"
         self.tx_log = root / "tx.log"
         self.proc: subprocess.Popen | None = None
+        # Everything the channel has written so far, per stream (see `read`).
+        self._seen = {"stdout": b"", "stderr": b""}
         # cansend appends every frame it is handed.
         self._script("cansend", f'echo "$@" >> {self.tx_log}\n')
 
@@ -110,13 +116,19 @@ class _Edge:
         path.write_text("#!/bin/sh\n" + body)
         path.chmod(0o755)
 
-    def _candump(self, lives: bool) -> None:
+    def _candump(self, lives: bool, rx_frames: bool = False) -> None:
         """candump answers `-h` with a usage line listing `-H`, the way can-utils
         2020.11 does, so the session's hardware-timestamp detection resolves and
         the real invocation carries `-H`. It then records its pid and either
-        sleeps (a live capture) or exits (death path 2). The sleep outlasts every
+        sleeps (a live capture), streams frames on a loop (a capture whose RX
+        can be watched), or exits (death path 2). The sleep outlasts every
         assertion here, so a reap that never happened cannot pass by timing."""
-        tail = "exec sleep 600\n" if lives else "exit 3\n"
+        if not lives:
+            tail = "exit 3\n"
+        elif rx_frames:
+            tail = f'while :; do echo "{RX_LINE.decode()}"; sleep 1; done\n'
+        else:
+            tail = "exec sleep 600\n"
         self._script(
             "candump",
             'if [ "$1" = -h ]; then\n'
@@ -138,9 +150,11 @@ class _Edge:
         )
         return self.proc
 
-    def start(self, shell: str, *, candump_lives: bool) -> subprocess.Popen:
+    def start(
+        self, shell: str, *, candump_lives: bool, rx_frames: bool = False
+    ) -> subprocess.Popen:
         """Spawn the remote shell the way OpenSSH's sshd does: its own session."""
-        self._candump(candump_lives)
+        self._candump(candump_lives, rx_frames)
         return self._spawn([shell, "-c", CMD])
 
     def start_in_caller_group(self, shell: str) -> subprocess.Popen:
@@ -187,6 +201,16 @@ class _Edge:
             with contextlib.suppress(OSError):
                 out.append(f"{name}={os.read(fd, 4096)!r}")
         return f"rc={self.proc.poll()} " + " ".join(out)
+
+    def read(self, name: str) -> bytes:
+        """Everything the channel has written on ``name`` so far, accumulated —
+        the local side's stderr ring and RX reader read the same two fds."""
+        assert self.proc is not None
+        fd = getattr(self.proc, name).fileno()
+        os.set_blocking(fd, False)
+        with contextlib.suppress(OSError):
+            self._seen[name] += os.read(fd, 65536) or b""
+        return self._seen[name]
 
     def tx_lines(self) -> list[str]:
         """The frames cansend was handed, iface column dropped."""
@@ -263,6 +287,48 @@ def test_tx_loop_death_ends_the_session(shell, edge):
     )
     assert wait_until(lambda: not _alive(pid)), f"candump orphaned on the edge: {edge.diag()}"
     assert _stdout_eof(proc), "RX kept streaming after the TX loop died"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_failing_cansend_is_visible_and_not_fatal(shell, edge):
+    """A write that FAILS (ENOBUFS on a saturated bus) is transient: the loop
+    ignores cansend's status, so RX keeps streaming and the bus stays up — but
+    the reason rides the channel's stderr (where the local ring counts it) so
+    the failure is visible instead of silently dropped. Death path 1 still ends
+    the session afterwards."""
+    edge._script("cansend", 'echo "write: No buffer space available" >&2\nexit 1\n')
+    proc = edge.start(shell, candump_lives=True, rx_frames=True)
+    edge.candump_pid()
+
+    proc.stdin.write(b"123#AABB\n")
+    proc.stdin.flush()
+
+    assert wait_until(lambda: b"write: No buffer space available" in edge.read("stderr")), (
+        f"cansend's stderr never reached the channel: {edge.diag()}"
+    )
+    assert proc.poll() is None, "a failed TX tore down the session"
+    assert wait_until(lambda: edge.read("stdout").count(RX_LINE) >= 2), (
+        "RX stopped after a failed TX"
+    )
+
+    proc.stdin.close()
+    assert wait_until(lambda: proc.poll() is not None), f"session outlived its stdin: {edge.diag()}"
+    assert _stdout_eof(proc), "stdout still held open after the session ended"
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_missing_cansend_fails_the_session_at_start(shell, edge):
+    """No cansend on the edge means every TX vanishes while candump keeps RX —
+    and `healthy` — looking fine, so the session must die at start, with the
+    needle the classifier reads as permanent (127, before the trap is armed)."""
+    (edge.bin / "cansend").unlink()
+    proc = edge.start(shell, candump_lives=True)
+
+    assert wait_until(lambda: proc.poll() is not None), (
+        f"session survived a missing cansend: {edge.diag()}"
+    )
+    assert wait_until(lambda: b"cansend: not found" in edge.read("stderr"))
+    assert proc.returncode == 127
 
 
 @pytest.mark.parametrize("shell", SHELLS)

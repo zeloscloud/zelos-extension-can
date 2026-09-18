@@ -70,6 +70,10 @@ class _StubTransport:
         self.fd_mode = fd_mode
         self.ever_connected = ever_connected
         self.healthy = True
+        # A real transport sets this from its reader thread on the first frame;
+        # the codec reads it as the only proof this bus made contact.
+        self.streamed = False
+        self.tx_errors = 0
         self.teardowns = 0
         self.stderr = ""
         self.failure = can.exceptions.CanInitializationError("transient")
@@ -244,6 +248,7 @@ def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports, capl
     assert shim.is_active is True
 
     old_transport.healthy = False  # simulate a dead ssh link
+    old_transport.tx_errors = 2  # cansend failures reported before it died
     with caplog.at_level(logging.INFO, logger=codec_mod.__name__):
         ok = asyncio.run(codec._reconnect_bus())
 
@@ -265,10 +270,30 @@ def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports, capl
     # The rebuilt transport carries the same durable ExternalBus + channel.
     assert new_transport.bus is ebus_before
     assert new_transport.channel == "zelos@edge:vcan0"
-    # The first transport had never made contact; the rebuilt one inherits the
-    # codec's flag, so a "no such device" now reads as transient.
+    # Neither transport ever streamed a frame, so "no such device" still reads
+    # as a wrong remote_channel (see test_ever_connected_needs_a_streamed_frame).
     assert old_transport.ever_connected is False
-    assert new_transport.ever_connected is True
+    assert new_transport.ever_connected is False
+    # The dead transport's TX failures are folded in, not reset by the rebuild.
+    assert codec.get_tx_state()["bus"]["metrics"]["tx_errors"] == 2
+
+
+def test_ever_connected_needs_a_streamed_frame(make_ssh_codec, stub_transports):
+    """`ever_connected` is what turns a later "no such device" transient, so it
+    must come from PROOF. Construction proves nothing: the startup probe passes
+    an idle-but-alive session after its grace, and a wrong remote_channel on a
+    slow connect would otherwise look transient forever."""
+    codec = make_ssh_codec()
+    assert codec._ssh_ever_connected is False
+
+    codec._transport.healthy = False
+    assert asyncio.run(codec._reconnect_bus()) is True
+    assert stub_transports[1].ever_connected is False  # still nothing streamed
+
+    stub_transports[1].streamed = True  # a frame reached this session
+    stub_transports[1].healthy = False
+    assert asyncio.run(codec._reconnect_bus()) is True
+    assert stub_transports[2].ever_connected is True
 
 
 def test_reconnect_transport_build_failure_preserves_codec_then_recovers(

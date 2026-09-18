@@ -57,6 +57,10 @@ _STDERR_CHUNK = 4096
 # remote is streaming garbage, so drop it rather than grow toward OOM.
 _MAX_LINE = 65536
 _DROP_LOG_INTERVAL = 5.0  # seconds between rate-limited drop-diagnostic logs
+# Marks a stderr line as cansend's own TX failure: the shell's "not found" line,
+# and the `write: <errno>` line one failed frame produces (ENOBUFS on a saturated
+# bus). Matched case-insensitively, one line per failed frame.
+_TX_ERROR_NEEDLES = (b"cansend", b"write:")
 _JOIN_TIMEOUT = 2.0
 _WAIT_TIMEOUT = 2.0
 _NEXT_TX_TIMEOUT = 0.5
@@ -164,8 +168,10 @@ def _classify_ssh_failure(
     fires before the first frame. Matching runs on the RAW tail; only the
     appended copy is banner-stripped.
 
-    ``ever_connected`` (an earlier session on this codec made contact) is what
-    splits a missing CAN interface: see that branch below.
+    ``ever_connected`` (an earlier session on this codec STREAMED A FRAME — see
+    :attr:`SshTransport.streamed`; an idle session that merely survived the
+    startup probe does not count) is what splits a missing CAN interface: see
+    that branch below.
     """
     low = stderr_tail.lower()
     target = f"{user}@{host}" if user else host
@@ -178,12 +184,17 @@ def _classify_ssh_failure(
         permanent = True
         offending = _OFFENDING_RE.search(stderr_tail)
         where = f" (old key at {offending.group(1)})" if offending else ""
+        # known_hosts keys a non-default port as `[host]:port`, and plain
+        # `ssh host` would re-trust a DIFFERENT server, so both halves of the
+        # remedy carry the port (as the auth remedy already does).
+        entry = f"'[{host}]:{ssh_port}'" if ssh_port != 22 else host
+        port = f" -p {ssh_port}" if ssh_port != 22 else ""
         msg = (
             f"ssh host key for {host} is not trusted, or has changed — a reimaged device "
             f"presents a new one{where}. Fix: in your own terminal run "
-            f"`ssh-keygen -R {host}`, accept the new key with `ssh {target}`, then restart "
-            'this bus; or set this bus\'s SSH Host Key Policy to "auto" to trust whatever '
-            "key the device presents."
+            f"`ssh-keygen -R {entry}`, accept the new key with `ssh{port} {target}`, then "
+            'restart this bus; or set this bus\'s SSH Host Key Policy to "auto" to trust '
+            "whatever key the device presents."
         )
     elif has("permission denied"):  # ssh's auth failure line always says this
         permanent = True
@@ -192,11 +203,20 @@ def _classify_ssh_failure(
             f"prompt for a password. Fix: in your own terminal, "
             f"{_auth_remedy(target, ssh_port, ssh_key_path)} once, then restart this bus."
         )
-    elif has("candump: not found", "cansend: not found", "command not found"):
+    elif has(
+        # Exactly the two binaries, in the two spellings a shell reports them
+        # (`bash: candump: command not found` matches by substring). A bare
+        # "command not found" also fires on an unrelated line from a login
+        # profile, which would make a later transient drop permanent.
+        "candump: not found",
+        "cansend: not found",
+        "candump: command not found",
+        "cansend: command not found",
+    ):
         permanent = True
         msg = f"the edge {host} is missing can-utils (candump/cansend); install can-utils on it."
     elif has("siocgifindex", "no such device"):
-        # Never connected: the interface name is wrong, and no amount of
+        # Never streamed a frame: the interface name is wrong, and no amount of
         # retrying finds an interface the edge does not have. Once a session has
         # worked, the same message means the edge is rebooting or the adapter is
         # re-enumerating — sshd comes up before can0 is configured — so retry.
@@ -276,6 +296,12 @@ class SshTransport:
         self._parse_drops = 0
         self._overflow_drops = 0
         self._last_drop_log = 0.0
+        # Frames cansend reported failing, counted off the session's stderr: the
+        # remote read loop deliberately ignores cansend's exit status (a
+        # transient ENOBUFS must not tear the bus down), so stderr is the ONLY
+        # evidence a write failed. Read by the codec, reported as `tx_errors`.
+        self.tx_errors = 0
+        self._last_tx_error_log = 0.0
 
         if shutil.which("ssh") is None:
             raise can.exceptions.CanInterfaceNotImplementedError(
@@ -393,6 +419,15 @@ class SshTransport:
            into the argv) and is empty when unsupported, where an unquoted
            ``$H`` expands to no argument at all. ``-h`` reads ``/dev/null`` so a
            candump that wanted stdin could not eat TX frames off the channel.
+         * ``cansend`` is REQUIRED to exist, checked pre-trap: without it every
+           TX frame would vanish while candump kept RX (and ``healthy``)
+           looking fine. Exit 127 fails the session at start, which the local
+           side classifies permanent off the needle in the message.
+         * A cansend that RUNS and fails (ENOBUFS on a saturated bus) must NOT
+           end the session — that would tear down a live bus over a transient
+           write. Its status is therefore ignored and only its stdout is
+           discarded, so the errno line reaches the local stderr ring, where it
+           is counted as ``tx_errors``.
 
         Death paths, each ending in a closed channel -> local EOF:
          1. We close stdin -> ``read`` EOFs -> EXIT trap -> ``kill 0`` reaps candump.
@@ -409,11 +444,19 @@ class SshTransport:
             detect, dump = "", f"candump -L {iface}"
         session = (
             "exec 3<&0; "
+            # Pre-trap (so no `kill 0`) and before RX starts: a missing cansend
+            # would otherwise drop EVERY frame on a bus reporting healthy. The
+            # message is the needle _classify_ssh_failure calls permanent. No
+            # single quotes — the whole session is single-quoted below.
+            "command -v cansend >/dev/null 2>&1 || { echo cansend: not found >&2; exit 127; }; "
             f"{detect}"
             "reap() { trap - EXIT TERM INT HUP; kill 0 2>/dev/null; }; "
             "trap reap EXIT TERM INT HUP; "
             f"{{ {dump}; kill -TERM $$; }} & "
-            f'while IFS= read -r f; do cansend {iface} "$f" >/dev/null 2>&1; done <&3'
+            # Only stdout is discarded: cansend's stderr is the only evidence a
+            # write failed, so it rides the channel into the local stderr ring.
+            # Its exit status is ignored on purpose (see the docstring).
+            f'while IFS= read -r f; do cansend {iface} "$f" >/dev/null; done <&3'
         )
         # Single-quoted: every expansion above belongs to the shell that runs it.
         return (
@@ -567,6 +610,33 @@ class SshTransport:
             self._overflow_drops,
         )
 
+    def _maybe_log_tx_errors(self, last: bytes) -> None:
+        """Rate-limited warning: TX is failing while the link reads healthy."""
+        now = time.monotonic()
+        if now - self._last_tx_error_log < _DROP_LOG_INTERVAL:
+            return
+        self._last_tx_error_log = now
+        logger.warning(
+            "ssh-socketcan (%s) cansend reported %d failed TX frame(s); last: %s",
+            self.channel,
+            self.tx_errors,
+            last.decode("utf-8", "replace").strip(),
+        )
+
+    def _count_tx_errors(self, buf: bytes) -> bytes:
+        """Count cansend's complaints in ``buf``; return its unterminated tail.
+
+        One failed frame is one stderr line, so the lines ARE the count.
+        """
+        *lines, rest = buf.split(b"\n")
+        hits = [ln for ln in lines if any(n in ln.lower() for n in _TX_ERROR_NEEDLES)]
+        if hits:
+            self.tx_errors += len(hits)
+            self._maybe_log_tx_errors(hits[-1])
+        # Nothing this long is a cansend error line; drop the carry rather than
+        # grow it on a remote streaming newline-less garbage.
+        return rest if len(rest) <= _STDERR_CAP else b""
+
     def _drain_stderr(self) -> None:
         """Drain the session's stderr into a bounded ring; log NOTHING.
 
@@ -574,13 +644,16 @@ class SshTransport:
         remote write. Logging here too put the same 4 KB banner in the log three
         times — the party that ACTS on the failure reports it (the probe raises,
         the supervisor logs). Publishes an immutable ``bytes`` snapshot after
-        every read, so the probe/supervisor never races this thread.
+        every read, so the probe/supervisor never races this thread. cansend's
+        lines are counted on the way past (``tx_errors``), the one signal a
+        remote write failed.
         """
         proc = self._proc
         if proc is None or proc.stderr is None:
             return
         fd = proc.stderr.fileno()
         ring = bytearray()
+        carry = b""
         while True:
             try:
                 chunk = os.read(fd, _STDERR_CHUNK)
@@ -594,6 +667,7 @@ class SshTransport:
             # Publish an immutable snapshot; attribute assignment is atomic, so a
             # concurrent reader always sees a consistent (if slightly stale) tail.
             self._stderr_tail = bytes(ring)
+            carry = self._count_tx_errors(carry + chunk)
 
     # ── State / teardown ─────────────────────────────────────────────────
 
@@ -613,6 +687,13 @@ class SshTransport:
             return True
         except Exception:
             return False
+
+    @property
+    def streamed(self) -> bool:
+        """Did this session ever get a frame out? The ONLY proof the link works:
+        the startup probe also passes an idle-but-alive session. The codec reads
+        it to decide whether this bus has ever made contact."""
+        return self._rx_started.is_set()
 
     def stderr_tail(self) -> str:
         """The session's last diagnostic bytes, banner-stripped ("" when silent).

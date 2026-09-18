@@ -180,6 +180,45 @@ def _definition_key(msg: cantools.database.can.Message) -> tuple[int, bool, str]
     return (msg.frame_id, msg.is_extended_frame, msg.name)
 
 
+def _report_unpaired(
+    defined: dict[tuple[int, bool, str], Path],
+    survivors: set[tuple[int, bool, str]],
+) -> None:
+    """Log every definition the two parsers failed to pair, and keep going.
+
+    Pairing is by (id, extended, name), so a definition the two parsers name
+    differently matches nothing — a DBC-attribute rename cantools applies and
+    the Rust parser does not (`SystemMessageLongSymbol` was one) does exactly
+    that. Such a definition decodes under the decoder's name but is absent
+    from TX and describe, so say so on both sides rather than drop it
+    silently. A conflict or an identical duplicate shares its key with its
+    winner and is NOT reported here. Nothing fails the bus.
+    """
+    for frame_id, is_extended, name in sorted(defined.keys() - survivors):
+        logger.error(
+            "DBC definition 0x%x (extended=%s) '%s' from %s pairs with no decoder definition "
+            "of that name; it will not be addressable for transmit or describe",
+            frame_id,
+            is_extended,
+            name,
+            defined[(frame_id, is_extended, name)],
+        )
+    for frame_id, is_extended, name in sorted(survivors - defined.keys()):
+        at_id = ", ".join(
+            f"'{n}' in {p.name}"
+            for (i, e, n), p in defined.items()
+            if (i, e) == (frame_id, is_extended)
+        )
+        logger.error(
+            "decoder definition 0x%x (extended=%s) '%s' pairs with no DBC definition of that "
+            "name (the files define %s at that id); it decodes but cannot be addressed by name",
+            frame_id,
+            is_extended,
+            name,
+            at_id or "nothing",
+        )
+
+
 def _merge_dbcs(
     files: Sequence[Path],
     databases: Sequence[cantools.database.can.Database],
@@ -228,15 +267,18 @@ def _merge_dbcs(
     # appended.
     kept: dict[tuple[int, bool, str], cantools.database.can.Message] = {}
     origin: dict[tuple[int, bool, str], Path] = {}
+    defined: dict[tuple[int, bool, str], Path] = {}
     for path, db in zip(files, databases, strict=True):
         for msg in db.messages:
             key = _definition_key(msg)
+            defined[key] = path
             if key not in survivors:
                 continue
             kept[key] = msg
             origin[key] = path
 
     messages = list(kept.values())
+    _report_unpaired(defined, survivors)
 
     conflicts: list[dict[str, Any]] = []
     for record in decoder.dbc_conflicts():
@@ -466,11 +508,17 @@ class CanCodec(can.Listener):
         # SshTransport (rebuilt on reconnect). None on every other interface.
         self._ebus: Any = None
         self._transport: Any = None
-        # ssh-socketcan only: a session on THIS codec has made contact, so a
+        # ssh-socketcan only: a session on THIS codec streamed a frame, so a
         # later "no such device" is the edge re-enumerating rather than a wrong
         # interface name. Per codec, not per transport — a transport rebuilt
-        # after a working session inherits it (see _classify_ssh_failure).
+        # after a working session inherits it (see _classify_ssh_failure). Set
+        # only from a transport's proven `streamed`, never from construction:
+        # the startup probe also passes an idle session.
         self._ssh_ever_connected = False
+        # ssh-socketcan only: cansend failures counted on transports already
+        # retired. The live transport's own count is added on read, so the
+        # reported total never goes backwards across a rebuild.
+        self._ssh_tx_errors_retired = 0
 
         # Timestamp handling - use enum for fast comparison
         timestamp_mode_str = config.get("timestamp_mode", "auto").upper()
@@ -586,6 +634,9 @@ class CanCodec(can.Listener):
         # last-wins so TX by name agrees with the merge.
         self.messages_by_id: dict[tuple[int, bool], list[cantools.database.can.Message]] = {}
         self.messages_by_name: dict[str, cantools.database.can.Message] = {}
+        # Per name, the definitions `messages_by_name` shadows — i.e. everything
+        # TX by that name will NOT reach. Empty unless one name sits at two ids.
+        self._shadowed_by_name: dict[str, list[dict[str, Any]]] = {}
 
         # Keyed per definition, plus the mux value for a subtable.
         self._events: dict[tuple[int, bool, str] | tuple[int, bool, str, int], Any] = {}
@@ -593,7 +644,8 @@ class CanCodec(can.Listener):
         for msg in self.messages:
             id_key = self._message_key(msg.frame_id, msg.is_extended_frame)
             self.messages_by_id.setdefault(id_key, []).append(msg)
-            if msg.name in self.messages_by_name:
+            prior = self.messages_by_name.get(msg.name)
+            if prior is not None:
                 logger.warning(
                     "Message name '%s' is redefined by %s (ID %d); the later definition wins, "
                     "address the earlier one by ID",
@@ -601,6 +653,7 @@ class CanCodec(can.Listener):
                     self.message_origin[_definition_key(msg)].name,
                     msg.frame_id,
                 )
+                self._shadowed_by_name.setdefault(msg.name, []).append(self._definition_ref(prior))
             self.messages_by_name[msg.name] = msg
 
         # On the Rust paths (zelos-socketcan / ssh-socketcan) the Rust codec
@@ -859,9 +912,13 @@ class CanCodec(can.Listener):
             fd_mode=self.fd_mode,
             ever_connected=self._ssh_ever_connected,
         )
-        # The startup probe passed, so this bus has made contact: a LATER
-        # "no such device" is transient, not a wrong remote_channel.
-        self._ssh_ever_connected = True
+        # Contact is proven by a streamed frame, never by construction: the
+        # probe passes an idle-but-alive session too, and a wrong remote_channel
+        # on a slow connect must not turn "no such device" transient forever. A
+        # session that starts streaming after the probe is picked up by
+        # _rebuild_ssh_transport, which reads the transport it replaces.
+        if self._transport.streamed:
+            self._ssh_ever_connected = True
         self.bus = CodecTxAdapter(self._native, self._transport, self.config["channel"])
         self.running = True
         logger.info("ssh-socketcan codec started on %s", self.config["channel"])
@@ -996,6 +1053,12 @@ class CanCodec(can.Listener):
         # reference: a failed rebuild below must not leave the supervisor reading
         # a torn-down transport's stderr ring.
         if self._transport is not None:
+            # Read the outgoing transport before it goes: it is the only party
+            # that knows whether this bus ever streamed a frame, and its TX
+            # failures must survive in the reported total.
+            if self._transport.streamed:
+                self._ssh_ever_connected = True
+            self._ssh_tx_errors_retired += self._transport.tx_errors
             try:
                 self._transport.teardown()
             except Exception:
@@ -1023,7 +1086,6 @@ class CanCodec(can.Listener):
                 fd_mode=self.fd_mode,
                 ever_connected=self._ssh_ever_connected,
             )
-            self._ssh_ever_connected = True
             self.bus.transport = self._transport
             logger.info("[%s] ssh transport rebuilt, codec preserved", self.bus_name)
             return True
@@ -1611,6 +1673,17 @@ class CanCodec(can.Listener):
             return self._native_tx_metrics
         return {"tx_errors": 0, "tx_overflows": 0}
 
+    def _ssh_tx_error_count(self) -> int:
+        """Remote writes cansend reported failing, across transport rebuilds.
+
+        The Rust codec hands every frame to the transport successfully, so a
+        failed `cansend` shows up NOWHERE else: the transport counts the lines
+        it wrote to the session's stderr, and a retired transport's total is
+        folded in when it is replaced.
+        """
+        live = self._transport.tx_errors if self._transport is not None else 0
+        return self._ssh_tx_errors_retired + live
+
     # ─── DBC shapes shared by the wire-contract methods ────────────────────
 
     def _first_dbc(self) -> Path | None:
@@ -1622,6 +1695,14 @@ class CanCodec(can.Listener):
         """Name of the file the merge took this definition from."""
         origin = self.message_origin.get(_definition_key(msg))
         return origin.name if origin else None
+
+    def _definition_ref(self, msg: cantools.database.can.Message) -> dict[str, Any]:
+        """Wire form of one shadowed definition: where it is, not what it holds."""
+        return {
+            "file": self._message_database(msg),
+            "can_id": int(msg.frame_id),
+            "is_extended": bool(msg.is_extended_frame),
+        }
 
     def get_tx_state(self) -> dict[str, Any]:
         # Extension id/version/state intentionally NOT included — that info
@@ -1641,6 +1722,10 @@ class CanCodec(can.Listener):
             native_tx = self._native_tx_counts()
             tx_errors += native_tx["tx_errors"]
             tx_overflows += native_tx["tx_overflows"]
+            # ssh-socketcan adds one more source: the remote cansend, whose
+            # failures only ever appear on the session's stderr.
+            if self._use_ssh:
+                tx_errors += self._ssh_tx_error_count()
         else:
             rx = {
                 "messages_received": self.metrics.messages_received,
@@ -1678,6 +1763,16 @@ class CanCodec(can.Listener):
         }
 
     def list_messages(self) -> dict[str, Any]:
+        """One entry per NAME — the definition TX by that name resolves to.
+
+        `messages_by_name` is keyed by name and last-wins, so iterating it lists
+        exactly what `send_message` / `encode_preview` / `start_periodic_message`
+        would reach, in first-appearance order. A name at two ids therefore
+        appears once, and the definitions it shadows are named in `shadowed` so
+        the omission is visible rather than a row that would transmit elsewhere.
+        RX decoding is unaffected: every definition still decodes (see
+        `messages_by_id`).
+        """
         db_path = self._first_dbc()
         return {
             "bus": self.bus_name,
@@ -1687,12 +1782,15 @@ class CanCodec(can.Listener):
                 {
                     **_describe_dbc_message_summary(msg),
                     "database": self._message_database(msg),
+                    "shadowed": self._shadowed_by_name.get(msg.name, []),
                 }
-                for msg in self.messages
+                for msg in self.messages_by_name.values()
             ],
         }
 
     def describe_message(self, message: str) -> dict[str, Any]:
+        """Detail for the definition TX by this name resolves to; same
+        `shadowed` list as the matching `list_messages` entry."""
         dbc_msg = self._resolve_dbc_message(message)
         db_path = self._first_dbc()
         return {
@@ -1702,6 +1800,7 @@ class CanCodec(can.Listener):
             "message": {
                 **_describe_dbc_message(dbc_msg),
                 "database": self._message_database(dbc_msg),
+                "shadowed": self._shadowed_by_name.get(dbc_msg.name, []),
             },
         }
 

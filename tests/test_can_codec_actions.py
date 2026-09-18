@@ -216,10 +216,25 @@ class TestListMessages:
             "dlc",
             "cycle_time_ms",
             "database",
+            "shadowed",
         }
         assert status["database"] == "test.dbc"
+        assert status["shadowed"] == []
         assert "signals" not in status
         assert result["dbcs"] == ["test.dbc"]
+
+    def test_one_entry_per_name_names_what_it_shadows(self, codec):
+        """test.dbc defines Duplicate_Message at two ids. The catalog is what
+        the TX webapp picks a row from, so it lists the name ONCE — the
+        definition a transmit by that name reaches — and names the other."""
+        messages = codec.list_messages()["messages"]
+        dups = [m for m in messages if m["name"] == "Duplicate_Message"]
+
+        assert len(dups) == 1
+        assert dups[0]["can_id"] == codec._resolve_dbc_message("Duplicate_Message").frame_id == 500
+        assert dups[0]["shadowed"] == [{"file": "test.dbc", "can_id": 400, "is_extended": False}]
+        # The shadowed definition is still decoded on receive.
+        assert len(codec.messages_by_id[(400, False)]) == 1
 
 
 class TestDescribeMessage:

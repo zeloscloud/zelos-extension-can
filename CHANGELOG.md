@@ -29,6 +29,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - DBC provenance on the wire: `dbcs`, `dbc_conflicts`, `dbc_overlaps`, and a
   per-message `database` on `get_tx_state` / `list_messages` /
   `describe_message`.
+- `list_messages` / `describe_message` carry `shadowed`: the same-name
+  definitions at other ids that a transmit by that name will NOT reach.
 
 ### Changed
 - Default trace paths are `CAN/<bus>/...` — decoded signals, raw frames, and

@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import can
+import cantools
 import pytest
 import zelos_sdk
 from conftest import trace_event_paths, trace_events, wait_until
@@ -24,7 +25,7 @@ from zelos_extension_can.cli.app import (
     _validate_name,
     resolve_advanced,
 )
-from zelos_extension_can.codec import CanCodec
+from zelos_extension_can.codec import CanCodec, _merge_dbcs
 from zelos_extension_can.converter import convert_can_trace
 
 FILES = Path(__file__).parent / "files"
@@ -98,6 +99,28 @@ def test_merge_dedupes_overlaps_and_reports_the_conflict(caplog):
     info = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.INFO)
     for fragment in ("0x302", "'Merge_Conflict_A'", "'Merge_Conflict_B'"):
         assert fragment in info
+
+
+def test_unpaired_merge_keys_are_reported(caplog):
+    """The merge pairs cantools definitions to decoder survivors by (id, name),
+    so a definition the two parsers NAME differently pairs with nothing and
+    silently vanishes from TX and describe — which is what a DBC-attribute
+    rename cantools applies and the Rust parser does not produces
+    (`SystemMessageLongSymbol` is the one seen in the field). Modelled by
+    renaming the cantools message: both halves must be reported, and the load
+    must continue."""
+    db = cantools.database.load_file(str(DBC_C))
+    db.messages[0].name = "Renamed_Long_Symbol"  # cantools' name, not the file's
+
+    with caplog.at_level(logging.ERROR, logger="zelos_extension_can.codec"):
+        messages, _origin, _conflicts, _overlaps, counts = _merge_dbcs([DBC_C], [db], "warn")
+
+    errors = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
+    for fragment in ("Renamed_Long_Symbol", "Merge_C", "merge_c.dbc", "0x320"):
+        assert fragment in errors
+    # Reported, never fatal: the load returns, minus the unpairable definition.
+    assert messages == []
+    assert counts == [1]
 
 
 def test_codec_error_policy_refuses_the_load():
@@ -266,14 +289,29 @@ def test_list_and_describe_report_the_owning_file(merged_codec):
     by_name = {m["name"]: m for m in listed["messages"]}
     assert by_name["Merge_A"]["database"] == "merge_a.dbc"
     assert by_name["Merge_C"]["database"] == "merge_c.dbc"
-    # One entry per definition: both names on 0x302, each with its owning file.
+    # Different names on 0x302: two entries, each with its owning file.
     assert by_name["Merge_Conflict_A"]["database"] == "merge_a.dbc"
     assert by_name["Merge_Conflict_B"]["database"] == "merge_b.dbc"
     assert by_name["Merge_Conflict_A"]["can_id"] == by_name["Merge_Conflict_B"]["can_id"] == 770
+    # One entry per NAME, so the name at two ids appears once — as the
+    # definition a transmit by that name reaches (merge_b, 0x334) — and the one
+    # it shadows is named, not silently missing.
+    assert [m["name"] for m in listed["messages"]].count("Merge_Moved") == 1
+    assert by_name["Merge_Moved"]["can_id"] == 820
+    assert by_name["Merge_Moved"]["database"] == "merge_b.dbc"
+    assert by_name["Merge_Moved"]["shadowed"] == [
+        {"file": "merge_a.dbc", "can_id": 850, "is_extended": False}
+    ]
+    assert by_name["Merge_A"]["shadowed"] == []
 
     described = merged_codec.describe_message("Merge_C")
     assert described["dbcs"] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
     assert described["message"]["database"] == "merge_c.dbc"
+    assert described["message"]["shadowed"] == []
+    # describe names the SAME definition as the list entry, with the same list.
+    moved = merged_codec.describe_message("Merge_Moved")["message"]
+    assert moved["can_id"] == 820
+    assert moved["shadowed"] == by_name["Merge_Moved"]["shadowed"]
 
 
 # ── zero-DBC bus ─────────────────────────────────────────────────────────────

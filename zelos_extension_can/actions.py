@@ -99,7 +99,9 @@ def get_tx_state(codec: str) -> dict[str, Any]:
 @action(
     "List Messages",
     "DBC message summary list for a bus — names + identifiers only, no "
-    "per-signal metadata. Use describe_message to fetch a specific message's "
+    "per-signal metadata. One entry per name: the definition a transmit by that "
+    "name reaches, with any same-name definition at another id under "
+    "`shadowed`. Use describe_message to fetch a specific message's "
     "full signal detail on demand.",
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)

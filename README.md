@@ -124,7 +124,7 @@ loopback, so every transmit is traced exactly once.
 ### Notes
 - A failure nothing but an operator can fix — authentication, an untrusted host
   key under `strict`, missing `can-utils` on the edge, or a **Remote Channel**
-  the edge does not have on a bus that has never once connected — is reported
+  the edge does not have on a bus that has never once streamed a frame — is reported
   once with the exact command that fixes it (resolved for this bus and your OS)
   and the bus stops, rather than retrying behind your back.
 - Such a permanent failure on ONE ssh bus stops the extension, and so every
@@ -143,7 +143,7 @@ The extension provides several actions accessible from the Zelos App:
 
 - **List Codecs**: Names of every configured bus
 - **Get TX State**: One bus's periodics, DBC list, and bus-health metrics
-- **List Messages** / **Describe Message**: Browse the merged DBC message set
+- **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per message *name*, the definition a transmit by that name reaches; any same-name definition at another id is listed under `shadowed` (address those by id). Every definition still decodes on receive.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
 - **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
