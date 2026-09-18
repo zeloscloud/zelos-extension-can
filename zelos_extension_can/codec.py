@@ -85,17 +85,30 @@ def _encode_dbc(
     # signal is present in the input. If the caller passed a standalone `mux`
     # field, inject it under the multiplexer signal name.
     payload = dict(signals)
-    if mux_value is not None and dbc_msg.is_multiplexed():
-        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
-        if mux_signal is not None and mux_signal.name not in payload:
-            payload[mux_signal.name] = mux_value
+    mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
+    if mux_value is not None and mux_signal is not None and mux_signal.name not in payload:
+        payload[mux_signal.name] = mux_value
     # strict=False lets authors send sentinel / SNA values that fall outside
     # the DBC's declared [min|max] but still fit the signal's bit field
     # (common pattern: raw 0xFF on an 8-bit field to mark "signal not
     # available"). The bit-field range itself is still enforced by cantools;
     # the webapp does an additional pre-flight check against the bit-field
     # range so out-of-bits values are caught before they reach us.
-    return bytes(dbc_msg.encode(payload, strict=False))
+    try:
+        return bytes(dbc_msg.encode(payload, strict=False))
+    except KeyError as e:
+        # cantools raises a bare KeyError naming the first missing signal; name
+        # every one, and for a mux only the selected variant's plus the base.
+        selected = payload.get(mux_signal.name) if mux_signal is not None else None
+        missing = [
+            sig.name
+            for sig in dbc_msg.signals
+            if sig.name not in payload
+            and (sig.multiplexer_ids is None or selected in sig.multiplexer_ids)
+        ]
+        raise ValueError(
+            f"message '{dbc_msg.name}' needs signals: {', '.join(missing) or e}"
+        ) from e
 
 
 def _describe_dbc_message_summary(msg: cantools.database.can.Message) -> dict[str, Any]:
@@ -901,7 +914,7 @@ class CanCodec(can.Listener):
         :return: True if bus is operational
         """
         if not self.bus:
-            logger.debug("Bus health check: bus is None")
+            logger.debug("[%s] Bus health check: bus is None", self.bus_name)
             return False
 
         # For virtual/demo interfaces, just check if bus object exists
@@ -913,7 +926,11 @@ class CanCodec(can.Listener):
         is_active = bus_state == can.BusState.ACTIVE
 
         if not is_active:
-            logger.info("Bus health check failed: state is %s, expected ACTIVE", bus_state.name)
+            logger.info(
+                "[%s] Bus health check failed: state is %s, expected ACTIVE",
+                self.bus_name,
+                bus_state.name,
+            )
 
         return is_active
 
@@ -922,7 +939,7 @@ class CanCodec(can.Listener):
 
         :return: True if reconnection successful
         """
-        logger.debug("Attempting bus reconnection...")
+        logger.debug("[%s] Attempting bus reconnection...", self.bus_name)
 
         # ssh-socketcan: the Rust codec, the ExternalBus, and armed periodics are
         # DURABLE — only the SshTransport is disposable. Reconnect rebuilds the
@@ -936,18 +953,18 @@ class CanCodec(can.Listener):
 
         try:
             if self.bus:
-                logger.debug("Shutting down existing bus object...")
+                logger.debug("[%s] Shutting down existing bus object...", self.bus_name)
                 self.bus.shutdown()
                 self.bus = None
 
-            logger.debug("Waiting 1 second before reinitializing bus...")
+            logger.debug("[%s] Waiting 1 second before reinitializing bus...", self.bus_name)
             await asyncio.sleep(1)
 
-            logger.debug("Reinitializing bus...")
+            logger.debug("[%s] Reinitializing bus...", self.bus_name)
             self.start()
             return True
         except Exception as e:
-            logger.error("Bus reconnection failed: %s", e)
+            logger.error("[%s] Bus reconnection failed: %s", self.bus_name, e)
             return False
 
     def _rebuild_ssh_transport(self) -> bool:
@@ -965,8 +982,9 @@ class CanCodec(can.Listener):
             return False
         if self._native is None or self._ebus is None:
             logger.error(
-                "ssh reconnect: codec not initialized (native=%s ebus=%s); "
+                "[%s] ssh reconnect: codec not initialized (native=%s ebus=%s); "
                 "cannot rebuild transport",
+                self.bus_name,
                 self._native is not None,
                 self._ebus is not None,
             )
@@ -981,7 +999,9 @@ class CanCodec(can.Listener):
             try:
                 self._transport.teardown()
             except Exception:
-                logger.exception("ssh reconnect: transport teardown raised (continuing)")
+                logger.exception(
+                    "[%s] ssh reconnect: transport teardown raised (continuing)", self.bus_name
+                )
             self._transport = None
 
         # stop() may have raced us during the blocking teardown — bail before we
@@ -1005,12 +1025,14 @@ class CanCodec(can.Listener):
             )
             self._ssh_ever_connected = True
             self.bus.transport = self._transport
-            logger.info("ssh transport rebuilt, codec preserved")
+            logger.info("[%s] ssh transport rebuilt, codec preserved", self.bus_name)
             return True
         except SshPermanentError:
             raise  # the class is the verdict: propagate, never retry
         except Exception as e:
-            logger.warning("ssh transport rebuild failed, retrying next tick: %s", e)
+            logger.warning(
+                "[%s] ssh transport rebuild failed, retrying next tick: %s", self.bus_name, e
+            )
             return False
 
     def on_message_received(self, message: can.Message) -> None:
@@ -1038,12 +1060,16 @@ class CanCodec(can.Listener):
                 if isinstance(reader, threading.Thread):
                     if reader.is_alive():
                         return True
-                    logger.debug("Notifier thread '%s' is not alive", reader.name)
+                    logger.debug(
+                        "[%s] Notifier thread '%s' is not alive", self.bus_name, reader.name
+                    )
 
-            logger.debug("No alive notifier threads found")
+            logger.debug("[%s] No alive notifier threads found", self.bus_name)
             return False
         except Exception as e:
-            logger.error("Exception while checking notifier thread status: %s", e)
+            logger.error(
+                "[%s] Exception while checking notifier thread status: %s", self.bus_name, e
+            )
             return False
 
     def _log_reconnection_reason(self, notifier_alive: bool, bus_healthy: bool) -> None:
@@ -1053,11 +1079,20 @@ class CanCodec(can.Listener):
         :param bus_healthy: Whether bus health check passed
         """
         if not notifier_alive and not bus_healthy:
-            logger.error("Reconnection triggered: Both notifier thread stopped AND bus unhealthy")
+            logger.error(
+                "[%s] Reconnection triggered: Both notifier thread stopped AND bus unhealthy",
+                self.bus_name,
+            )
         elif not notifier_alive:
-            logger.error("Reconnection triggered: Notifier thread stopped (bus was healthy)")
+            logger.error(
+                "[%s] Reconnection triggered: Notifier thread stopped (bus was healthy)",
+                self.bus_name,
+            )
         else:
-            logger.error("Reconnection triggered: Bus health check failed (notifier was alive)")
+            logger.error(
+                "[%s] Reconnection triggered: Bus health check failed (notifier was alive)",
+                self.bus_name,
+            )
 
     async def _handle_reconnection(self, notifier: can.Notifier) -> can.Notifier:
         """Handle bus reconnection and notifier recreation.
@@ -1065,14 +1100,17 @@ class CanCodec(can.Listener):
         :param notifier: Current notifier instance (will be stopped)
         :return: New notifier instance if successful, otherwise the old one
         """
-        logger.debug("Stopping notifier...")
+        logger.debug("[%s] Stopping notifier...", self.bus_name)
         notifier.stop()
 
         if await self._reconnect_bus():
             new_notifier = can.Notifier(self.bus, [self])
             return new_notifier
         else:
-            logger.error("Reconnection failed - bus remains uninitialized, will retry in 5 seconds")
+            logger.error(
+                "[%s] Reconnection failed - bus remains uninitialized, will retry in 5 seconds",
+                self.bus_name,
+            )
             return notifier
 
     async def _run_async(self) -> None:
@@ -1085,12 +1123,12 @@ class CanCodec(can.Listener):
         # loop and auto-reconnects internally. No python-can Notifier, no health
         # supervisor, no per-frame Python — just idle until stopped.
         if self._use_native:
-            logger.info("Starting CAN rx (native zelos-socketcan pipeline)")
+            logger.info("[%s] Starting CAN rx (native zelos-socketcan pipeline)", self.bus_name)
             try:
                 while self.running:
                     await asyncio.sleep(1.0)
             except asyncio.CancelledError:
-                logger.info("CAN reader cancelled")
+                logger.info("[%s] CAN reader cancelled", self.bus_name)
             return
 
         # ssh-socketcan path: the Rust codec owns RX/decode/trace/metrics (fed by
@@ -1102,7 +1140,7 @@ class CanCodec(can.Listener):
         if self._use_ssh:
             from .ssh_socketcan import SshPermanentError
 
-            logger.info("Starting CAN rx (ssh-socketcan pipeline)")
+            logger.info("[%s] Starting CAN rx (ssh-socketcan pipeline)", self.bus_name)
             # Capped backoff so a long edge outage doesn't spam thousands of
             # rebuild/log cycles: probe every 5 s when healthy; on a failed
             # rebuild grow the interval (5 s → cap 60 s), reset to 5 s on success.
@@ -1127,24 +1165,30 @@ class CanCodec(can.Listener):
                     reason = self._transport.stderr_tail() if self._transport is not None else ""
                     if reason:
                         logger.error(
-                            "Reconnection triggered: ssh transport unhealthy (ssh: %s)", reason
+                            "[%s] Reconnection triggered: ssh transport unhealthy (ssh: %s)",
+                            self.bus_name,
+                            reason,
                         )
                     else:
-                        logger.error("Reconnection triggered: ssh transport unhealthy")
+                        logger.error(
+                            "[%s] Reconnection triggered: ssh transport unhealthy", self.bus_name
+                        )
                     if await self._reconnect_bus():
                         interval = healthy_interval
                     else:
                         interval = min(interval * 2, max_interval)
             except asyncio.CancelledError:
-                logger.info("CAN reader cancelled")
+                logger.info("[%s] CAN reader cancelled", self.bus_name)
             except can.exceptions.CanError:
                 raise  # permanent ssh failure: the app layer reports and exits
             except Exception as e:
-                logger.exception("Error in ssh-socketcan supervision loop: %s", e)
+                logger.exception(
+                    "[%s] Error in ssh-socketcan supervision loop: %s", self.bus_name, e
+                )
             return
 
         if not self.bus:
-            logger.error("Bus not initialized, call start() first")
+            logger.error("[%s] Bus not initialized, call start() first", self.bus_name)
             return
 
         notifier = can.Notifier(self.bus, [self])
@@ -1153,10 +1197,10 @@ class CanCodec(can.Listener):
             self.demo_task = asyncio.create_task(
                 run_demo_ev_simulation(self.bus, self.messages_by_name, self)
             )
-            logger.info("Started EV simulation task for demo mode")
+            logger.info("[%s] Started EV simulation task for demo mode", self.bus_name)
 
         try:
-            logger.info("Starting CAN message rx loop")
+            logger.info("[%s] Starting CAN message rx loop", self.bus_name)
             while self.running:
                 await asyncio.sleep(5.0)
 
@@ -1167,12 +1211,12 @@ class CanCodec(can.Listener):
                     self._log_reconnection_reason(notifier_alive, bus_healthy)
                     notifier = await self._handle_reconnection(notifier)
         except asyncio.CancelledError:
-            logger.info("CAN reader cancelled")
+            logger.info("[%s] CAN reader cancelled", self.bus_name)
         except Exception as e:
-            logger.exception("Error in CAN reception loop: %s", e)
+            logger.exception("[%s] Error in CAN reception loop: %s", self.bus_name, e)
         finally:
             notifier.stop()
-            logger.info("CAN reception stopped")
+            logger.info("[%s] CAN reception stopped", self.bus_name)
 
     def _update_receive_metrics(self, msg: can.Message) -> None:
         """Update metrics for received message.

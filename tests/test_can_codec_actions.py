@@ -612,6 +612,11 @@ class TestEncodeHelper:
         assert isinstance(out, bytes)
         assert out == bytes(msg.encode(signals))
 
+    def test_encode_dbc_names_missing_signals(self, test_dbc):
+        msg = test_dbc.get_message_by_name("DUT_Command")
+        with pytest.raises(ValueError, match="needs signals: state_request"):
+            _encode_dbc(msg, {}, mux_value=None)
+
     def test_encode_dbc_injects_mux_signal_when_not_in_payload(self, test_dbc):
         msg = test_dbc.get_message_by_name("DUT_Logging")
         out = _encode_dbc(

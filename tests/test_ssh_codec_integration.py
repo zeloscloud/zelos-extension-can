@@ -231,7 +231,7 @@ def test_check_bus_health_tracks_transport(make_ssh_codec):
 # ── reconnect: rebuild ONLY the transport; codec/port/periodics survive ──────
 
 
-def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports):
+def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports, caplog):
     codec = make_ssh_codec()
     native_before = codec._native
     ebus_before = codec._ebus
@@ -244,9 +244,13 @@ def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports):
     assert shim.is_active is True
 
     old_transport.healthy = False  # simulate a dead ssh link
-    ok = asyncio.run(codec._reconnect_bus())
+    with caplog.at_level(logging.INFO, logger=codec_mod.__name__):
+        ok = asyncio.run(codec._reconnect_bus())
 
     assert ok is True
+    # Supervisor/reconnect lines name their bus, like start/stop do.
+    rebuilt = next(r.getMessage() for r in caplog.records if "transport rebuilt" in r.getMessage())
+    assert rebuilt.startswith(f"[{codec.bus_name}]")
     # Only the transport was rebuilt.
     assert old_transport.teardowns == 1
     assert len(stub_transports) == 2
