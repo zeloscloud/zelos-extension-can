@@ -614,6 +614,24 @@ def test_auth_error_carries_platform_remedy(monkeypatch, platform, expect):
     assert "restart this bus" in msg
 
 
+# ── remote command / argv construction (pure; no proc, no threads) ───────────
+
+
+def test_remote_command_hardware_timestamps():
+    """On (the default), candump asks for the adapter's clock, but only where
+    the edge's candump has `-H`: support is detected there, and `$H` is empty
+    on an older can-utils that would otherwise exit on an unknown option. Off,
+    nothing is detected and no `$H` is expanded at all."""
+    on = ssh_socketcan.SshTransport._remote_command("can0")
+    assert "candump -h </dev/null 2>&1 | grep -q --" in on
+    assert "candump $H -L can0" in on
+
+    off = ssh_socketcan.SshTransport._remote_command("can0", False)
+    assert "candump -h" not in off
+    assert "$H" not in off
+    assert "candump -L can0" in off
+
+
 # ── argv construction (pure; no proc, no threads) ────────────────────────────
 
 

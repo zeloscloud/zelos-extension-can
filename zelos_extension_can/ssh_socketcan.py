@@ -248,6 +248,7 @@ class SshTransport:
         ssh_key_path=None,
         ssh_extra_opts=None,
         ssh_host_key_policy="auto",
+        ssh_hw_timestamps=True,
         fd_mode=False,
         ever_connected=False,
     ):
@@ -298,7 +299,7 @@ class SshTransport:
                 user, host, ssh_port, ssh_key_path, ssh_extra_opts, ssh_host_key_policy
             )
             self._proc = subprocess.Popen(
-                argv + [self._remote_command(iface)],
+                argv + [self._remote_command(iface, ssh_hw_timestamps)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -353,7 +354,7 @@ class SshTransport:
         # slow-but-valid connect. Assume connected and proceed.
 
     @staticmethod
-    def _remote_command(iface: str) -> str:
+    def _remote_command(iface: str, hw_timestamps: bool = True) -> str:
         """The single remote shell running BOTH directions, dying as one unit.
 
         ``candump`` streams RX on the channel's stdout; the TX read-loop is the
@@ -384,6 +385,14 @@ class SshTransport:
          * ``exec`` keeps it all one process, so ``$$`` is this same shell in
            either branch, and ``reap`` is a function only to keep the command
            free of nested single quotes.
+         * ``hw_timestamps`` asks for the adapter's own clock (``candump -H``).
+           Support is DETECTED on the edge, never assumed: ``-H`` arrived in
+           can-utils 2020.11 and an older ``candump`` answers an unknown option
+           with its usage and a non-zero exit, which would kill the bus. ``H``
+           is always assigned (so a login profile exporting ``H`` cannot leak
+           into the argv) and is empty when unsupported, where an unquoted
+           ``$H`` expands to no argument at all. ``-h`` reads ``/dev/null`` so a
+           candump that wanted stdin could not eat TX frames off the channel.
 
         Death paths, each ending in a closed channel -> local EOF:
          1. We close stdin -> ``read`` EOFs -> EXIT trap -> ``kill 0`` reaps candump.
@@ -391,11 +400,19 @@ class SshTransport:
             ``kill 0``.
          3. Shell signalled from outside -> TERM/HUP trap -> ``kill 0`` reaps candump.
         """
+        # Detected before the trap is armed, so the throwaway pipeline is never
+        # in reach of `kill 0`.
+        if hw_timestamps:
+            detect = 'if candump -h </dev/null 2>&1 | grep -q -- " -H "; then H=-H; else H=; fi; '
+            dump = f"candump $H -L {iface}"
+        else:
+            detect, dump = "", f"candump -L {iface}"
         session = (
             "exec 3<&0; "
+            f"{detect}"
             "reap() { trap - EXIT TERM INT HUP; kill 0 2>/dev/null; }; "
             "trap reap EXIT TERM INT HUP; "
-            f"{{ candump -L {iface}; kill -TERM $$; }} & "
+            f"{{ {dump}; kill -TERM $$; }} & "
             f'while IFS= read -r f; do cansend {iface} "$f" >/dev/null 2>&1; done <&3'
         )
         # Single-quoted: every expansion above belongs to the shell that runs it.

@@ -533,8 +533,10 @@ def auto_config() -> dict[str, Any]:
             ),
         }
     # zelos-socketcan, not socketcan: the Rust bus is the native local path.
-    # No `name`, so each bus is named after its channel.
-    result: dict[str, Any] = {
+    # No `name`, so each bus is named after its channel. A down interface is
+    # configured as it is, with no note: the button surfaces only an error
+    # message, and the Channel picker already labels it `down`.
+    return {
         "status": "success",
         "config": {
             "buses": [
@@ -543,13 +545,6 @@ def auto_config() -> dict[str, Any]:
             ]
         },
     }
-    # A down interface is configured but carries nothing until it is brought up.
-    if down := [iface["name"] for iface in interfaces if iface["state"] == "down"]:
-        result["message"] = (
-            f"{', '.join(down)} {'is' if len(down) == 1 else 'are'} down; run "
-            f"`ip link set {down[0]} up` on that machine before starting."
-        )
-    return result
 
 
 # ─── Standalone (runs with the extension stopped) ───────────────────────────

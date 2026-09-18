@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   Clear it for one source per bus.
 - Raw frames are logged as the typed `Frame` event (the well-known `CanFrame`
   schema) instead of an ad-hoc one.
+- **Hardware timestamps on `ssh-socketcan`** (new per-bus setting, default on):
+  `candump -H` where the edge supports it, wall clock for an interface with no
+  hardware clock.
 - DBC provenance on the wire: `dbcs`, `dbc_conflicts`, `dbc_overlaps`, and a
   per-message `database` on `get_tx_state` / `list_messages` /
   `describe_message`.

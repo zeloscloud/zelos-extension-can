@@ -22,9 +22,20 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import wait_until
+from conftest import wait_until as _wait_until
 
 from zelos_extension_can.ssh_socketcan import SshTransport
+
+# These tests spawn real shells and wait on real process facts (`ps`, a pid
+# file, an exit status, an fd at EOF), never on a fixed sleep — so a bound this
+# generous costs nothing but the latency of a genuine failure. conftest's 4 s
+# default lost this file's races on a loaded box during a full-suite run.
+_WAIT_TIMEOUT = 15.0
+
+
+def wait_until(pred):
+    return _wait_until(pred, timeout=_WAIT_TIMEOUT)
+
 
 IFACE = "can0"
 CMD = SshTransport._remote_command(IFACE)
@@ -100,11 +111,20 @@ class _Edge:
         path.chmod(0o755)
 
     def _candump(self, lives: bool) -> None:
-        """candump records its pid, then either sleeps (a live capture) or exits
-        (death path 2). The sleep outlasts every assertion here, so a reap that
-        never happened cannot pass by timing."""
-        tail = "exec sleep 30\n" if lives else "exit 3\n"
-        self._script("candump", f"echo $$ > {self.pid_file}\n" + tail)
+        """candump answers `-h` with a usage line listing `-H`, the way can-utils
+        2020.11 does, so the session's hardware-timestamp detection resolves and
+        the real invocation carries `-H`. It then records its pid and either
+        sleeps (a live capture) or exits (death path 2). The sleep outlasts every
+        assertion here, so a reap that never happened cannot pass by timing."""
+        tail = "exec sleep 600\n" if lives else "exit 3\n"
+        self._script(
+            "candump",
+            'if [ "$1" = -h ]; then\n'
+            '  echo "         -H          (read hardware timestamps)"\n'
+            "  exit 1\n"  # can-utils exits non-zero on the usage path
+            "fi\n"
+            f"echo $$ > {self.pid_file}\n" + tail,
+        )
 
     def _spawn(self, argv: list[str]) -> subprocess.Popen:
         self.proc = subprocess.Popen(
@@ -141,7 +161,7 @@ class _Edge:
             "#!/bin/sh\n"
             # The sibling joins this group first (no job control, so it does) and
             # drops the stdio it inherited, which the session's EOF is measured on.
-            f"sleep 30 >/dev/null 2>&1 &\necho $! > {self.sibling_file}\n"
+            f"sleep 600 >/dev/null 2>&1 &\necho $! > {self.sibling_file}\n"
             '"$1" -c "$2"\n'
             "exit $?\n"  # never the last command: the session must be a CHILD of ours
         )

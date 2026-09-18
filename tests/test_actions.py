@@ -274,7 +274,7 @@ class TestOpenInApp:
 
 
 def _sys_class_net(root: Path) -> Path:
-    """A /sys/class/net tree: a real can0 (up, gs_usb), a vcan0, and an eth0."""
+    """A /sys/class/net tree: can0 (up) and can1 (down) on gs_usb, a vcan0, an eth0."""
     net = root / "net"
     gs_usb = root / "bus" / "usb" / "drivers" / "gs_usb"
     gs_usb.mkdir(parents=True)
@@ -284,6 +284,12 @@ def _sys_class_net(root: Path) -> Path:
     (can0 / "type").write_text("280\n")
     (can0 / "operstate").write_text("up\n")
     (can0 / "device" / "driver").symlink_to(gs_usb)  # sysfs: link INTO the driver
+
+    can1 = net / "can1"  # a real adapter that is not up yet
+    (can1 / "device").mkdir(parents=True)
+    (can1 / "type").write_text("280\n")
+    (can1 / "operstate").write_text("down\n")
+    (can1 / "device" / "driver").symlink_to(gs_usb)
 
     vcan0 = net / "vcan0"  # virtual: no device, and operstate never leaves "unknown"
     vcan0.mkdir(parents=True)
@@ -308,6 +314,7 @@ class TestConfigFormHooks:
             "status": "success",
             "choices": [
                 {"value": "can0", "detail": "up, gs_usb"},
+                {"value": "can1", "detail": "down, gs_usb"},
                 {"value": "vcan0", "detail": "virtual"},
             ],
         }
@@ -324,12 +331,14 @@ class TestConfigFormHooks:
         monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
 
         # Only `buses`: the contract replaces the keys returned, so anything the
-        # person set under Advanced survives.
+        # person set under Advanced survives. No `message` either — a down
+        # interface is configured as it is and the picker already says `down`.
         assert actions.auto_config() == {
             "status": "success",
             "config": {
                 "buses": [
                     {"interface": "zelos-socketcan", "channel": "can0", "database_files": []},
+                    {"interface": "zelos-socketcan", "channel": "can1", "database_files": []},
                     {"interface": "zelos-socketcan", "channel": "vcan0", "database_files": []},
                 ]
             },

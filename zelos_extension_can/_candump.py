@@ -121,6 +121,10 @@ def parse_candump_line(line: bytes) -> ParsedFrame | None:
         optional dlc suffix is ignored.
       * otherwise → classic data frame (hex payload).
 
+    A timestamp of ``0000000000.000000`` becomes ``timestamp=None``: that is
+    what ``candump -H`` prints for an interface with no hardware clock, and the
+    codec stamps wall clock for a frame that carries no time.
+
     Rejects (→ ``None``): classic payload > 8 bytes, FD payload > 64 bytes,
     malformed hex/timestamp/id, or a line without the three expected tokens.
 
@@ -138,7 +142,11 @@ def parse_candump_line(line: bytes) -> ParsedFrame | None:
 
         if not (ts_tok.startswith("(") and ts_tok.endswith(")")):
             return None
-        timestamp = float(ts_tok[1:-1])
+        ts = float(ts_tok[1:-1])
+        # candump -H on an interface with no hardware clock (vcan, some slcan)
+        # stamps every frame (0000000000.000000): no time at all, so hand the
+        # codec None and let it stamp wall clock.
+        timestamp = None if ts == 0.0 else ts
 
         id_hex, hash_sep, payload = token.partition("#")
         if not hash_sep:

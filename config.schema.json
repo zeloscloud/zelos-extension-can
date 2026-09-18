@@ -221,6 +221,13 @@
                     "title": "SSH Extra Options",
                     "description": "Additional ssh command-line options, space-separated (e.g. -J bastion). Placed before the options above; ssh honours the first -o it sees, so these win over the settings above."
                   },
+                  "ssh_hw_timestamps": {
+                    "type": "boolean",
+                    "title": "Hardware timestamps",
+                    "description": "Uses the adapter's hardware clock when the edge's candump supports -H; interfaces without one (vcan, some slcan) fall back to the extension's wall clock. Turn off to use the edge kernel's receive time.",
+                    "default": true,
+                    "ui:widget": "toggle"
+                  },
                   "fd_mode": {
                     "type": "boolean",
                     "title": "CAN-FD Mode",

@@ -29,7 +29,7 @@ which have no SocketCAN.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One `zelos-socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`. Review it, save, then start. Advanced settings are left as they are. |
+| **Auto-configure** (button above the form) | One `zelos-socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`, a down interface included as it is. Review it, save, then start. Advanced settings are left as they are. |
 | **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `zelos-socketcan` bus. You can still type a name. |
 
 ### Required Settings
@@ -115,6 +115,10 @@ loopback, so every transmit is traced exactly once.
 - **SSH Extra Options**: extra `ssh` flags, e.g. a `-J bastion` jump host.
   Placed before the options above; `ssh` honours the first `-o` it sees, so
   these win over the settings above.
+- **Hardware timestamps** (default on): uses the adapter's hardware clock where
+  the edge's `candump` supports `-H`. An interface without one (`vcan`, some
+  `slcan`) falls back to this machine's wall clock; turn it off to use the edge
+  kernel's receive time.
 - Plus the shared **Database Files** setting and the global **Advanced** ones.
 
 ### Notes
@@ -129,8 +133,9 @@ loopback, so every transmit is traced exactly once.
   went away after a working session — a rebooting edge, a re-enumerating
   adapter) reconnect automatically with backoff; decoded state and any armed
   periodic transmissions are preserved across the reconnect.
-- Timestamps in `auto`/`absolute` mode come from the **edge's** clock — keep the
-  edge's time in sync (NTP) if absolute timestamps matter.
+- Timestamps in `auto`/`absolute` mode come from the **edge's** clock (its
+  adapter's, with **Hardware timestamps** on) — keep the edge's time in sync
+  (NTP) if absolute timestamps matter.
 
 ## Actions
 

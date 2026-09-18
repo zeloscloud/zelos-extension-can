@@ -842,6 +842,7 @@ class CanCodec(can.Listener):
             ssh_key_path=self.config.get("ssh_key_path"),
             ssh_extra_opts=self.config.get("ssh_extra_opts"),
             ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
+            ssh_hw_timestamps=self.config.get("ssh_hw_timestamps", True),
             fd_mode=self.fd_mode,
             ever_connected=self._ssh_ever_connected,
         )
@@ -998,6 +999,7 @@ class CanCodec(can.Listener):
                 ssh_key_path=self.config.get("ssh_key_path"),
                 ssh_extra_opts=self.config.get("ssh_extra_opts"),
                 ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
+                ssh_hw_timestamps=self.config.get("ssh_hw_timestamps", True),
                 fd_mode=self.fd_mode,
                 ever_connected=self._ssh_ever_connected,
             )

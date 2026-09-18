@@ -56,6 +56,7 @@ class _StubTransport:
         ssh_key_path=None,
         ssh_extra_opts=None,
         ssh_host_key_policy="auto",
+        ssh_hw_timestamps=True,
         fd_mode=False,
         ever_connected=False,
     ):
@@ -65,6 +66,7 @@ class _StubTransport:
         self.ssh_key_path = ssh_key_path
         self.ssh_extra_opts = ssh_extra_opts
         self.ssh_host_key_policy = ssh_host_key_policy
+        self.ssh_hw_timestamps = ssh_hw_timestamps
         self.fd_mode = fd_mode
         self.ever_connected = ever_connected
         self.healthy = True
@@ -149,6 +151,7 @@ def test_start_threads_ssh_kwargs_to_transport(make_ssh_codec, stub_transports):
             "ssh_key_path": "/home/z/id_ed25519",
             "ssh_extra_opts": "-J bastion",
             "ssh_host_key_policy": "strict",
+            "ssh_hw_timestamps": False,
             "fd_mode": True,
         }
     )
@@ -157,6 +160,7 @@ def test_start_threads_ssh_kwargs_to_transport(make_ssh_codec, stub_transports):
     assert transport.ssh_key_path == "/home/z/id_ed25519"
     assert transport.ssh_extra_opts == "-J bastion"
     assert transport.ssh_host_key_policy == "strict"
+    assert transport.ssh_hw_timestamps is False
     assert transport.fd_mode is True
 
 
@@ -164,6 +168,7 @@ def test_start_defaults_host_key_policy_to_auto(make_ssh_codec, stub_transports)
     """Unset in config → "auto", so a reimaged edge needs no manual step."""
     make_ssh_codec()
     assert stub_transports[0].ssh_host_key_policy == "auto"
+    assert stub_transports[0].ssh_hw_timestamps is True  # hardware clock by default
 
 
 def test_ssh_flags_set_in_init():
@@ -626,6 +631,7 @@ def test_schema_ssh_branch_structure():
         "ssh_key_path",
         "ssh_host_key_policy",
         "ssh_extra_opts",
+        "ssh_hw_timestamps",
         "fd_mode",
     ):
         assert field in props, f"ssh branch missing property {field!r}"
@@ -635,6 +641,8 @@ def test_schema_ssh_branch_structure():
     # Default "auto": a reimaged edge reconnects with no manual host-key step.
     assert props["ssh_host_key_policy"]["enum"] == ["auto", "strict"]
     assert props["ssh_host_key_policy"]["default"] == "auto"
+    # Hardware timestamps by default; the edge's candump decides whether it can.
+    assert props["ssh_hw_timestamps"]["default"] is True
     # The remote kernel loopback always echoes TX; there is no receive_own_messages.
     assert "receive_own_messages" not in props
 
