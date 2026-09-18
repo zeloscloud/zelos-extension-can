@@ -21,6 +21,17 @@
 
 All configuration is managed through the Zelos App settings interface.
 
+### Filling in the form
+
+Both hooks read the machine running the agent, need no privileges, and work
+before the extension has ever started. Neither finds anything on macOS/Windows,
+which have no SocketCAN.
+
+| Hook | What it does |
+|---|---|
+| **Auto-configure** (button above the form) | One `zelos-socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`. Review it, save, then start. Advanced settings are left as they are. |
+| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces — `can0 (up, gs_usb)`, `vcan0 (virtual)` — for a `socketcan` / `zelos-socketcan` bus. You can still type a name. |
+
 ### Required Settings
 - **Interface**: Choose your CAN adapter type (zelos-socketcan, ssh-socketcan, socketcan, pcan, kvaser, vector, virtual, or demo). On Linux, `zelos-socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
 - **Channel**: Specify the CAN channel/device name
@@ -101,14 +112,16 @@ loopback, so every transmit is traced exactly once.
 
 ### Notes
 - A failure nothing but an operator can fix — authentication, an untrusted host
-  key under `strict`, or missing `can-utils` on the edge — is reported once with
-  the exact command that fixes it (resolved for this bus and your OS) and the
-  bus stops, rather than retrying behind your back.
+  key under `strict`, missing `can-utils` on the edge, or a **Remote Channel**
+  the edge does not have on a bus that has never once connected — is reported
+  once with the exact command that fixes it (resolved for this bus and your OS)
+  and the bus stops, rather than retrying behind your back.
 - Such a permanent failure on ONE ssh bus stops the extension, and so every
   other bus with it — the same as a bus that cannot start at all.
-- Transient failures (unreachable, DNS, a dropped link, a CAN interface the edge
-  has not configured yet) reconnect automatically with backoff; decoded state
-  and any armed periodic transmissions are preserved across the reconnect.
+- Transient failures (unreachable, DNS, a dropped link, or a CAN interface that
+  went away after a working session — a rebooting edge, a re-enumerating
+  adapter) reconnect automatically with backoff; decoded state and any armed
+  periodic transmissions are preserved across the reconnect.
 - Timestamps in `auto`/`absolute` mode come from the **edge's** clock — keep the
   edge's time in sync (NTP) if absolute timestamps matter.
 

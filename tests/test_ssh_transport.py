@@ -545,28 +545,37 @@ def test_clean_stderr_tail_keeps_only_fingerprint_and_cause():
 
 
 @pytest.mark.parametrize(
-    "stderr, expect, permanent, streamed",
+    "stderr, expect, permanent, streamed, ever_connected",
     [
         # permanent: an operator must act, retrying is futile
-        ("Host key verification failed.", "host key", True, False),
-        ("zelos@edge: Permission denied (publickey).", "authentication", True, False),
-        ("bash: candump: command not found", "can-utils", True, False),
+        ("Host key verification failed.", "host key", True, False, False),
+        ("zelos@edge: Permission denied (publickey).", "authentication", True, False, False),
+        ("bash: candump: command not found", "can-utils", True, False, False),
+        # a bus that never made contact names an interface the edge does not
+        # have: retrying cannot conjure it
+        ("SIOCGIFINDEX: No such device", "has no CAN interface can0;", True, False, False),
         # transient: keep reconnecting with backoff
-        # sshd can be up before the edge has configured can0 after a reboot
-        ("SIOCGIFINDEX: No such device", "no CAN interface can0", False, False),
-        ("ssh: Could not resolve hostname edge: nodename nor servname", "resolve", False, False),
-        ("ssh: connect to host edge port 22: Connection refused", "cannot reach", False, False),
-        ("ssh: connect to host edge port 22: Operation timed out", "cannot reach", False, False),
-        ("Connection to edge closed by remote host.", "failed", False, False),
-        ("", "failed", False, False),  # EOF mid-capture, nothing written
+        # after a working session, sshd is just up before can0 is configured again
+        ("SIOCGIFINDEX: No such device", "no CAN interface can0 (yet)", False, False, True),
+        ("Could not resolve hostname edge: nodename nor servname", "resolve", False, False, False),
+        ("connect to host edge port 22: Connection refused", "cannot reach", False, False, False),
+        ("connect to host edge port 22: Operation timed out", "cannot reach", False, False, False),
+        ("Connection to edge closed by remote host.", "failed", False, False, False),
+        ("", "failed", False, False, False),  # EOF mid-capture, nothing written
         # a frame streamed => auth/can-utils were fine, so pre-auth noise still
         # in the whole-session ring can never read as permanent
-        ("zelos@edge: Permission denied (publickey).", "authentication", False, True),
+        ("zelos@edge: Permission denied (publickey).", "authentication", False, True, False),
     ],
 )
-def test_classification_class_is_the_verdict(stderr, expect, permanent, streamed):
+def test_classification_class_is_the_verdict(stderr, expect, permanent, streamed, ever_connected):
     err = ssh_socketcan._classify_ssh_failure(
-        "edge", "can0", 22, stderr, user="zelos", streamed=streamed
+        "edge",
+        "can0",
+        22,
+        stderr,
+        user="zelos",
+        streamed=streamed,
+        ever_connected=ever_connected,
     )
     assert expect in str(err)
     assert isinstance(err, ssh_socketcan.SshPermanentError) is permanent

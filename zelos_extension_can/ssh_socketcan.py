@@ -146,6 +146,7 @@ def _classify_ssh_failure(
     user: str | None = None,
     ssh_key_path: str | None = None,
     streamed: bool = False,
+    ever_connected: bool = False,
 ) -> can.exceptions.CanInitializationError:
     """Turn an ssh failure's stderr tail into a classified, actionable error.
 
@@ -162,6 +163,9 @@ def _classify_ssh_failure(
     otherwise make a later transient drop look unfixable. Every permanent cause
     fires before the first frame. Matching runs on the RAW tail; only the
     appended copy is banner-stripped.
+
+    ``ever_connected`` (an earlier session on this codec made contact) is what
+    splits a missing CAN interface: see that branch below.
     """
     low = stderr_tail.lower()
     target = f"{user}@{host}" if user else host
@@ -192,11 +196,21 @@ def _classify_ssh_failure(
         permanent = True
         msg = f"the edge {host} is missing can-utils (candump/cansend); install can-utils on it."
     elif has("siocgifindex", "no such device"):
-        # After a reboot sshd can be up before can0 is configured.
-        msg = (
-            f"the edge {host} has no CAN interface {iface} (yet); retrying — if it never "
-            "appears, check remote_channel and `ip link` on the edge."
-        )
+        # Never connected: the interface name is wrong, and no amount of
+        # retrying finds an interface the edge does not have. Once a session has
+        # worked, the same message means the edge is rebooting or the adapter is
+        # re-enumerating — sshd comes up before can0 is configured — so retry.
+        permanent = not ever_connected
+        if permanent:
+            msg = (
+                f"the edge {host} has no CAN interface {iface}; check remote_channel "
+                "and `ip link` on the edge."
+            )
+        else:
+            msg = (
+                f"the edge {host} has no CAN interface {iface} (yet); retrying — if it "
+                "never appears, check remote_channel and `ip link` on the edge."
+            )
     elif has("could not resolve", "name or service not known", "nodename nor servname"):
         msg = f"cannot resolve host {host}; check the remote_host value and your DNS."
     elif has(
@@ -235,10 +249,15 @@ class SshTransport:
         ssh_extra_opts=None,
         ssh_host_key_policy="auto",
         fd_mode=False,
+        ever_connected=False,
     ):
         self._bus = bus
         self.channel = channel
         self._fd_mode = fd_mode
+        # Whether an earlier session on the owning codec made contact. Passed in
+        # (not discovered here) because a transport is disposable: the codec is
+        # what remembers. Only :func:`_classify_ssh_failure` reads it.
+        self._ever_connected = ever_connected
         self._stop = threading.Event()
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
@@ -596,6 +615,7 @@ class SshTransport:
             user=self._user,
             ssh_key_path=self._ssh_key_path,
             streamed=self._rx_started.is_set(),
+            ever_connected=self._ever_connected,
         )
 
     def teardown(self) -> None:

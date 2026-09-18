@@ -421,6 +421,137 @@ def export_trace_to_log(
         raise RuntimeError(f"Export failed: {e}") from e
 
 
+# ─── Config-form hooks (standalone: the form calls these before a first start) ─
+#
+# Both answer the app's schema hooks in `config.schema.json`: the root
+# `ui:options.autoconfig` button, and the `action-choices` widget on a
+# socketcan channel. They read sysfs only — no privileges, no python-can, and
+# nothing that needs the extension to be running.
+
+#: Where Linux publishes its network interfaces. A CAN interface is a netdev
+#: like any other, told apart by its ARPHRD type.
+_SYS_CLASS_NET = Path("/sys/class/net")
+_ARPHRD_CAN = "280"
+
+
+def _read_sysfs(path: Path) -> str:
+    """One sysfs attribute, or "" when it is absent or unreadable."""
+    try:
+        return path.read_text().strip()
+    except OSError:  # raced away mid-scan, or not readable — just unknown
+        return ""
+
+
+def _is_virtual(name: str) -> bool:
+    """A kernel vcan interface: usable, but with no CAN hardware behind it."""
+    return name.startswith("vcan")
+
+
+def _interface_rank(iface: dict[str, str]) -> tuple[int, str]:
+    """Real CAN devices first, virtual ones after; names break ties."""
+    return (1 if _is_virtual(iface["name"]) else 0, iface["name"])
+
+
+def _interface_label(iface: dict[str, str]) -> str:
+    """`can0 (up, gs_usb)` / `vcan0 (virtual)` — what a person needs to pick one.
+
+    `unknown` is left out: vcan reports it and is perfectly usable, so it says
+    nothing. `down` is kept — that bus needs `ip link set <if> up` first.
+    """
+    notes = [iface["state"]] if iface["state"] in ("up", "down") else []
+    kind = iface["driver"] or ("virtual" if _is_virtual(iface["name"]) else "")
+    if kind:
+        notes.append(kind)
+    return f"{iface['name']} ({', '.join(notes)})" if notes else iface["name"]
+
+
+def _local_can_interfaces() -> list[dict[str, str]]:
+    """This machine's SocketCAN interfaces: name, operstate, driver.
+
+    SocketCAN is Linux-only, so macOS/Windows answer with an honest empty list
+    rather than an error — there is nothing to enumerate there.
+    """
+    if sys.platform != "linux" or not _SYS_CLASS_NET.is_dir():
+        return []
+    found = []
+    for entry in _SYS_CLASS_NET.iterdir():
+        if _read_sysfs(entry / "type") != _ARPHRD_CAN:
+            continue
+        # A symlink into the driver owning the device (gs_usb, peak_usb, ...),
+        # absent for a virtual interface, which has no device behind it.
+        driver = entry / "device" / "driver"
+        found.append(
+            {
+                "name": entry.name,
+                "state": _read_sysfs(entry / "operstate") or "unknown",
+                "driver": driver.resolve().name if driver.exists() else "",
+            }
+        )
+    return sorted(found, key=_interface_rank)
+
+
+@action(
+    "List CAN Interfaces",
+    "SocketCAN interfaces on the machine running the agent, as choices for a "
+    "bus's Channel field, which also accepts a name typed by hand. Empty on "
+    "macOS/Windows, which have no SocketCAN.",
+    # Reading sysfs opens no socket and needs no privileges, and the config form
+    # wants the list before the extension has ever run.
+    standalone=True,
+)
+def list_interfaces() -> dict[str, Any]:
+    """The app's `action-choices` contract: `choices` in the order to show."""
+    return {
+        "status": "success",
+        "choices": [
+            {"value": iface["name"], "label": _interface_label(iface)}
+            for iface in _local_can_interfaces()
+        ],
+    }
+
+
+@action(
+    "Auto-configure",
+    "One zelos-socketcan bus per SocketCAN interface on the machine running the "
+    "agent, for the config form's Auto-configure button. Review it, then save "
+    "and start.",
+    standalone=True,
+)
+def auto_config() -> dict[str, Any]:
+    """The app's auto-configure contract: the keys of `config` replace the form's.
+
+    Only `buses` is returned, so whatever is set under Advanced survives. Never
+    an ssh-socketcan bus: there is no remote host to guess.
+    """
+    interfaces = _local_can_interfaces()
+    if not interfaces:
+        return {
+            "status": "error",
+            "message": (
+                "No SocketCAN interface on this machine. Add an ssh-socketcan bus for a "
+                "remote device, or a pcan/kvaser/vector bus."
+            ),
+        }
+    # zelos-socketcan, not socketcan: the Rust bus is the native local path.
+    # No `name`, so each bus is named after its channel.
+    result: dict[str, Any] = {
+        "status": "success",
+        "config": {
+            "buses": [
+                {"interface": "zelos-socketcan", "channel": iface["name"], "database_files": []}
+                for iface in interfaces
+            ]
+        },
+    }
+    # A down interface is configured but carries nothing until it is brought up.
+    if down := [iface["name"] for iface in interfaces if iface["state"] == "down"]:
+        result["message"] = (
+            f"{', '.join(down)} {'is' if len(down) == 1 else 'are'} down; run "
+            f"`ip link set {down[0]} up` on that machine before starting."
+        )
+    return result
+
+
 # ─── Standalone (runs with the extension stopped) ───────────────────────────
 
 

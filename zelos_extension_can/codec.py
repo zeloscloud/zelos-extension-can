@@ -422,6 +422,11 @@ class CanCodec(can.Listener):
         # SshTransport (rebuilt on reconnect). None on every other interface.
         self._ebus: Any = None
         self._transport: Any = None
+        # ssh-socketcan only: a session on THIS codec has made contact, so a
+        # later "no such device" is the edge re-enumerating rather than a wrong
+        # interface name. Per codec, not per transport — a transport rebuilt
+        # after a working session inherits it (see _classify_ssh_failure).
+        self._ssh_ever_connected = False
 
         # Timestamp handling - use enum for fast comparison
         timestamp_mode_str = config.get("timestamp_mode", "auto").upper()
@@ -799,7 +804,11 @@ class CanCodec(can.Listener):
             ssh_extra_opts=self.config.get("ssh_extra_opts"),
             ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
             fd_mode=self.fd_mode,
+            ever_connected=self._ssh_ever_connected,
         )
+        # The startup probe passed, so this bus has made contact: a LATER
+        # "no such device" is transient, not a wrong remote_channel.
+        self._ssh_ever_connected = True
         self.bus = CodecTxAdapter(self._native, self._transport, self.config["channel"])
         self.running = True
         logger.info("ssh-socketcan codec started on %s", self.config["channel"])
@@ -951,7 +960,9 @@ class CanCodec(can.Listener):
                 ssh_extra_opts=self.config.get("ssh_extra_opts"),
                 ssh_host_key_policy=self.config.get("ssh_host_key_policy", "auto"),
                 fd_mode=self.fd_mode,
+                ever_connected=self._ssh_ever_connected,
             )
+            self._ssh_ever_connected = True
             self.bus.transport = self._transport
             logger.info("ssh transport rebuilt, codec preserved")
             return True

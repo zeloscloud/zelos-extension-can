@@ -57,6 +57,7 @@ class _StubTransport:
         ssh_extra_opts=None,
         ssh_host_key_policy="auto",
         fd_mode=False,
+        ever_connected=False,
     ):
         self.bus = bus
         self.channel = channel
@@ -65,6 +66,7 @@ class _StubTransport:
         self.ssh_extra_opts = ssh_extra_opts
         self.ssh_host_key_policy = ssh_host_key_policy
         self.fd_mode = fd_mode
+        self.ever_connected = ever_connected
         self.healthy = True
         self.teardowns = 0
         self.stderr = ""
@@ -254,6 +256,10 @@ def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports):
     # The rebuilt transport carries the same durable ExternalBus + channel.
     assert new_transport.bus is ebus_before
     assert new_transport.channel == "zelos@edge:vcan0"
+    # The first transport had never made contact; the rebuilt one inherits the
+    # codec's flag, so a "no such device" now reads as transient.
+    assert old_transport.ever_connected is False
+    assert new_transport.ever_connected is True
 
 
 def test_reconnect_transport_build_failure_preserves_codec_then_recovers(

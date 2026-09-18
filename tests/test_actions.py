@@ -269,3 +269,75 @@ class TestOpenInApp:
         assert result["opened"] is False
         assert "no opener" in result["open_error"]
         assert dest.read_text() == "trace"  # staged output landed at the destination
+
+
+def _sys_class_net(root: Path) -> Path:
+    """A /sys/class/net tree: a real can0 (up, gs_usb), a vcan0, and an eth0."""
+    net = root / "net"
+    gs_usb = root / "bus" / "usb" / "drivers" / "gs_usb"
+    gs_usb.mkdir(parents=True)
+
+    can0 = net / "can0"
+    (can0 / "device").mkdir(parents=True)
+    (can0 / "type").write_text("280\n")
+    (can0 / "operstate").write_text("up\n")
+    (can0 / "device" / "driver").symlink_to(gs_usb)  # sysfs: link INTO the driver
+
+    vcan0 = net / "vcan0"  # virtual: no device, and operstate never leaves "unknown"
+    vcan0.mkdir(parents=True)
+    (vcan0 / "type").write_text("280\n")
+    (vcan0 / "operstate").write_text("unknown\n")
+
+    eth0 = net / "eth0"  # ARPHRD_ETHER — not a CAN interface
+    eth0.mkdir(parents=True)
+    (eth0 / "type").write_text("1\n")
+    (eth0 / "operstate").write_text("up\n")
+    return net
+
+
+class TestConfigFormHooks:
+    """The two schema hooks the app calls on a form that has never started."""
+
+    def test_list_interfaces_offers_can_devices_only_hardware_first(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+
+        assert actions.list_interfaces() == {
+            "status": "success",
+            "choices": [
+                {"value": "can0", "label": "can0 (up, gs_usb)"},
+                {"value": "vcan0", "label": "vcan0 (virtual)"},
+            ],
+        }
+
+    def test_list_interfaces_is_empty_where_there_is_no_socketcan(self, monkeypatch, tmp_path):
+        """macOS/Windows: an empty list, not an error — nothing to enumerate."""
+        monkeypatch.setattr(actions.sys, "platform", "darwin")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+
+        assert actions.list_interfaces() == {"status": "success", "choices": []}
+
+    def test_auto_config_builds_one_native_bus_per_interface(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+
+        # Only `buses`: the contract replaces the keys returned, so anything the
+        # person set under Advanced survives.
+        assert actions.auto_config() == {
+            "status": "success",
+            "config": {
+                "buses": [
+                    {"interface": "zelos-socketcan", "channel": "can0", "database_files": []},
+                    {"interface": "zelos-socketcan", "channel": "vcan0", "database_files": []},
+                ]
+            },
+        }
+
+    def test_auto_config_without_an_interface_is_an_error(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+
+        result = actions.auto_config()
+
+        assert result["status"] == "error"
+        assert "ssh-socketcan" in result["message"]  # the way out on a laptop

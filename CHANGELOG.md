@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Auto-configure** on the config form: one `zelos-socketcan` bus per SocketCAN
+  interface on the machine running the agent, hardware before `vcan`.
+- **A picker on a SocketCAN bus's Channel**, listing that machine's CAN
+  interfaces with their state and driver (`can0 (up, gs_usb)`). A name typed by
+  hand still works.
 - **A list of database files per bus**, applied in order: a later file wins a
   message id an earlier one defines differently.
 - **`dbc_conflict`** per bus: `warn` keeps the later definition, `error` refuses
@@ -27,6 +32,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   every bus. A legacy per-bus value still wins.
 - An unnamed bus is named after its channel, sanitized for trace names.
 - `convert` takes `--prefix` so a conversion is named like a live bus.
+- On `ssh-socketcan`, a CAN interface the edge does not have now stops a bus
+  that has never connected (wrong `remote_channel`, reported with the fix)
+  instead of retrying forever. After one working session the same failure is
+  transient again — a rebooting edge or a re-enumerating adapter reconnects.
 
 ### Fixed
 - **DBC files saved in cp1252/Latin-1 now load.** A DBC written by Windows CAN
