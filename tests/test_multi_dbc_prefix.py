@@ -14,7 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import can
 import pytest
-from conftest import trace_event_paths
+import zelos_sdk
+from conftest import trace_event_paths, trace_events, wait_until
 
 from zelos_extension_can.cli.app import (
     ADVANCED_DEFAULTS,
@@ -43,14 +44,16 @@ def _merged_config(**extra) -> dict:
     }
 
 
-# ── merge: dedupe, conflict, policy ──────────────────────────────────────────
+# ── merge: dedupe, overlap, conflict, policy ─────────────────────────────────
 
 
-def test_merge_dedupes_identical_and_reports_the_conflict(caplog):
-    """merge_a/merge_b define 0x301 identically (silent dedupe) and 0x302
-    differently (the later file wins, with one warning)."""
+def test_merge_dedupes_overlaps_and_reports_the_conflict(caplog):
+    """merge_a/merge_b define 0x301 identically (silent dedupe), 0x302 under two
+    DIFFERENT names (an overlap — both survive and both decode) and 0x303 under
+    the SAME name laid out two ways (a conflict — the later file wins, with one
+    warning)."""
     with (
-        caplog.at_level(logging.WARNING, logger="zelos_extension_can.codec"),
+        caplog.at_level(logging.INFO, logger="zelos_extension_can.codec"),
         patch("zelos_sdk.TraceSource"),
     ):
         codec = CanCodec(_merged_config(), bus_name="busA")
@@ -59,36 +62,48 @@ def test_merge_dedupes_identical_and_reports_the_conflict(caplog):
     assert [(m.name, m.frame_id) for m in codec.messages] == [
         ("Merge_A", 768),
         ("Merge_Same", 769),
-        ("Merge_Conflict_B", 770),
+        ("Merge_Conflict_A", 770),
+        ("Merge_Dup", 771),
         ("Merge_Moved", 850),
         ("Merge_B", 784),
+        ("Merge_Conflict_B", 770),
         ("Merge_Moved", 820),
         ("Merge_C", 800),
+    ]
+    # An overlapping id carries every definition, in definition order.
+    assert [m.name for m in codec.messages_by_id[(770, False)]] == [
+        "Merge_Conflict_A",
+        "Merge_Conflict_B",
     ]
     # A name at two ids resolves to the LATER FILE's definition (merge_b, 0x334),
     # not the higher id (merge_a, 0x352).
     assert codec._resolve_dbc_message("Merge_Moved").frame_id == 820
+    # Same id AND same name, different layout: the only conflict shape left.
     assert codec.dbc_conflicts == [
         {
-            "frame_id": 770,
+            "frame_id": 771,
             "is_extended": False,
-            "kept": {"file": "merge_b.dbc", "name": "Merge_Conflict_B"},
-            "dropped": {"file": "merge_a.dbc", "name": "Merge_Conflict_A"},
+            "kept": {"file": "merge_b.dbc", "name": "Merge_Dup"},
+            "dropped": {"file": "merge_a.dbc", "name": "Merge_Dup"},
         }
     ]
-    assert codec.message_origin[(768, False)] == DBC_A
-    assert codec.message_origin[(770, False)] == DBC_B
+    assert codec.message_origin[(768, False, "Merge_A")] == DBC_A
+    assert codec.message_origin[(771, False, "Merge_Dup")] == DBC_B
 
-    # One warning, naming both files and the winner.
+    # The conflict warns, naming both files and the winner; the overlap is INFO,
+    # naming the id and both definitions.
     warning = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.WARNING)
-    for fragment in (str(DBC_A), str(DBC_B), "keeping 'Merge_Conflict_B'"):
+    for fragment in (str(DBC_A), str(DBC_B), "keeping 'Merge_Dup'"):
         assert fragment in warning
+    info = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.INFO)
+    for fragment in ("0x302", "'Merge_Conflict_A'", "'Merge_Conflict_B'"):
+        assert fragment in info
 
 
 def test_codec_error_policy_refuses_the_load():
     """`dbc_conflict: error` is the Rust loader's refusal, surfaced verbatim."""
     with (
-        pytest.raises(RuntimeError, match="conflicting DBC message definitions"),
+        pytest.raises(RuntimeError, match="conflicting DBC layouts"),
         patch("zelos_sdk.TraceSource"),
     ):
         CanCodec(_merged_config(dbc_conflict="error"), bus_name="busA")
@@ -225,13 +240,23 @@ def test_get_tx_state_keeps_the_single_dbc_view_and_adds_the_list(merged_codec):
         "path": str(DBC_A),
         "name": "merge_a.dbc",
         "hash": merged_codec.dbc_hash,
-        "message_count": 7,
+        "message_count": 9,
     }
     assert [d["name"] for d in bus["dbcs"]] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
-    assert [d["message_count"] for d in bus["dbcs"]] == [4, 4, 1]
+    assert [d["message_count"] for d in bus["dbcs"]] == [5, 5, 1]
     assert {d["path"] for d in bus["dbcs"]} == {str(p) for p in MERGE_SET}
     assert all(len(d["hash"]) == 16 for d in bus["dbcs"])
     assert bus["dbc_conflicts"] == merged_codec.dbc_conflicts
+    assert bus["dbc_overlaps"] == [
+        {
+            "frame_id": 770,
+            "is_extended": False,
+            "names": [
+                {"file": "merge_a.dbc", "name": "Merge_Conflict_A"},
+                {"file": "merge_b.dbc", "name": "Merge_Conflict_B"},
+            ],
+        }
+    ]
 
 
 def test_list_and_describe_report_the_owning_file(merged_codec):
@@ -240,9 +265,11 @@ def test_list_and_describe_report_the_owning_file(merged_codec):
     assert listed["dbcs"] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
     by_name = {m["name"]: m for m in listed["messages"]}
     assert by_name["Merge_A"]["database"] == "merge_a.dbc"
-    assert by_name["Merge_Conflict_B"]["database"] == "merge_b.dbc"
     assert by_name["Merge_C"]["database"] == "merge_c.dbc"
-    assert "Merge_Conflict_A" not in by_name
+    # One entry per definition: both names on 0x302, each with its owning file.
+    assert by_name["Merge_Conflict_A"]["database"] == "merge_a.dbc"
+    assert by_name["Merge_Conflict_B"]["database"] == "merge_b.dbc"
+    assert by_name["Merge_Conflict_A"]["can_id"] == by_name["Merge_Conflict_B"]["can_id"] == 770
 
     described = merged_codec.describe_message("Merge_C")
     assert described["dbcs"] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
@@ -291,7 +318,7 @@ def test_virtual_bus_names_decoded_and_raw_events(with_prefix):
     source when a prefix is set, unprefixed on the bus's own source when not."""
     events: dict[str, MagicMock] = {}
 
-    def add_event(name, _schema):
+    def add_event(name, _schema, event_type=None):
         events[name] = MagicMock()
         return events[name]
 
@@ -341,6 +368,39 @@ def test_virtual_bus_names_decoded_and_raw_events(with_prefix):
     assert raw_kwargs["dlc"] == 8
 
     assert events[f"{prefix}0064_DUT_Status"].log_at.call_count == 1
+
+
+def test_virtual_bus_decodes_an_overlapping_id_under_every_definition(tmp_path):
+    """One frame on 0x302, which merge_a and merge_b define under different
+    names: a table per definition, each stamped with the family event type."""
+    namespace = zelos_sdk.TraceNamespace("overlap_decode")
+    output = tmp_path / "overlap.trz"
+    config = _merged_config(channel="zelos-overlap-test", log_raw_frames=False)
+
+    notifier = sender = None
+    with zelos_sdk.TraceWriter(str(output), namespace=namespace):
+        source = zelos_sdk.TraceSource("CAN", namespace=namespace)
+        codec = CanCodec(config, namespace=namespace, bus_name="busA", source=source)
+        try:
+            codec.start()
+            notifier = can.Notifier(codec.bus, [codec])
+            sender = can.Bus(interface="virtual", channel=config["channel"])
+            sender.send(can.Message(arbitration_id=0x302, data=bytes(2), is_extended_id=False))
+            wait_until(lambda: codec.metrics.messages_decoded >= 2)
+        finally:
+            if notifier is not None:
+                notifier.stop()
+            if sender is not None:
+                sender.shutdown()
+            codec.stop()
+
+    # One frame, two definitions, two decodes — the same count the Rust codec reports.
+    assert codec.metrics.messages_received == 1
+    assert codec.metrics.messages_decoded == 2
+
+    written = trace_events(output)
+    assert written["CAN/busA/0302_Merge_Conflict_A"] == "zelos.can.message.v1"
+    assert written["CAN/busA/0302_Merge_Conflict_B"] == "zelos.can.message.v1"
 
 
 def test_create_codecs_shares_one_source_across_buses():

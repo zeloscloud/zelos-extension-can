@@ -49,11 +49,11 @@ class TestCanCodecInitialization:
     def test_loads_dbc(self, codec, test_dbc_path):
         """Test DBC file is loaded and merged.
 
-        test.dbc holds 13 message definitions but two of them share CAN id 800,
-        so the merge keeps 12 — the same set the Rust decoder reports."""
+        Two of test.dbc's 13 definitions share CAN id 800 under different names,
+        so both survive — the same set the Rust decoder reports."""
         assert len(codec.databases) == 1
         assert len(codec.databases[0].messages) == 13
-        assert len(codec.messages) == 12
+        assert len(codec.messages) == 13
 
     def test_creates_message_lookups(self, codec):
         """Test message lookup dictionaries are populated."""
@@ -82,7 +82,7 @@ class TestCanCodecInitialization:
         assert len(codec._events) == 0
 
         # Event should not exist before first message
-        assert (0x64, False) not in codec._events
+        assert (0x64, False, "DUT_Status") not in codec._events
 
         msg = can.Message(
             arbitration_id=0x64,
@@ -95,8 +95,8 @@ class TestCanCodecInitialization:
         codec._handle_message(msg)
 
         # Now the event should exist
-        assert (0x64, False) in codec._events
-        assert codec._events[(0x64, False)] is not None
+        assert (0x64, False, "DUT_Status") in codec._events
+        assert codec._events[(0x64, False, "DUT_Status")] is not None
 
         # Handling the same message again should not increase cache size
         cache_size_after_first = len(codec._events)
@@ -119,8 +119,8 @@ class TestCanCodecInitialization:
         assert len(codec._events) > 0
 
         # Specific event should exist
-        assert (0x64, False) in codec._events
-        assert codec._events[(0x64, False)] is not None
+        assert (0x64, False, "DUT_Status") in codec._events
+        assert codec._events[(0x64, False, "DUT_Status")] is not None
 
         msg = can.Message(
             arbitration_id=0x64,
@@ -234,8 +234,8 @@ class TestMessageDecoding:
         assert codec.metrics.unknown_messages == 0
         assert (0x100, False) in codec.messages_by_id
         assert (0x100, True) in codec.messages_by_id
-        assert codec._events[(0x100, False)] is not None
-        assert codec._events[(0x100, True)] is not None
+        assert codec._events[(0x100, False, "StdMessage")] is not None
+        assert codec._events[(0x100, True, "ExtMessage")] is not None
 
 
 class TestConfiguration:
@@ -515,6 +515,8 @@ class TestEmitFailureSuppression:
     CODEC_LOGGER = "zelos_extension_can.codec"
     FAILING_ID = 0x64  # DUT_Status, 8 data bytes
     HEALTHY_ID = 0xC8  # DUT_Command, 1 data byte
+    FAILING_KEY = (FAILING_ID, False, "DUT_Status")
+    HEALTHY_KEY = (HEALTHY_ID, False, "DUT_Command")
 
     @staticmethod
     def _frame(arbitration_id: int, data: bytes):
@@ -527,7 +529,7 @@ class TestEmitFailureSuppression:
         """Make source.add_event return a distinct mock per event name."""
         from unittest.mock import MagicMock
 
-        codec.source.add_event.side_effect = lambda name, fields: MagicMock()
+        codec.source.add_event.side_effect = lambda name, fields, event_type=None: MagicMock()
 
     def test_emit_failure_logs_once_then_suppresses(self, codec, caplog, monkeypatch):
         """N frames of a message whose emit always fails produce exactly one log record."""
@@ -562,7 +564,7 @@ class TestEmitFailureSuppression:
             assert "schema registration exploded" in message
             assert "suppressing further errors for this message" in message
 
-            assert (self.FAILING_ID, False) in codec._failed_messages
+            assert self.FAILING_KEY in codec._failed_messages
             assert codec.metrics.emit_errors == 1
 
             # Every later frame: silent short-circuit, still counted.
@@ -578,9 +580,9 @@ class TestEmitFailureSuppression:
                 codec._decode_and_emit_message(healthy, None)
             assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
-        healthy_event = codec._events[(self.HEALTHY_ID, False)]
+        healthy_event = codec._events[self.HEALTHY_KEY]
         assert healthy_event.log.call_count == frames
-        assert (self.HEALTHY_ID, False) not in codec._failed_messages
+        assert self.HEALTHY_KEY not in codec._failed_messages
 
         # Emit failures never touch decode_errors (bus-noise semantics).
         assert codec.metrics.decode_errors == 0
@@ -601,7 +603,7 @@ class TestEmitFailureSuppression:
 
         assert codec.metrics.decode_errors == 3
         assert codec.metrics.emit_errors == 0
-        assert (self.FAILING_ID, False) not in codec._failed_messages
+        assert self.FAILING_KEY not in codec._failed_messages
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 

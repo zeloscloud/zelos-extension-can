@@ -130,6 +130,11 @@ def _hash_dbc_file(path: Path) -> str:
 #: the app's `advanced.prefix`, the `trace` and `convert` CLI commands.
 DEFAULT_PREFIX = "CAN"
 
+#: Event type stamped on every decoded message table, base and mux, matching
+#: what the Rust codec emits. A family type: the fields are the DBC message's
+#: own, so it only marks the table as a CAN decode.
+DECODED_EVENT_TYPE = "zelos.can.message.v1"
+
 
 def trace_layout(prefix: str, bus: str) -> tuple[str, str | None, str]:
     """The one trace-naming rule, shared by every entry point.
@@ -155,26 +160,38 @@ def bus_database_files(bus_config: dict[str, Any]) -> list[str]:
     return [str(legacy), *files] if legacy else files
 
 
+def _definition_key(msg: cantools.database.can.Message) -> tuple[int, bool, str]:
+    """Identity of ONE surviving definition. Several DBCs may define a single
+    frame id under different names; each keeps its own table, schema cache slot
+    and error blocklist entry."""
+    return (msg.frame_id, msg.is_extended_frame, msg.name)
+
+
 def _merge_dbcs(
     files: Sequence[Path],
     databases: Sequence[cantools.database.can.Database],
     conflict: str,
 ) -> tuple[
     list[cantools.database.can.Message],
-    dict[tuple[int, bool], Path],
+    dict[tuple[int, bool, str], Path],
+    list[dict[str, Any]],
     list[dict[str, Any]],
     list[int],
 ]:
     """Merge an ordered DBC list, deferring to the Rust decoder's rule.
 
     A bus-less `zelos_can.CanDecoder` parses exactly the list the Rust codec
-    would — no socket, no trace — and reports which definition of each message
-    id survived; `conflict="error"` makes it refuse the load. The rule lives
-    there and nowhere else: a hand-mirrored copy here only bought two ways to
-    disagree about what `dbc_conflicts` and `dbc_conflict: error` mean.
+    would — no socket, no trace — and reports which definitions survived;
+    `conflict="error"` makes it refuse the load. The rule lives there and
+    nowhere else: a hand-mirrored copy here only bought two ways to disagree
+    about what `dbc_conflicts` and `dbc_conflict: error` mean.
 
-    :return: (surviving cantools messages, origin file per key, conflict
-        records, per-file message counts)
+    Two definitions of one frame id under DIFFERENT names both survive (an
+    overlap) and a matching frame decodes under each. Only the same id under the
+    same name, laid out differently, is a conflict; the later file wins it.
+
+    :return: (surviving cantools messages, origin file per definition, conflict
+        records, overlap records, per-file message counts)
     """
     import zelos_can
 
@@ -184,30 +201,24 @@ def _merge_dbcs(
 
     # The decoder names survivors, not objects; pair each back to the cantools
     # Message the encode / describe paths need. Event names are
-    # `{frame_id:0{4,8}x}_{name}`.
+    # `{frame_id:0{4,8}x}_{name}`, one per surviving definition, and both sides
+    # read the name verbatim off the same `BO_` line, so the match is exact.
     survivors = {
-        (frame_id, is_extended): event_name.split("_", 1)[1]
+        (frame_id, is_extended, event_name.split("_", 1)[1])
         for frame_id, is_extended, event_name in decoder.message_keys()
     }
 
-    # Walk the files in list order, each in definition order: the LAST definition
-    # of an id wins, so `messages_by_id` and `messages_by_name` are both
-    # later-file-wins even for a name that sits at two different ids. The
-    # decoder's key order is `(frame_id, is_extended)`, which would resolve such
-    # a name to the higher id instead. A repeated id keeps the position it first
-    # appeared at, so the list stays stable as files are appended.
-    kept: dict[tuple[int, bool], cantools.database.can.Message] = {}
-    origin: dict[tuple[int, bool], Path] = {}
+    # Walk the files in list order, each in definition order: the LAST file
+    # defining a given (id, name) wins, so `messages_by_name` is later-file-wins
+    # even for a name that sits at two different ids. A redefinition keeps the
+    # position it first appeared at, so the list stays stable as files are
+    # appended.
+    kept: dict[tuple[int, bool, str], cantools.database.can.Message] = {}
+    origin: dict[tuple[int, bool, str], Path] = {}
     for path, db in zip(files, databases, strict=True):
         for msg in db.messages:
-            key = (msg.frame_id, msg.is_extended_frame)
-            name = survivors.get(key)
-            if name is None:
-                continue
-            # Prefer the definition the decoder's name points at over one it
-            # rewrote (non-DBC formats can carry names a trace name cannot).
-            incumbent = kept.get(key)
-            if incumbent is not None and incumbent.name == name and msg.name != name:
+            key = _definition_key(msg)
+            if key not in survivors:
                 continue
             kept[key] = msg
             origin[key] = path
@@ -216,7 +227,7 @@ def _merge_dbcs(
 
     conflicts: list[dict[str, Any]] = []
     for record in decoder.dbc_conflicts():
-        kept, dropped = record["kept"], record["dropped"]
+        winner, dropped = record["kept"], record["dropped"]
         logger.warning(
             "conflicting definitions of CAN id 0x%x (extended=%s): '%s' from %s vs '%s' from %s "
             "- keeping '%s'",
@@ -224,20 +235,40 @@ def _merge_dbcs(
             record["is_extended"],
             dropped["name"],
             dropped["source"],
-            kept["name"],
-            kept["source"],
-            kept["name"],
+            winner["name"],
+            winner["source"],
+            winner["name"],
         )
         conflicts.append(
             {
                 "frame_id": record["frame_id"],
                 "is_extended": record["is_extended"],
-                "kept": {"file": Path(kept["source"]).name, "name": kept["name"]},
+                "kept": {"file": Path(winner["source"]).name, "name": winner["name"]},
                 "dropped": {"file": Path(dropped["source"]).name, "name": dropped["name"]},
             }
         )
 
-    return messages, origin, conflicts, [db["message_count"] for db in decoder.databases()]
+    overlaps: list[dict[str, Any]] = []
+    for record in decoder.dbc_overlaps():
+        logger.info(
+            "CAN id 0x%x (extended=%s) is defined %d times, each decoded into its own table: %s",
+            record["frame_id"],
+            record["is_extended"],
+            len(record["names"]),
+            ", ".join(f"'{n['name']}' from {n['source']}" for n in record["names"]),
+        )
+        overlaps.append(
+            {
+                "frame_id": record["frame_id"],
+                "is_extended": record["is_extended"],
+                "names": [
+                    {"file": Path(n["source"]).name, "name": n["name"]} for n in record["names"]
+                ],
+            }
+        )
+
+    counts = [db["message_count"] for db in decoder.databases()]
+    return messages, origin, conflicts, overlaps, counts
 
 
 def _derive_bus_status(running: bool, bus: Any) -> str:
@@ -442,16 +473,16 @@ class CanCodec(can.Listener):
         # Metrics tracking
         self.metrics = Metrics()
 
-        # Message keys whose decode -> emit path raised an unexpected exception
+        # Definitions whose decode -> emit path raised an unexpected exception
         # (e.g. a schema that cannot be registered). Such faults are
         # deterministic: without this set a 100 Hz message would raise, and log,
         # 100 times a second forever.
         #
         # LOG-VOLUME INVARIANT (extension logs persist to disk, unwatched):
-        # at most ONE log record per distinct failing message key per process
+        # at most ONE log record per distinct failing definition per process
         # lifetime, and ZERO records on the short-circuit path once a key is in
         # this set. Worst case is therefore one ERROR per DBC message, ever.
-        self._failed_messages: set[tuple[int, bool]] = set()
+        self._failed_messages: set[tuple[int, bool, str]] = set()
 
         # Demo mode simulation
         self.demo_mode = config.get("demo_mode", False)
@@ -476,17 +507,23 @@ class CanCodec(can.Listener):
             except Exception as e:
                 raise ValueError(f"Failed to load database file: {e}") from e
 
-        self.messages, self.message_origin, self.dbc_conflicts, counts = _merge_dbcs(
-            self.database_files, self.databases, self.dbc_conflict
-        )
+        (
+            self.messages,
+            self.message_origin,
+            self.dbc_conflicts,
+            self.dbc_overlaps,
+            counts,
+        ) = _merge_dbcs(self.database_files, self.databases, self.dbc_conflict)
         # Every definition the merge dropped was either an identical duplicate
-        # or a reported conflict.
+        # or a reported conflict; an overlap drops nothing.
         logger.info(
-            "DBC merge: %d files, %d messages, %d identical duplicates deduped, %d conflicts",
+            "DBC merge: %d files, %d messages, %d identical duplicates deduped, %d conflicts, "
+            "%d overlaps",
             len(self.database_files),
             len(self.messages),
             sum(counts) - len(self.messages) - len(self.dbc_conflicts),
             len(self.dbc_conflicts),
+            len(self.dbc_overlaps),
         )
 
         # Hashed once: `get_tx_state` polls at 1 Hz and must not re-read DBCs.
@@ -531,22 +568,24 @@ class CanCodec(can.Listener):
             else None
         )
 
-        # Message lookup tables. Both are last-wins so they agree with the
-        # merge above and with each other.
-        self.messages_by_id: dict[tuple[int, bool], cantools.database.can.Message] = {}
+        # Message lookup tables. An id carries every definition of it, in
+        # definition order, because a frame decodes under all of them; names are
+        # last-wins so TX by name agrees with the merge.
+        self.messages_by_id: dict[tuple[int, bool], list[cantools.database.can.Message]] = {}
         self.messages_by_name: dict[str, cantools.database.can.Message] = {}
 
-        self._events: dict[tuple[int, bool] | tuple[int, bool, int], Any] = {}
+        # Keyed per definition, plus the mux value for a subtable.
+        self._events: dict[tuple[int, bool, str] | tuple[int, bool, str, int], Any] = {}
 
         for msg in self.messages:
-            key = self._message_key(msg.frame_id, msg.is_extended_frame)
-            self.messages_by_id[key] = msg
+            id_key = self._message_key(msg.frame_id, msg.is_extended_frame)
+            self.messages_by_id.setdefault(id_key, []).append(msg)
             if msg.name in self.messages_by_name:
                 logger.warning(
                     "Message name '%s' is redefined by %s (ID %d); the later definition wins, "
                     "address the earlier one by ID",
                     msg.name,
-                    self.message_origin[key].name,
+                    self.message_origin[_definition_key(msg)].name,
                     msg.frame_id,
                 )
             self.messages_by_name[msg.name] = msg
@@ -1170,23 +1209,43 @@ class CanCodec(can.Listener):
             )
 
     def _decode_and_emit_message(self, msg: can.Message, timestamp_ns: int | None) -> None:
-        """Decode CAN message and emit decoded signals to trace.
+        """Decode a CAN frame under EVERY definition of its id and emit each
+        into its own trace table.
 
         :param msg: CAN message
         :param timestamp_ns: Timestamp in nanoseconds
         """
-        # Resolved before the try so the failure handler below always has a key
-        # to blocklist — that is what bounds the log volume.
-        key = self._message_key(msg.arbitration_id, msg.is_extended_id)
-        dbc_msg = self.messages_by_id.get(key)
-        if not dbc_msg:
+        id_key = self._message_key(msg.arbitration_id, msg.is_extended_id)
+        dbc_msgs = self.messages_by_id.get(id_key)
+        if not dbc_msgs:
             logger.debug(
                 "Unknown message ID: %04x (extended=%s)", msg.arbitration_id, msg.is_extended_id
             )
             self.metrics.unknown_messages += 1
             return
 
-        # This message already failed with an unexpected error, which is
+        for dbc_msg in dbc_msgs:
+            self._decode_one_definition(dbc_msg, msg, timestamp_ns)
+
+    def _decode_one_definition(
+        self,
+        dbc_msg: cantools.database.can.Message,
+        msg: can.Message,
+        timestamp_ns: int | None,
+    ) -> None:
+        """Decode a frame under one definition. Counters and the failure
+        blocklist are per definition, so a broken definition of an overlapping
+        id never silences the others.
+
+        :param dbc_msg: DBC message definition
+        :param msg: CAN message
+        :param timestamp_ns: Timestamp in nanoseconds
+        """
+        # Resolved before the try so the failure handler below always has a key
+        # to blocklist — that is what bounds the log volume.
+        key = _definition_key(dbc_msg)
+
+        # This definition already failed with an unexpected error, which is
         # deterministic, so skip the work. Silent by contract: the log-volume
         # invariant on self._failed_messages allows ZERO records here.
         if key in self._failed_messages:
@@ -1232,7 +1291,8 @@ class CanCodec(can.Listener):
     def _handle_message(self, msg: can.Message) -> None:
         """Decode and emit CAN message to trace.
 
-        For multiplexed messages, emits TWO separate events to minimize memory footprint:
+        One event per definition of the frame's id; for a multiplexed definition
+        TWO, to minimize memory footprint:
         1. Base signals (including multiplexer): {id:04x}_{name}
         2. Multiplexed signals: {id:04x}_{name}/{mux_value}
 
@@ -1261,13 +1321,13 @@ class CanCodec(can.Listener):
 
         :param dbc_msg: DBC message definition
         """
-        cache_key = self._message_key(dbc_msg.frame_id, dbc_msg.is_extended_frame)
+        cache_key = _definition_key(dbc_msg)
         event_name = self._get_event_name(dbc_msg)
         base_signals = [sig for sig in dbc_msg.signals if not sig.multiplexer_ids]
 
         if base_signals:
             fields = [cantools_signal_to_trace_metadata(sig) for sig in base_signals]
-            event = self.source.add_event(event_name, fields)
+            event = self.source.add_event(event_name, fields, event_type=DECODED_EVENT_TYPE)
 
             for sig in base_signals:
                 value_table = _value_table_for_trace(sig)
@@ -1307,7 +1367,7 @@ class CanCodec(can.Listener):
         if not mux_signal:
             return
 
-        cache_key = (dbc_msg.frame_id, dbc_msg.is_extended_frame, mux_value_int)
+        cache_key = (*_definition_key(dbc_msg), mux_value_int)
 
         # Skip if already generated
         if cache_key in self._events:
@@ -1326,7 +1386,7 @@ class CanCodec(can.Listener):
 
         if mux_signals:
             fields = [cantools_signal_to_trace_metadata(sig) for sig in mux_signals]
-            event = self.source.add_event(event_name, fields)
+            event = self.source.add_event(event_name, fields, event_type=DECODED_EVENT_TYPE)
 
             for sig in mux_signals:
                 value_table = _value_table_for_trace(sig)
@@ -1369,7 +1429,7 @@ class CanCodec(can.Listener):
         :param decoded: Decoded signal values
         :param timestamp_ns: Timestamp in nanoseconds, or None
         """
-        cache_key = self._message_key(dbc_msg.frame_id, dbc_msg.is_extended_frame)
+        cache_key = _definition_key(dbc_msg)
         event = self._events.get(cache_key)
 
         # Generate schema lazily if not already present
@@ -1407,7 +1467,7 @@ class CanCodec(can.Listener):
             # NamedSignalValue - get integer representation
             mux_value_int = int(mux_signal.conversion.choice_to_number(mux_value))
 
-        cache_key = (dbc_msg.frame_id, dbc_msg.is_extended_frame, mux_value_int)
+        cache_key = (*_definition_key(dbc_msg), mux_value_int)
         event = self._events.get(cache_key)
 
         # Generate mux schema lazily if not already present
@@ -1513,8 +1573,8 @@ class CanCodec(can.Listener):
         return self.database_files[0] if self.database_files else None
 
     def _message_database(self, msg: cantools.database.can.Message) -> str | None:
-        """Name of the file the merge took this message from."""
-        origin = self.message_origin.get(self._message_key(msg.frame_id, msg.is_extended_frame))
+        """Name of the file the merge took this definition from."""
+        origin = self.message_origin.get(_definition_key(msg))
         return origin.name if origin else None
 
     def get_tx_state(self) -> dict[str, Any]:
@@ -1557,7 +1617,11 @@ class CanCodec(can.Listener):
                     "message_count": len(self.messages),
                 },
                 "dbcs": self.dbc_entries,
+                # `dbc_conflicts` is one id+name two files laid out differently
+                # (later wins); `dbc_overlaps` is one id under several names,
+                # all of which survive and decode.
                 "dbc_conflicts": self.dbc_conflicts,
+                "dbc_overlaps": self.dbc_overlaps,
                 "metrics": {
                     "tx_errors": tx_errors,
                     "tx_overflows": tx_overflows,

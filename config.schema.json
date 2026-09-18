@@ -40,7 +40,7 @@
           "database_files": {
             "type": "array",
             "title": "Database Files (.dbc)",
-            "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message id an earlier one defines differently. Leave empty for a raw-frames-only bus.",
+            "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message an earlier one defines differently. Two files naming one message id differently both decode, each into its own table. Leave empty for a raw-frames-only bus.",
             "items": {
               "type": "string",
               "ui:widget": "file-picker"
@@ -51,7 +51,7 @@
           "dbc_conflict": {
             "type": "string",
             "title": "On Conflicting Definitions",
-            "description": "What to do when the same message id is defined differently twice, by two database files or twice inside one file: 'warn' keeps the later definition, 'error' refuses to start.",
+            "description": "What to do when one message id AND name is laid out differently twice, by two database files or twice inside one file: 'warn' keeps the later definition, 'error' refuses to start. The same id under a different name is not a conflict; both definitions decode.",
             "enum": [
               "warn",
               "error"

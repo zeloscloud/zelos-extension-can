@@ -12,15 +12,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   interfaces with their state and driver (`can0 (up, gs_usb)`). A name typed by
   hand still works.
 - **A list of database files per bus**, applied in order: a later file wins a
-  message id an earlier one defines differently.
+  message an earlier one defines differently.
+- **Definitions of one frame id coexist**: two DBCs naming one id differently
+  both decode, each into its own `<id>_<Name>` table, and decoded tables carry
+  the `zelos.can.message.v1` event type; only the same id under the same name
+  is a conflict.
 - **`dbc_conflict`** per bus: `warn` keeps the later definition, `error` refuses
   to start.
 - **Advanced `prefix`**: the leading trace source every bus publishes under.
   Clear it for one source per bus.
 - Raw frames are logged as the typed `Frame` event (the well-known `CanFrame`
   schema) instead of an ad-hoc one.
-- DBC provenance on the wire: `dbcs`, `dbc_conflicts`, and a per-message
-  `database` on `get_tx_state` / `list_messages` / `describe_message`.
+- DBC provenance on the wire: `dbcs`, `dbc_conflicts`, `dbc_overlaps`, and a
+  per-message `database` on `get_tx_state` / `list_messages` /
+  `describe_message`.
 
 ### Changed
 - Default trace paths are `CAN/<bus>/...` — decoded signals, raw frames, and
