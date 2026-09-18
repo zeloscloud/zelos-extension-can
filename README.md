@@ -30,7 +30,7 @@ which have no SocketCAN.
 | Hook | What it does |
 |---|---|
 | **Auto-configure** (button above the form) | One `zelos-socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`. Review it, save, then start. Advanced settings are left as they are. |
-| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces — `can0 (up, gs_usb)`, `vcan0 (virtual)` — for a `socketcan` / `zelos-socketcan` bus. You can still type a name. |
+| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `zelos-socketcan` bus. You can still type a name. |
 
 ### Required Settings
 - **Interface**: Choose your CAN adapter type (zelos-socketcan, ssh-socketcan, socketcan, pcan, kvaser, vector, virtual, or demo). On Linux, `zelos-socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.

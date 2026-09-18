@@ -452,8 +452,11 @@ def _interface_rank(iface: dict[str, str]) -> tuple[int, str]:
     return (1 if _is_virtual(iface["name"]) else 0, iface["name"])
 
 
-def _interface_label(iface: dict[str, str]) -> str:
-    """`can0 (up, gs_usb)` / `vcan0 (virtual)` — what a person needs to pick one.
+def _interface_choice(iface: dict[str, str]) -> dict[str, str]:
+    """One `choices` entry: the name, and what a person needs to pick it.
+
+    The app's picker renders `detail` as dim right-aligned text beside the
+    value, so `detail` carries the notes alone: `up, gs_usb` / `virtual`.
 
     `unknown` is left out: vcan reports it and is perfectly usable, so it says
     nothing. `down` is kept — that bus needs `ip link set <if> up` first.
@@ -462,7 +465,7 @@ def _interface_label(iface: dict[str, str]) -> str:
     kind = iface["driver"] or ("virtual" if _is_virtual(iface["name"]) else "")
     if kind:
         notes.append(kind)
-    return f"{iface['name']} ({', '.join(notes)})" if notes else iface["name"]
+    return {"value": iface["name"], "detail": ", ".join(notes)}
 
 
 def _local_can_interfaces() -> list[dict[str, str]]:
@@ -503,10 +506,7 @@ def list_interfaces() -> dict[str, Any]:
     """The app's `action-choices` contract: `choices` in the order to show."""
     return {
         "status": "success",
-        "choices": [
-            {"value": iface["name"], "label": _interface_label(iface)}
-            for iface in _local_can_interfaces()
-        ],
+        "choices": [_interface_choice(iface) for iface in _local_can_interfaces()],
     }
 
 
