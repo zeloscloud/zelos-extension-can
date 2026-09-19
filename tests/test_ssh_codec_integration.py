@@ -707,7 +707,6 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
                 "database_files": [TEST_DBC],
                 "name": "edge-bus",
                 "fd_mode": False,
-                "dbc_conflict": "error",
             }
         ]
     }

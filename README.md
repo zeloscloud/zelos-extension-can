@@ -40,7 +40,6 @@ which have no SocketCAN.
 | Setting | What it does |
 |---|---|
 | **Database Files (.dbc)** | Ordered list of CAN databases. Order is precedence: a later file wins a message an earlier one defines differently. Leave empty for a raw-frames-only bus. |
-| **On Conflicting Definitions** | `warn` (default) keeps the later file's definition; `error` refuses to start. |
 | **Name** | Trace segment for this bus. Letters, digits, space, `_`, `-` only. Defaults to the sanitized channel. |
 | **Bitrate** | CAN bus bitrate (default 500000). |
 | **FD Mode** | Enable CAN-FD support. |
@@ -50,7 +49,7 @@ Two databases that define one message id:
 | Case | What happens |
 |---|---|
 | **Overlap** — same id, **different** names | Both definitions survive: a frame decodes under each, into its own table (`0302_Batt_Status` *and* `0302_Batt_Debug`). Logged at INFO, reported as `dbc_overlaps`. |
-| **Conflict** — same id, **same** name, different layout | One definition wins and the other is dropped. `warn` keeps the later file's and reports it as `dbc_conflicts`; `error` refuses to start. |
+| **Conflict** — same id, **same** name, different layout | The later file's definition wins, the other is dropped with a warning, and the pair is listed under `dbc_conflicts` on `get_tx_state`. |
 
 One message name at two ids (a moved message) is neither: both definitions
 survive and both are listed. Address each by its `key` — a transmit by the bare

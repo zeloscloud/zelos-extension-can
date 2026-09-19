@@ -255,7 +255,6 @@ def _report_unpaired(
 def _merge_dbcs(
     files: Sequence[Path],
     databases: Sequence[cantools.database.can.Database],
-    conflict: str,
 ) -> tuple[
     list[cantools.database.can.Message],
     dict[tuple[int, bool, str], Path],
@@ -267,10 +266,9 @@ def _merge_dbcs(
     """Merge an ordered DBC list, deferring to the Rust decoder's rule.
 
     A bus-less `zelos_can.CanDecoder` parses exactly the list the Rust codec
-    would — no socket, no trace — and reports which definitions survived;
-    `conflict="error"` makes it refuse the load. The rule lives there and
-    nowhere else: a hand-mirrored copy here only bought two ways to disagree
-    about what `dbc_conflicts` and `dbc_conflict: error` mean.
+    would — no socket, no trace — and reports which definitions survived. The
+    rule lives there and nowhere else: a hand-mirrored copy here only bought
+    two ways to disagree about what `dbc_conflicts` means.
 
     Two definitions of one frame id under DIFFERENT names both survive (an
     overlap) and a matching frame decodes under each. Only the same id under the
@@ -282,9 +280,7 @@ def _merge_dbcs(
     """
     import zelos_can
 
-    decoder = zelos_can.CanDecoder(
-        database_file=[str(p) for p in files] or None, dbc_conflict=conflict
-    )
+    decoder = zelos_can.CanDecoder(database_file=[str(p) for p in files] or None)
 
     # The decoder names survivors, not objects; pair each back to the cantools
     # Message the encode / describe paths need. Event names are
@@ -591,8 +587,6 @@ class CanCodec(can.Listener):
             if not path.exists():
                 raise FileNotFoundError(f"CAN database file not found: {path}")
 
-        self.dbc_conflict: str = config.get("dbc_conflict") or "warn"
-
         # Each file is loaded on its own (never `add_dbc_file`) so the merge
         # below owns precedence and reports what it did.
         self.databases: list[cantools.database.can.Database] = []
@@ -610,7 +604,7 @@ class CanCodec(can.Listener):
             self.dbc_conflicts,
             self.dbc_overlaps,
             counts,
-        ) = _merge_dbcs(self.database_files, self.databases, self.dbc_conflict)
+        ) = _merge_dbcs(self.database_files, self.databases)
         # Every definition the merge dropped was either an identical duplicate
         # or a reported conflict; an overlap drops nothing.
         logger.info(
@@ -800,7 +794,6 @@ class CanCodec(can.Listener):
         """
         kwargs: dict[str, Any] = {
             "database_file": [str(p) for p in self.database_files] or None,
-            "dbc_conflict": self.dbc_conflict,
             "source": self.source,
             "event_prefix": self.event_prefix,
         }

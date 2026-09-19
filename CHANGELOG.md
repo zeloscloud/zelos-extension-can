@@ -17,8 +17,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   both decode, each into its own `<id>_<Name>` table, and decoded tables carry
   the `zelos.can.message.v1` event type; only the same id under the same name
   is a conflict.
-- **`dbc_conflict`** per bus: `warn` keeps the later definition, `error` refuses
-  to start.
 - **Advanced `prefix`**: the leading trace source every bus publishes under.
   Clear it for one source per bus.
 - Raw frames are logged as the typed `Frame` event (the well-known `CanFrame`

@@ -48,16 +48,6 @@
             "default": [],
             "ui:orderable": true
           },
-          "dbc_conflict": {
-            "type": "string",
-            "title": "On Conflicting Definitions",
-            "description": "What to do when one message id AND name is laid out differently twice, by two database files or twice inside one file: 'warn' keeps the later definition, 'error' refuses to start. The same id under a different name is not a conflict; both definitions decode.",
-            "enum": [
-              "warn",
-              "error"
-            ],
-            "default": "warn"
-          },
           "database_file": {
             "type": "string",
             "ui:widget": "hidden"
@@ -514,7 +504,6 @@
           "interface",
           "name",
           "database_files",
-          "dbc_conflict",
           "*"
         ]
       },

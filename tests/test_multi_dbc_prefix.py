@@ -45,7 +45,7 @@ def _merged_config(**extra) -> dict:
     }
 
 
-# ── merge: dedupe, overlap, conflict, policy ─────────────────────────────────
+# ── merge: dedupe, overlap, conflict ─────────────────────────────────────────
 
 
 def test_merge_dedupes_overlaps_and_reports_the_conflict(caplog):
@@ -112,7 +112,7 @@ def test_unpaired_merge_keys_are_reported(caplog):
     db.messages[0].name = "Renamed_Long_Symbol"  # cantools' name, not the file's
 
     with caplog.at_level(logging.ERROR, logger="zelos_extension_can.codec"):
-        messages, _origin, _keys, _conflicts, _overlaps, counts = _merge_dbcs([DBC_C], [db], "warn")
+        messages, _origin, _keys, _conflicts, _overlaps, counts = _merge_dbcs([DBC_C], [db])
 
     errors = "\n".join(r.getMessage() for r in caplog.records if r.levelno == logging.ERROR)
     for fragment in ("Renamed_Long_Symbol", "Merge_C", "merge_c.dbc", "0x320"):
@@ -120,15 +120,6 @@ def test_unpaired_merge_keys_are_reported(caplog):
     # Reported, never fatal: the load returns, minus the unpairable definition.
     assert messages == []
     assert counts == [1]
-
-
-def test_codec_error_policy_refuses_the_load():
-    """`dbc_conflict: error` is the Rust loader's refusal, surfaced verbatim."""
-    with (
-        pytest.raises(RuntimeError, match="conflicting DBC layouts"),
-        patch("zelos_sdk.TraceSource"),
-    ):
-        CanCodec(_merged_config(dbc_conflict="error"), bus_name="busA")
 
 
 # ── config normalisation ─────────────────────────────────────────────────────
@@ -193,7 +184,7 @@ def test_schema_is_valid_and_carries_the_per_bus_block():
     # The interface-independent per-bus block is hoisted out of the branches, so
     # it is declared exactly once.
     bus_props = schema["properties"]["buses"]["items"]["properties"]
-    assert {"name", "database_files", "dbc_conflict", "database_file"} <= bus_props.keys()
+    assert {"name", "database_files", "database_file"} <= bus_props.keys()
     branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
     assert not any(set(b["properties"]) - {"interface"} & bus_props.keys() for b in branches)
 
