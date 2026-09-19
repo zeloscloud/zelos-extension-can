@@ -6,7 +6,7 @@ the health/reconnect supervisor, ``stop``, the channel synthesis in
 
 The only thing stubbed is :class:`SshTransport`: a :class:`_StubTransport`
 records its constructor args and exposes a mutable ``healthy`` flag plus a
-``teardown`` counter. Everything else is real — a real ``zelos_sdk.TraceSource``,
+``teardown`` counter. Everything else is real — a real ``zelos_sdk.TraceSourceCache``,
 a real ``zelos_can.ExternalBus`` + ``zelos_can.CanCodec`` behind ``self._native``,
 and the real ``CodecTxAdapter`` — so the codec's Rust decode/TX/periodics
 machinery is exercised exactly as in production. Because ``_start_ssh`` and

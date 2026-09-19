@@ -13,6 +13,7 @@ Two layers:
     paths.
 """
 
+import contextlib
 import importlib.util
 import os
 import subprocess
@@ -40,7 +41,7 @@ def test_zelos_socketcan_rejected_off_linux(platform):
         "channel": "can0",
         "database_file": TEST_DBC,
     }
-    with patch("zelos_sdk.TraceSource"):
+    with patch("zelos_sdk.TraceSourceCache"):
         codec = CanCodec(config)
     with (
         patch("zelos_extension_can.codec.sys.platform", platform),
@@ -79,7 +80,7 @@ def zelos_codec():
     """A started CanCodec on the zelos-socketcan interface.
 
     The native path runs the full Rust pipeline (recv -> decode -> trace) and
-    requires a real zelos_sdk.TraceSource, so this uses a live SDK source (no
+    requires a real zelos_sdk.TraceSourceCache, so this uses a live SDK source (no
     TraceWriter is attached; we assert on the codec's native metrics). A unique
     bus_name isolates the trace source per test run.
     """
@@ -118,6 +119,32 @@ def test_zelos_socketcan_decodes_received_frames(zelos_codec):
         m = _rx_metrics(zelos_codec)
         assert m["messages_received"] >= 1, m
         assert m["messages_decoded"] >= 1, m
+    finally:
+        sender.shutdown()
+
+
+@vcan_only
+def test_zelos_socketcan_cache_holds_last_decoded_values(zelos_codec):
+    """The decoded source is a TraceSourceCache, so the last value of every
+    signal is readable back through it — the user-facing half of the switch,
+    not just a decode counter."""
+    sender = can.Bus(interface="socketcan", channel=IFACE)
+    try:
+        # state (bits 0..2) = 5, safety_pin_state (bit 8) = 1.
+        msg = can.Message(
+            arbitration_id=WIRE_ID, data=bytes([0x05, 0x01, 0, 0, 0, 0, 0, 0]), is_extended_id=False
+        )
+        # The event only exists once the Rust codec has registered it, so
+        # resolve inside the loop rather than up front.
+        state = None
+        deadline = time.time() + 2.0
+        while state is None and time.time() < deadline:
+            sender.send(msg)
+            time.sleep(0.02)
+            with contextlib.suppress(KeyError):
+                state = zelos_codec.cache["0064_DUT_Status"].state.get()
+        assert state == 5
+        assert zelos_codec.cache["0064_DUT_Status"].safety_pin_state.get() == 1
     finally:
         sender.shutdown()
 

@@ -38,7 +38,7 @@ def mock_config(test_dbc_path):
 @pytest.fixture
 def codec(mock_config):
     """Create CanCodec instance."""
-    with patch("zelos_sdk.TraceSource"):
+    with patch("zelos_sdk.TraceSourceCache"):
         return CanCodec(mock_config)
 
 
@@ -107,7 +107,7 @@ class TestCanCodecInitialization:
         # Set config to pre-generate all schemas
         mock_config["emit_schemas_on_init"] = True
 
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
         # All events should be pre-generated at init
@@ -132,18 +132,18 @@ class TestCanCodecInitialization:
     def test_timestamp_mode_enum_conversion(self, mock_config):
         """Test timestamp_mode string is converted to enum."""
         mock_config["timestamp_mode"] = "auto"
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
             assert codec.timestamp_mode == TimestampMode.AUTO
             assert isinstance(codec.timestamp_mode, TimestampMode)
 
         mock_config["timestamp_mode"] = "absolute"
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
             assert codec.timestamp_mode == TimestampMode.ABSOLUTE
 
         mock_config["timestamp_mode"] = "ignore"
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
             assert codec.timestamp_mode == TimestampMode.IGNORE
 
@@ -183,6 +183,31 @@ class TestSchemaUtils:
         result = cantools_signal_to_trace_type(state_signal)
         assert result == DataType.UInt8
 
+    @pytest.mark.parametrize(
+        ("scale", "offset"),
+        [
+            (2, 0),  # integral scale doubles the range off the bit field
+            (2, 0.5),  # fractional offset makes every physical value fractional
+            (1, 3),  # pure offset still shifts the range
+        ],
+    )
+    def test_non_identity_conversions_map_to_float64(self, scale, offset):
+        """Any scale/offset moves values into the physical domain; a
+        fixed-width int would truncate them and reject their value-table
+        keys (matches cantools: integer decode only when scale AND offset
+        are both integral)."""
+        import cantools
+        from cantools.database.conversion import BaseConversion
+        from zelos_sdk import DataType
+
+        sig = cantools.database.can.Signal(
+            name="s",
+            start=0,
+            length=12,
+            conversion=BaseConversion.factory(scale=scale, offset=offset),
+        )
+        assert cantools_signal_to_trace_type(sig) == DataType.Float64
+
     def test_signed_integer_mapping(self, codec):
         """Test signed integer mapping."""
         # Use real signal from DBC
@@ -219,7 +244,7 @@ class TestMessageDecoding:
 
         import can
 
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(config)
 
         codec._handle_message(can.Message(arbitration_id=0x100, is_extended_id=False, data=b"\x12"))
@@ -239,21 +264,21 @@ class TestConfiguration:
     def test_requires_interface(self, test_dbc_path):
         """Test interface is required."""
         config = {"channel": "can0", "database_file": test_dbc_path}
-        with pytest.raises(KeyError), patch("zelos_sdk.TraceSource"):
+        with pytest.raises(KeyError), patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(config)
             codec.start()
 
     def test_requires_channel(self, test_dbc_path):
         """Test channel is required."""
         config = {"interface": "virtual", "database_file": test_dbc_path}
-        with pytest.raises(KeyError), patch("zelos_sdk.TraceSource"):
+        with pytest.raises(KeyError), patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(config)
             codec.start()
 
     def test_bitrate_optional_for_virtual(self, mock_config):
         """Test bitrate is optional for virtual interface."""
         del mock_config["bitrate"]
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             CanCodec(mock_config)
             # Should not raise
 
@@ -265,7 +290,7 @@ class TestConfigJsonMerging:
         """Test config_json is merged into bus config."""
         mock_config["config_json"] = '{"app_name": "TestApp", "receive_own_messages": false}'
 
-        with patch("zelos_sdk.TraceSource"), patch("can.Bus") as mock_bus:
+        with patch("zelos_sdk.TraceSourceCache"), patch("can.Bus") as mock_bus:
             codec = CanCodec(mock_config)
             codec.start()
 
@@ -280,7 +305,7 @@ class TestConfigJsonMerging:
         """Test empty config_json is ignored."""
         mock_config["config_json"] = ""
 
-        with patch("zelos_sdk.TraceSource"), patch("can.Bus") as mock_bus:
+        with patch("zelos_sdk.TraceSourceCache"), patch("can.Bus") as mock_bus:
             codec = CanCodec(mock_config)
             codec.start()
 
@@ -294,7 +319,7 @@ class TestTimestampHandling:
 
     def test_timestamp_mode_auto_boot_relative(self, mock_config):
         """Test auto mode detects boot-relative timestamps."""
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             # First timestamp is small (< 1 hour) - should be detected as boot-relative
@@ -312,7 +337,7 @@ class TestTimestampHandling:
 
     def test_timestamp_mode_auto_absolute(self, mock_config):
         """Test auto mode detects absolute wall-clock timestamps."""
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             # First timestamp is large (> 1 hour) - should be detected as absolute
@@ -328,7 +353,7 @@ class TestTimestampHandling:
     def test_timestamp_mode_absolute(self, mock_config):
         """Test absolute mode uses timestamps as-is."""
         mock_config["timestamp_mode"] = "absolute"
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             # Small timestamp - should still use as-is
@@ -341,7 +366,7 @@ class TestTimestampHandling:
     def test_timestamp_mode_ignore(self, mock_config):
         """Test ignore mode returns None to use system time."""
         mock_config["timestamp_mode"] = "ignore"
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             hw_ts = 15.5
@@ -351,7 +376,7 @@ class TestTimestampHandling:
 
     def test_timestamp_mode_none_hw_timestamp(self, mock_config):
         """Test handling of None hardware timestamp."""
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             timestamp_ns = codec.get_timestamp(None)
@@ -359,7 +384,7 @@ class TestTimestampHandling:
 
     def test_timestamp_mode_auto_consistent_offset(self, mock_config):
         """Test auto mode applies consistent offset to subsequent timestamps."""
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             # First timestamp establishes offset
@@ -378,7 +403,7 @@ class TestTimestampHandling:
 
     def test_message_handling_with_boot_relative_timestamps(self, mock_config):
         """Test full message handling flow with boot-relative timestamps."""
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             # Create a mock CAN message with boot-relative timestamp
@@ -421,7 +446,7 @@ class TestTimestampHandling:
     def test_message_handling_with_absolute_timestamps(self, mock_config):
         """Test full message handling flow with absolute wall-clock timestamps."""
         mock_config["timestamp_mode"] = "absolute"
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             # Create a mock CAN message with absolute timestamp
@@ -445,7 +470,7 @@ class TestTimestampHandling:
 
     def test_message_handling_preserves_relative_timing(self, mock_config):
         """Test that relative timing between messages is preserved."""
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codec = CanCodec(mock_config)
 
             # Create sequence of messages with boot-relative timestamps
@@ -482,7 +507,7 @@ class TestErrorHandling:
         }
         with (
             pytest.raises(FileNotFoundError, match="CAN database file not found"),
-            patch("zelos_sdk.TraceSource"),
+            patch("zelos_sdk.TraceSourceCache"),
         ):
             CanCodec(config)
 
@@ -494,7 +519,7 @@ class TestErrorHandling:
         config = {"interface": "virtual", "channel": "vcan0", "database_file": str(bad_dbc)}
         with (
             pytest.raises(ValueError, match="Failed to load database file"),
-            patch("zelos_sdk.TraceSource"),
+            patch("zelos_sdk.TraceSourceCache"),
         ):
             CanCodec(config)
 
@@ -623,25 +648,31 @@ class TestMultiBusSupport:
 
     def test_codec_with_bus_name_uses_exact_name(self, mock_config):
         """Test that bus_name is used as exact trace source name."""
-        with patch("zelos_sdk.TraceSource") as mock_source:
+        with patch("zelos_sdk.TraceSourceCache") as mock_source:
             CanCodec(mock_config, bus_name="powertrain")
             # Verify trace source created with exact name
             mock_source.assert_any_call("powertrain")
 
     def test_codec_without_bus_name_uses_default(self, mock_config):
         """Test that no bus_name uses default trace source name."""
-        with patch("zelos_sdk.TraceSource") as mock_source:
+        with patch("zelos_sdk.TraceSourceCache") as mock_source:
             CanCodec(mock_config)
             mock_source.assert_any_call("can_codec")
 
     def test_codec_with_bus_name_raw_source(self, mock_config):
-        """Test that bus_name is used for raw trace source when enabled."""
+        """Test that bus_name is used for raw trace source when enabled.
+
+        The two sources are deliberately different types: decoded signals get
+        a readable cache, raw frames a plain source.
+        """
         mock_config["log_raw_frames"] = True
-        with patch("zelos_sdk.TraceSource") as mock_source:
+        with (
+            patch("zelos_sdk.TraceSourceCache") as mock_cache,
+            patch("zelos_sdk.TraceSource") as mock_raw,
+        ):
             CanCodec(mock_config, bus_name="chassis")
-            calls = [str(c) for c in mock_source.call_args_list]
-            assert any("'chassis'" in c for c in calls)
-            assert any("'chassis_raw'" in c for c in calls)
+            mock_cache.assert_called_once_with("chassis")
+            mock_raw.assert_called_once_with("chassis_raw")
 
     def test_prepare_bus_config_demo_mode(self, test_dbc_path):
         """Test _prepare_bus_config handles demo interface."""
@@ -682,7 +713,7 @@ class TestMultiBusSupport:
             "buses": [{"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path}]
         }
 
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codecs = _create_codecs(config, Path(test_dbc_path))
 
         assert len(codecs) == 1
@@ -701,7 +732,7 @@ class TestMultiBusSupport:
             ]
         }
 
-        with patch("zelos_sdk.TraceSource"):
+        with patch("zelos_sdk.TraceSourceCache"):
             codecs = _create_codecs(config, Path(test_dbc_path))
 
         assert len(codecs) == 2
@@ -731,7 +762,7 @@ class TestMultiBusSupport:
                 },
             ]
         }
-        with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
+        with patch("zelos_sdk.TraceSourceCache"), pytest.raises(SystemExit):
             _create_codecs(config_dupes, Path(test_dbc_path))
 
         # Same channel = same default name = collision
@@ -741,5 +772,5 @@ class TestMultiBusSupport:
                 {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
             ]
         }
-        with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
+        with patch("zelos_sdk.TraceSourceCache"), pytest.raises(SystemExit):
             _create_codecs(config_same_channel, Path(test_dbc_path))
