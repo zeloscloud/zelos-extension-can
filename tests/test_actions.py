@@ -19,7 +19,7 @@ DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
 
 
 def _make_codec(bus_name: str, channel: str) -> CanCodec:
-    with patch("zelos_sdk.TraceSource"), patch("can.Bus"):
+    with patch("zelos_sdk.TraceSourceCache"), patch("can.Bus"):
         cfg = {
             "interface": "virtual",
             "channel": channel,

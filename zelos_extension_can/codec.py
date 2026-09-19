@@ -358,11 +358,14 @@ class CanCodec(can.Listener):
         source_name = self.bus_name if self.bus_name else "can_codec"
         raw_source_name = f"{self.bus_name}_raw" if self.bus_name else "can_raw"
 
-        # Create trace source (in isolated namespace if provided)
+        # Decoded signals get a caching source so consumers can read back the
+        # current value of any signal. Raw frames deliberately stay on a plain
+        # TraceSource below: they are one high-rate stream where a cached
+        # "current value" is just whichever frame arrived last.
         if self.namespace:
-            self.source = zelos_sdk.TraceSource(source_name, namespace=self.namespace)
+            self.source = zelos_sdk.TraceSourceCache(source_name, namespace=self.namespace)
         else:
-            self.source = zelos_sdk.TraceSource(source_name)
+            self.source = zelos_sdk.TraceSourceCache(source_name)
 
         # Create raw CAN frame event schema (for log_raw_frames feature)
         if self.log_raw_frames:
@@ -664,6 +667,12 @@ class CanCodec(can.Listener):
         self.bus = CodecTxAdapter(self._native, self._transport, self.config["channel"])
         self.running = True
         logger.info("ssh-socketcan codec started on %s", self.config["channel"])
+
+    @property
+    def cache(self):
+        """The caching source decoded signals emit into, mirroring the native
+        codec's surface: ``codec.cache["0064_DUT_Status"].state.get()``."""
+        return self.source
 
     def stop(self) -> None:
         """Stop CAN bus and periodic tasks."""

@@ -50,7 +50,7 @@ def test_dbc():
 
 def _make_codec(bus_name: str = "busA", channel: str = "vcan0") -> CanCodec:
     """Build a CanCodec with a mocked python-can bus that records `send` calls."""
-    with patch("zelos_sdk.TraceSource"), patch("can.Bus"):
+    with patch("zelos_sdk.TraceSourceCache"), patch("can.Bus"):
         cfg = {
             "interface": "virtual",
             "channel": channel,
@@ -503,6 +503,33 @@ class TestValueTableForTrace:
         precision = _scale_precision(0.001)
         emitted = round(4095 * 0.001, precision)
         assert emitted in out  # dict lookup uses float equality
+
+    def test_float_keys_register_through_the_cache_source(self, tmp_path):
+        """The dict shape is only half of it — the SDK types every key to the
+        field it labels, so a float key has to land on a real Float64 field
+        through the codec's own registration path, not just compare equal."""
+        import zelos_sdk
+
+        dbc = tmp_path / "scaled.dbc"
+        dbc.write_text(
+            'VERSION ""\nNS_:\nBS_:\nBU_:\n'
+            "BO_ 100 X: 8 BMS\n"
+            ' SG_ v : 0|12@1+ (0.001,0) [0|5] "V" Receiver\n'
+            'VAL_ 100 v 4095 "SNA";\n'
+        )
+        codec = CanCodec(
+            {
+                "interface": "virtual",
+                "channel": "vcan0",
+                "database_file": str(dbc),
+                "emit_schemas_on_init": True,
+            },
+            namespace=zelos_sdk.TraceNamespace("test_float_value_table"),
+        )
+        # Constructing registered the table; re-registering the same key is
+        # the direct assertion that the float domain is accepted.
+        codec.source.add_value_table("0064_X", "v", {4.095: "SNA"})
+        assert codec.source["0064_X"].v.data_type == zelos_sdk.DataType.Float64
 
 
 class TestHashDbcFile:
