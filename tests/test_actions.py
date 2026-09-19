@@ -7,12 +7,14 @@ discovery action) is its own thing and worth covering directly.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from zelos_sdk.extensions.actions import get_standalone_actions
 
-from zelos_extension_can import actions
+from zelos_extension_can import ACTION_PREFIX, actions
 from zelos_extension_can.codec import CanCodec
 
 DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
@@ -24,7 +26,7 @@ def _make_codec(bus_name: str, channel: str) -> CanCodec:
             "interface": "virtual",
             "channel": channel,
             "bitrate": 500_000,
-            "database_file": str(DBC_PATH),
+            "database_files": [str(DBC_PATH)],
         }
         codec = CanCodec(cfg, bus_name=bus_name)
         codec.start()
@@ -95,9 +97,7 @@ class TestDispatch:
         assert desc["message"]["name"] == msg_name
 
     def test_encode_preview_routes_to_named_codec(self, two_codecs):
-        # Use Signalless_Message — no required signals, so the encode round-trips
-        # without us having to hand-curate a payload for the DBC under test.
-        result = actions.encode_preview("busA", "Signalless_Message", "{}")
+        result = actions.encode_preview("busA", "DUT_Command", '{"state_request": 1}')
         assert "data_hex" in result
         assert "can_id" in result
 
@@ -119,9 +119,11 @@ class TestDispatch:
 class TestConverterDbcResolution:
     # Failures must *raise* — the actions protocol derives its error verdict
     # from a raised exception, not from a payload key.
-    def test_requires_database_path_or_codec(self, two_codecs, tmp_path):
-        # No database_path, no codec — must error.
-        with pytest.raises(ValueError, match=r"`database_path` or `codec`"):
+    def test_no_database_converts_raw_only(self, two_codecs, tmp_path):
+        # No database_path, no codec — raw frames only, like the CLI. Input
+        # doesn't exist, so resolution getting as far as the file check proves
+        # there is no "neither was given" guard left.
+        with pytest.raises(FileNotFoundError, match="Input file not found"):
             actions.convert_trace_file(
                 input_path=str(tmp_path / "missing.log"),
                 database_path="",
@@ -173,13 +175,12 @@ class TestStandaloneConvert:
         with pytest.raises(ValueError, match="Unsupported format"):
             actions.convert(input_file=str(src))
 
-    def test_no_database_anywhere_raises(self, tmp_path):
+    def test_no_database_anywhere_converts_raw_only(self, tmp_path):
         src = self._log(tmp_path)
-        with (
-            patch.object(actions, "_configured_database_file", return_value=None),
-            pytest.raises(ValueError, match="No database_file given"),
-        ):
-            actions.convert(input_file=str(src))
+        with patch.object(actions, "_configured_database_files", return_value=[]):
+            result = actions.convert(input_file=str(src))
+        assert result["database_files"] == []
+        assert Path(result["output_file"]).is_file()
 
     def test_missing_database_raises(self, tmp_path):
         src = self._log(tmp_path)
@@ -270,3 +271,99 @@ class TestOpenInApp:
         assert result["opened"] is False
         assert "no opener" in result["open_error"]
         assert dest.read_text() == "trace"  # staged output landed at the destination
+
+
+def _sys_class_net(root: Path) -> Path:
+    """A /sys/class/net tree: can0 (up) and can1 (down) on gs_usb, a vcan0, an eth0."""
+    net = root / "net"
+    gs_usb = root / "bus" / "usb" / "drivers" / "gs_usb"
+    gs_usb.mkdir(parents=True)
+
+    can0 = net / "can0"
+    (can0 / "device").mkdir(parents=True)
+    (can0 / "type").write_text("280\n")
+    (can0 / "operstate").write_text("up\n")
+    (can0 / "device" / "driver").symlink_to(gs_usb)  # sysfs: link INTO the driver
+
+    can1 = net / "can1"  # a real adapter that is not up yet
+    (can1 / "device").mkdir(parents=True)
+    (can1 / "type").write_text("280\n")
+    (can1 / "operstate").write_text("down\n")
+    (can1 / "device" / "driver").symlink_to(gs_usb)
+
+    vcan0 = net / "vcan0"  # virtual: no device, and operstate never leaves "unknown"
+    vcan0.mkdir(parents=True)
+    (vcan0 / "type").write_text("280\n")
+    (vcan0 / "operstate").write_text("unknown\n")
+
+    eth0 = net / "eth0"  # ARPHRD_ETHER — not a CAN interface
+    eth0.mkdir(parents=True)
+    (eth0 / "type").write_text("1\n")
+    (eth0 / "operstate").write_text("up\n")
+    return net
+
+
+class TestConfigFormHooks:
+    """The two schema hooks the app calls on a form that has never started."""
+
+    def test_list_interfaces_offers_can_devices_only_hardware_first(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+
+        assert actions.list_interfaces() == {
+            "status": "success",
+            "choices": [
+                {"value": "can0", "detail": "up, gs_usb"},
+                {"value": "can1", "detail": "down, gs_usb"},
+                {"value": "vcan0", "detail": "virtual"},
+            ],
+        }
+
+    def test_list_interfaces_is_empty_where_there_is_no_socketcan(self, monkeypatch, tmp_path):
+        """macOS/Windows: an empty list, not an error — nothing to enumerate."""
+        monkeypatch.setattr(actions.sys, "platform", "darwin")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+
+        assert actions.list_interfaces() == {"status": "success", "choices": []}
+
+    def test_auto_config_builds_one_native_bus_per_interface(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+
+        # Only `buses`: the contract replaces the keys returned, so anything the
+        # person set under Advanced survives. No `message` either — a down
+        # interface is configured as it is and the picker already says `down`.
+        assert actions.auto_config() == {
+            "status": "success",
+            "config": {
+                "buses": [
+                    {"interface": "zelos-socketcan", "channel": "can0", "database_files": []},
+                    {"interface": "zelos-socketcan", "channel": "can1", "database_files": []},
+                    {"interface": "zelos-socketcan", "channel": "vcan0", "database_files": []},
+                ]
+            },
+        }
+
+    def test_auto_config_without_an_interface_is_an_error(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+
+        result = actions.auto_config()
+
+        assert result["status"] == "error"
+        assert "ssh-socketcan" in result["message"]  # the way out on a laptop
+
+    def test_schema_hooks_name_actions_that_exist(self):
+        """Both hooks wire the form to an action by name, so a rename breaks the
+        form silently. `get_standalone_actions` is the same index the packaged
+        `actions.json` is dumped from, keyed without the prefix.
+        """
+        schema = json.loads((Path(__file__).parents[1] / "config.schema.json").read_text())
+        branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
+        channels = [b["properties"].get("channel", {}) for b in branches]
+        named = {schema["ui:options"]["autoconfig"]} | {
+            ch["ui:options"]["action"] for ch in channels if "action" in ch.get("ui:options", {})
+        }
+
+        assert named == {f"{ACTION_PREFIX}/auto_config", f"{ACTION_PREFIX}/list_interfaces"}
+        assert {n.split("/", 1)[1] for n in named} <= set(get_standalone_actions())

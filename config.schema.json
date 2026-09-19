@@ -2,6 +2,9 @@
   "type": "object",
   "title": "CAN Extension Configuration",
   "description": "Configure one or more CAN buses to monitor in parallel.",
+  "ui:options": {
+    "autoconfig": "CAN/auto_config"
+  },
   "properties": {
     "buses": {
       "type": "array",
@@ -27,6 +30,27 @@
               "vector",
               "other"
             ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name to identify this bus (the trace-event segment for it). Letters, digits, space, '_' and '-' only. Defaults to the channel, sanitized.",
+            "ui:placeholder": "defaults to the channel"
+          },
+          "database_files": {
+            "type": "array",
+            "title": "Database Files (.dbc)",
+            "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message an earlier one defines differently. Two files naming one message id differently both decode, each into its own table. Leave empty for a raw-frames-only bus.",
+            "items": {
+              "type": "string",
+              "ui:widget": "file-picker"
+            },
+            "default": [],
+            "ui:orderable": true
+          },
+          "database_file": {
+            "type": "string",
+            "ui:widget": "hidden"
           }
         },
         "required": [
@@ -41,12 +65,6 @@
                     "enum": [
                       "demo"
                     ]
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
                   }
                 }
               },
@@ -62,44 +80,10 @@
                     "title": "Channel",
                     "description": "Virtual CAN channel identifier (e.g. vcan0)",
                     "default": "vcan0"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "title": "Database File (.dbc)",
-                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-                    "ui:widget": "file-picker"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
-                  },
-                  "receive_own_messages": {
-                    "type": "boolean",
-                    "title": "Receive Own Messages",
-                    "description": "Receive messages transmitted by this interface",
-                    "default": true,
-                    "ui:widget": "toggle"
-                  },
-                  "log_raw_frames": {
-                    "type": "boolean",
-                    "title": "Log Raw CAN Frames",
-                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-                    "default": false,
-                    "ui:widget": "toggle"
-                  },
-                  "emit_schemas_on_init": {
-                    "type": "boolean",
-                    "title": "Emit Schemas On Init",
-                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-                    "default": false,
-                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
-                  "channel",
-                  "database_file"
+                  "channel"
                 ]
               },
               {
@@ -113,20 +97,12 @@
                   "channel": {
                     "type": "string",
                     "title": "Channel",
-                    "description": "CAN channel identifier",
-                    "default": "can0"
-                  },
-                  "database_file": {
-                    "type": "string",
-                    "title": "Database File (.dbc)",
-                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-                    "ui:widget": "file-picker"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
+                    "description": "SocketCAN interface name (can0, vcan0, slcan0, ...). Choose from the interfaces on the machine running the agent, or type a name.",
+                    "default": "can0",
+                    "ui:widget": "action-choices",
+                    "ui:options": {
+                      "action": "CAN/list_interfaces"
+                    }
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -135,47 +111,14 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "receive_own_messages": {
-                    "type": "boolean",
-                    "title": "Receive Own Messages",
-                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-                    "default": true,
-                    "ui:widget": "toggle"
-                  },
-                  "log_raw_frames": {
-                    "type": "boolean",
-                    "title": "Log Raw CAN Frames",
-                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-                    "default": false,
-                    "ui:widget": "toggle"
-                  },
                   "config_json": {
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
                     "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
-                  "emit_schemas_on_init": {
-                    "type": "boolean",
-                    "title": "Emit Schemas On Init",
-                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-                    "default": false,
-                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
-                  "channel",
-                  "database_file"
+                  "channel"
                 ],
                 "dependencies": {
                   "fd_mode": {
@@ -253,22 +196,27 @@
                     "description": "Path to a private key file for SSH authentication (optional)",
                     "ui:widget": "file-picker"
                   },
+                  "ssh_host_key_policy": {
+                    "type": "string",
+                    "title": "SSH Host Key Policy",
+                    "description": "How to treat the edge's SSH host key. 'auto' trusts whatever key the device presents and records nothing, so a reimaged device (which comes back with a new key) reconnects with no manual step. 'strict' uses your own ~/.ssh/known_hosts: an unknown or changed key is reported and the bus stops, rather than retrying.",
+                    "enum": [
+                      "auto",
+                      "strict"
+                    ],
+                    "default": "auto"
+                  },
                   "ssh_extra_opts": {
                     "type": "string",
                     "title": "SSH Extra Options",
-                    "description": "Additional ssh command-line options, space-separated (e.g. -o StrictHostKeyChecking=no)"
+                    "description": "Additional ssh command-line options, space-separated (e.g. -J bastion). Placed before the options above; ssh honours the first -o it sees, so these win over the settings above."
                   },
-                  "database_file": {
-                    "type": "string",
-                    "title": "Database File (.dbc)",
-                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-                    "ui:widget": "file-picker"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
+                  "ssh_hw_timestamps": {
+                    "type": "boolean",
+                    "title": "Hardware timestamps",
+                    "description": "Uses the adapter's hardware clock when the edge's candump supports -H; interfaces without one (vcan, some slcan) fall back to the extension's wall clock. Turn off to use the edge kernel's receive time.",
+                    "default": true,
+                    "ui:widget": "toggle"
                   },
                   "fd_mode": {
                     "type": "boolean",
@@ -276,37 +224,11 @@
                     "description": "Enable CAN-FD for higher data rates and larger payloads",
                     "default": false,
                     "ui:widget": "toggle"
-                  },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Timestamp handling for the REMOTE edge clock (not local): 'auto' trusts the remote epoch when it is within ~15s of local time, otherwise maps monotonic remote timestamps onto local wall-clock; 'absolute' uses the remote timestamp as-is; 'ignore' uses the local receive time. A skewed edge NTP/RTC clock will shift trace timestamps.",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "log_raw_frames": {
-                    "type": "boolean",
-                    "title": "Log Raw CAN Frames",
-                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-                    "default": false,
-                    "ui:widget": "toggle"
-                  },
-                  "emit_schemas_on_init": {
-                    "type": "boolean",
-                    "title": "Emit Schemas On Init",
-                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-                    "default": false,
-                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
                   "interface",
-                  "remote_host",
-                  "database_file"
+                  "remote_host"
                 ]
               },
               {
@@ -322,12 +244,6 @@
                     "description": "CAN channel identifier",
                     "default": "PCAN_USBBUS1"
                   },
-                  "database_file": {
-                    "type": "string",
-                    "title": "Database File (.dbc)",
-                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-                    "ui:widget": "file-picker"
-                  },
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
@@ -340,12 +256,6 @@
                     ],
                     "default": 500000
                   },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
-                  },
                   "fd_mode": {
                     "type": "boolean",
                     "title": "CAN-FD Mode",
@@ -353,47 +263,14 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "receive_own_messages": {
-                    "type": "boolean",
-                    "title": "Receive Own Messages",
-                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-                    "default": true,
-                    "ui:widget": "toggle"
-                  },
-                  "log_raw_frames": {
-                    "type": "boolean",
-                    "title": "Log Raw CAN Frames",
-                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-                    "default": false,
-                    "ui:widget": "toggle"
-                  },
                   "config_json": {
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
                     "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
-                  "emit_schemas_on_init": {
-                    "type": "boolean",
-                    "title": "Emit Schemas On Init",
-                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-                    "default": false,
-                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
                   "channel",
-                  "database_file",
                   "bitrate"
                 ],
                 "dependencies": {
@@ -450,12 +327,6 @@
                     "description": "CAN channel identifier",
                     "default": "0"
                   },
-                  "database_file": {
-                    "type": "string",
-                    "title": "Database File (.dbc)",
-                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-                    "ui:widget": "file-picker"
-                  },
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
@@ -468,12 +339,6 @@
                     ],
                     "default": 500000
                   },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
-                  },
                   "fd_mode": {
                     "type": "boolean",
                     "title": "CAN-FD Mode",
@@ -481,47 +346,14 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "receive_own_messages": {
-                    "type": "boolean",
-                    "title": "Receive Own Messages",
-                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-                    "default": true,
-                    "ui:widget": "toggle"
-                  },
-                  "log_raw_frames": {
-                    "type": "boolean",
-                    "title": "Log Raw CAN Frames",
-                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-                    "default": false,
-                    "ui:widget": "toggle"
-                  },
                   "config_json": {
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
                     "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
-                  "emit_schemas_on_init": {
-                    "type": "boolean",
-                    "title": "Emit Schemas On Init",
-                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-                    "default": false,
-                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
                   "channel",
-                  "database_file",
                   "bitrate"
                 ],
                 "dependencies": {
@@ -578,12 +410,6 @@
                     "description": "CAN channel identifier",
                     "default": "0"
                   },
-                  "database_file": {
-                    "type": "string",
-                    "title": "Database File (.dbc)",
-                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-                    "ui:widget": "file-picker"
-                  },
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
@@ -596,12 +422,6 @@
                     ],
                     "default": 500000
                   },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
-                  },
                   "fd_mode": {
                     "type": "boolean",
                     "title": "CAN-FD Mode",
@@ -609,47 +429,14 @@
                     "default": false,
                     "ui:widget": "toggle"
                   },
-                  "timestamp_mode": {
-                    "type": "string",
-                    "title": "Timestamp Mode",
-                    "description": "Hardware timestamp handling mode",
-                    "enum": [
-                      "auto",
-                      "absolute",
-                      "ignore"
-                    ],
-                    "default": "auto"
-                  },
-                  "receive_own_messages": {
-                    "type": "boolean",
-                    "title": "Receive Own Messages",
-                    "description": "Receive messages transmitted by this interface (useful for testing and monitoring)",
-                    "default": true,
-                    "ui:widget": "toggle"
-                  },
-                  "log_raw_frames": {
-                    "type": "boolean",
-                    "title": "Log Raw CAN Frames",
-                    "description": "Log raw CAN frames (id, dlc, data) to separate 'can_raw' trace source",
-                    "default": false,
-                    "ui:widget": "toggle"
-                  },
                   "config_json": {
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
                     "description": "Additional python-can Bus() kwargs as JSON object"
-                  },
-                  "emit_schemas_on_init": {
-                    "type": "boolean",
-                    "title": "Emit Schemas On Init",
-                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-                    "default": false,
-                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
                   "channel",
-                  "database_file",
                   "bitrate"
                 ],
                 "dependencies": {
@@ -700,54 +487,92 @@
                       "other"
                     ]
                   },
-                  "database_file": {
-                    "type": "string",
-                    "title": "Database File (.dbc)",
-                    "description": "Path to CAN database file (supports .dbc, .arxml, .kcd, .sym)",
-                    "ui:widget": "file-picker"
-                  },
                   "config_json": {
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
                     "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"slcan\", \"channel\": \"/dev/ttyUSB0\", \"bitrate\": 500000}"
-                  },
-                  "name": {
-                    "type": "string",
-                    "title": "Name",
-                    "description": "Name to identify this bus (used as prefix in trace events)",
-                    "ui:placeholder": "can_codec"
-                  },
-                  "emit_schemas_on_init": {
-                    "type": "boolean",
-                    "title": "Emit Schemas On Init",
-                    "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false)",
-                    "default": false,
-                    "ui:widget": "toggle"
                   }
                 },
                 "required": [
-                  "database_file",
                   "config_json"
                 ]
               }
             ]
           }
-        }
+        },
+        "ui:order": [
+          "interface",
+          "name",
+          "database_files",
+          "*"
+        ]
       },
       "default": []
     },
-    "log_level": {
-      "type": "string",
-      "title": "Log Level",
-      "description": "Set the logging verbosity level for all buses",
-      "enum": [
-        "DEBUG",
-        "INFO",
-        "WARNING",
-        "ERROR",
-        "CRITICAL"
-      ],
-      "default": "INFO"
+    "advanced": {
+      "type": "object",
+      "title": "Advanced",
+      "description": "Settings that apply to every bus.",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "title": "Prefix",
+          "description": "Leading trace source every bus publishes under, so events read '<prefix>/<bus>/<message>'. Clear it to give each bus its own trace source with unprefixed events.",
+          "default": "CAN",
+          "ui:placeholder": "CAN",
+          "ui:emptyValue": ""
+        },
+        "log_raw_frames": {
+          "type": "boolean",
+          "title": "Log Raw CAN Frames",
+          "description": "Log undecoded CAN frames to '<bus>/Frame' alongside the decoded signals.",
+          "default": true,
+          "ui:widget": "toggle"
+        },
+        "receive_own_messages": {
+          "type": "boolean",
+          "title": "Receive Own Messages",
+          "description": "Receive messages transmitted by this host (useful for testing and monitoring).",
+          "default": true,
+          "ui:widget": "toggle"
+        },
+        "emit_schemas_on_init": {
+          "type": "boolean",
+          "title": "Emit Schemas On Init",
+          "description": "Generate and emit all message schemas at startup (true) or lazily as messages are encountered (false).",
+          "default": false,
+          "ui:widget": "toggle"
+        },
+        "timestamp_mode": {
+          "type": "string",
+          "title": "Timestamp Mode",
+          "description": "How to treat the timestamp the interface reports: 'auto' trusts it when it is within ~15s of local time, otherwise maps monotonic stamps onto local wall-clock; 'absolute' uses it as-is; 'ignore' uses the local receive time. For ssh-socketcan the stamp comes from the REMOTE clock, so a skewed edge NTP/RTC will shift trace timestamps.",
+          "enum": [
+            "auto",
+            "absolute",
+            "ignore"
+          ],
+          "default": "auto"
+        },
+        "log_level": {
+          "type": "string",
+          "title": "Log Level",
+          "description": "Set the logging verbosity level for all buses.",
+          "enum": [
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR",
+            "CRITICAL"
+          ],
+          "default": "INFO"
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "ui:options": {
+        "collapsed": true
+      }
     }
   },
   "required": [

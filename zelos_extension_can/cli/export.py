@@ -16,8 +16,8 @@ def _find_raw_sources(reader: zelos_sdk.TraceReader) -> list[tuple[str, str, str
 
     Searches for any event with the required CAN frame signals (arbitration_id, dlc, data),
     regardless of source or event naming convention. This supports:
-    - New format: can_raw/messages, {bus}_raw/messages
-    - Old format: can#-link/rx, etc.
+    - Current format: `<prefix>/<bus>/Frame`, or `<bus>/Frame` with the prefix cleared
+    - Old formats: `can_raw/messages`, `{bus}_raw/messages`, `can#-link/rx`
 
     :param reader: Open TraceReader instance
     :return: List of (segment_id, source_name, event_name) tuples for raw CAN sources
@@ -44,19 +44,26 @@ def _find_raw_sources(reader: zelos_sdk.TraceReader) -> list[tuple[str, str, str
     return raw_sources
 
 
-def _derive_channel_name(source_name: str, _event_name: str = "") -> str:
+def _derive_channel_name(source_name: str, event_name: str = "") -> str:
     """Derive CAN channel name from source/event naming.
 
     Handles various naming conventions:
+    - CAN + can0/Frame -> can0   (prefixed layout: one source carries every bus)
+    - can0 + Frame -> can0       (prefix cleared: the bus owns the source)
     - can_raw -> can0
     - vcan0_raw -> vcan0
     - can0-link -> can0
     - vehicle_raw -> vehicle
 
     :param source_name: Trace source name
-    :param _event_name: Event name (reserved for future use)
+    :param event_name: Event name
     :return: Channel name to use in candump log
     """
+    # The typed Frame event carries no channel field, so the bus is read off the
+    # event's leading segment when one is there.
+    if "/" in event_name:
+        return event_name.split("/", 1)[0]
+
     # Try common suffixes
     for suffix in ("_raw", "-link", "-raw"):
         if source_name.endswith(suffix):
