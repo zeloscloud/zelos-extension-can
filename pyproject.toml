@@ -18,8 +18,11 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    # Tracks zelos-can's own `zelos-sdk` floor, which is now a formal release.
-    "zelos-sdk>=0.0.10",
+    # Standalone actions need the at-rest harness (`zelos_sdk.extensions.actions`),
+    # which first ships in 0.0.11a1. Naming a prerelease here is what lets a
+    # resolver pick one at all: without it, an installed extension resolves the
+    # newest final release and its at-rest actions simply do not appear.
+    "zelos-sdk>=0.0.12a1",
     "python-can",
     "cantools",
     "rich-click>=1.8.0",
@@ -29,7 +32,7 @@ dependencies = [
     # 'ssh-socketcan' interface. Wheels cover all platforms, so there is no
     # sys_platform marker. 0.0.7 is the first formal release carrying the
     # cp1252 DBC fallback. Floor (not exact) pin.
-    "zelos-can[python-can]>=0.0.7",
+    "zelos-can[python-can]>=0.0.9",
 ]
 
 [project.scripts]

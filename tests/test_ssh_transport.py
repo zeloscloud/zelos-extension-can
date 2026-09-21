@@ -20,6 +20,7 @@ import can
 import can.exceptions
 import pytest
 import zelos_can
+from conftest import wait_until
 
 from zelos_extension_can import ssh_socketcan
 
@@ -27,16 +28,6 @@ TEST_DBC = str(Path(__file__).parent / "files" / "test.dbc")
 WIRE_ID_HEX = "064"  # DUT_Status (id 100, 8 bytes, standard) in test.dbc
 
 _source_counter = itertools.count()
-
-
-def _wait_until(pred, timeout=3.0, interval=0.01):
-    """Poll ``pred`` until truthy or timeout; return its final value."""
-    deadline = time.monotonic() + timeout
-    val = pred()
-    while not val and time.monotonic() < deadline:
-        time.sleep(interval)
-        val = pred()
-    return val
 
 
 # ── Fake subprocess plumbing ─────────────────────────────────────────────────
@@ -151,13 +142,13 @@ class FakePopenFactory:
         self.procs = []
         self.calls = []
         self.fail_on_call = None  # 1-based index whose construction raises
-        # If set, the RX proc (first Popen) is born already-exited with this
-        # stderr + returncode and its stdout closed — models a fast ssh startup
-        # failure (host key / auth / unreachable / missing can-utils) that the
-        # startup probe must classify and fail fast on.
+        # If set, the session is born already-exited with this stderr +
+        # returncode and its stdout closed — models a fast ssh startup failure
+        # (host key / auth / unreachable / missing can-utils) that the startup
+        # probe must classify and fail fast on.
         self.rx_dead_stderr = None
         self.rx_dead_rc = 1
-        # If set, the (alive) RX proc is born with this frame already on its
+        # If set, the (alive) session is born with this frame already on its
         # stdout, so the reader sets `_rx_started` and the probe connects early.
         self.rx_born_frame = None
 
@@ -167,7 +158,6 @@ class FakePopenFactory:
             raise OSError("simulated Popen failure")
         p = FakePopen(argv, stdin=stdin, stdout=stdout, stderr=stderr)
         self.procs.append(p)
-        # The first proc is the RX (candump) side that the startup probe watches.
         if len(self.procs) == 1:
             if self.rx_dead_stderr is not None:
                 if self.rx_dead_stderr:
@@ -179,12 +169,9 @@ class FakePopenFactory:
         return p
 
     @property
-    def rx(self):
+    def proc(self):
+        """The transport's one ssh session (candump RX + cansend TX)."""
         return self.procs[0]
-
-    @property
-    def tx(self):
-        return self.procs[1]
 
     def cleanup(self):
         for p in self.procs:
@@ -250,9 +237,11 @@ def test_rx_frames_decode_through_codec(fake_ssh, make_codec, make_transport):
     ebus, codec = make_codec(database_file=TEST_DBC)
     make_transport(ebus)
 
-    fake_ssh.rx.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
+    fake_ssh.proc.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
 
-    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
+    # The two counters are independent atomics and decoded lands after the
+    # emit, so wait on the later one before reading the pair.
+    assert wait_until(lambda: codec.metrics().messages_decoded >= 1)
     m = codec.metrics()
     assert m.messages_received >= 1
     assert m.messages_decoded >= 1
@@ -263,11 +252,11 @@ def test_rx_partial_line_carry(fake_ssh, make_codec, make_transport):
     make_transport(ebus)
 
     # Split a single frame across two reads; the carry buffer must reassemble.
-    fake_ssh.rx.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011".encode())
+    fake_ssh.proc.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011".encode())
     time.sleep(0.05)
-    fake_ssh.rx.feed(b"223344556677\n")
+    fake_ssh.proc.feed(b"223344556677\n")
 
-    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
+    assert wait_until(lambda: codec.metrics().messages_received >= 1)
 
 
 def test_rx_error_frame_not_counted(fake_ssh, make_codec, make_transport):
@@ -276,12 +265,12 @@ def test_rx_error_frame_not_counted(fake_ssh, make_codec, make_transport):
     ebus, codec = make_codec(database_file=TEST_DBC)
     make_transport(ebus)
 
-    fake_ssh.rx.feed(b"(1.0) can0 20000004#0000000000000000\n")
+    fake_ssh.proc.feed(b"(1.0) can0 20000004#0000000000000000\n")
     # Follow with a normal frame so we can wait on a definite signal, then
     # confirm the error frame added nothing to received.
-    fake_ssh.rx.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
+    fake_ssh.proc.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
 
-    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
+    assert wait_until(lambda: codec.metrics().messages_received >= 1)
     time.sleep(0.2)
     assert codec.metrics().messages_received == 1  # only the normal frame
 
@@ -291,12 +280,12 @@ def test_rx_malformed_lines_counted_not_fatal(fake_ssh, make_codec, make_transpo
     ebus, codec = make_codec(database_file=TEST_DBC)
     transport = make_transport(ebus)
 
-    fake_ssh.rx.feed(b"total garbage not a frame\n")
-    fake_ssh.rx.feed(b"(1.0) can0 100#ZZZZ\n")  # bad hex
-    fake_ssh.rx.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
+    fake_ssh.proc.feed(b"total garbage not a frame\n")
+    fake_ssh.proc.feed(b"(1.0) can0 100#ZZZZ\n")  # bad hex
+    fake_ssh.proc.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
 
-    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
-    assert _wait_until(lambda: transport._parse_drops >= 2)
+    assert wait_until(lambda: codec.metrics().messages_received >= 1)
+    assert wait_until(lambda: transport._parse_drops >= 2)
     assert transport.healthy is True  # dropped lines are not fatal
 
 
@@ -306,12 +295,27 @@ def test_rx_oversized_carry_dropped(fake_ssh, make_codec, make_transport):
     ebus, codec = make_codec(database_file=TEST_DBC)
     transport = make_transport(ebus)
 
-    fake_ssh.rx.feed(b"A" * (65536 + 4096))  # no newline → overflow
-    assert _wait_until(lambda: transport._overflow_drops >= 1)
+    fake_ssh.proc.feed(b"A" * (65536 + 4096))  # no newline → overflow
+    assert wait_until(lambda: transport._overflow_drops >= 1)
 
-    fake_ssh.rx.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
-    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
+    fake_ssh.proc.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
+    assert wait_until(lambda: codec.metrics().messages_received >= 1)
     assert transport.healthy is True
+
+
+def test_cansend_stderr_counts_tx_errors(fake_ssh, make_codec, make_transport):
+    """cansend's stderr is the ONLY evidence a remote write failed (the read
+    loop ignores its exit status on purpose), so each such line counts one
+    tx_error — and an unrelated ssh line counts none."""
+    ebus, _codec = make_codec()
+    transport = make_transport(ebus)
+
+    fake_ssh.proc.feed_stderr(
+        b"write: No buffer space available\nssh: connection noise\nsh: cansend: not found\n"
+    )
+
+    assert wait_until(lambda: transport.tx_errors == 2)
+    assert "No buffer space available" in transport.stderr_tail()
 
 
 def test_stderr_flood_does_not_stall_rx(fake_ssh, make_codec, make_transport):
@@ -320,10 +324,10 @@ def test_stderr_flood_does_not_stall_rx(fake_ssh, make_codec, make_transport):
     ebus, codec = make_codec(database_file=TEST_DBC)
     make_transport(ebus)
 
-    fake_ssh.rx.feed_stderr(b"ssh noise line\n" * 8000)  # ~112 KB, > pipe buffer
-    fake_ssh.rx.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
+    fake_ssh.proc.feed_stderr(b"ssh noise line\n" * 8000)  # ~112 KB, > pipe buffer
+    fake_ssh.proc.feed(f"(1.0) can0 {WIRE_ID_HEX}#0011223344556677\n".encode())
 
-    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
+    assert wait_until(lambda: codec.metrics().messages_received >= 1)
 
 
 # ── TX: writer thread formats next_tx frames onto cansend stdin ──────────────
@@ -335,7 +339,7 @@ def test_writer_emits_cansend_line(fake_ssh, make_codec, make_transport):
 
     codec.send(zelos_can.Message(arbitration_id=0x123, data=b"\xaa\xbb"))
 
-    assert _wait_until(lambda: b"123#AABB\n" in fake_ssh.tx.stdin.getvalue())
+    assert wait_until(lambda: b"123#AABB\n" in fake_ssh.proc.stdin.getvalue())
 
 
 def test_writer_emits_extended_frame(fake_ssh, make_codec, make_transport):
@@ -344,7 +348,7 @@ def test_writer_emits_extended_frame(fake_ssh, make_codec, make_transport):
 
     codec.send(zelos_can.Message(arbitration_id=0x100, data=b"\x01", is_extended_id=True))
 
-    assert _wait_until(lambda: b"00000100#01\n" in fake_ssh.tx.stdin.getvalue())
+    assert wait_until(lambda: b"00000100#01\n" in fake_ssh.proc.stdin.getvalue())
 
 
 def test_writer_emits_fd_frame_with_brs_esi(fake_ssh, make_codec, make_transport):
@@ -364,7 +368,7 @@ def test_writer_emits_fd_frame_with_brs_esi(fake_ssh, make_codec, make_transport
         )
     )
 
-    assert _wait_until(lambda: b"321##3AABB\n" in fake_ssh.tx.stdin.getvalue())
+    assert wait_until(lambda: b"321##3AABB\n" in fake_ssh.proc.stdin.getvalue())
 
 
 # ── healthy transitions ──────────────────────────────────────────────────────
@@ -373,25 +377,25 @@ def test_writer_emits_fd_frame_with_brs_esi(fake_ssh, make_codec, make_transport
 def test_healthy_true_when_running(fake_ssh, make_codec, make_transport):
     ebus, codec = make_codec()
     transport = make_transport(ebus)
-    assert _wait_until(lambda: transport.healthy is True)
+    assert wait_until(lambda: transport.healthy is True)
 
 
 def test_healthy_false_on_stdout_eof(fake_ssh, make_codec, make_transport):
     ebus, codec = make_codec()
     transport = make_transport(ebus)
-    assert _wait_until(lambda: transport.healthy is True)
+    assert wait_until(lambda: transport.healthy is True)
 
-    fake_ssh.rx.close_stdout()  # candump/ssh closed → reader hits EOF
+    fake_ssh.proc.close_stdout()  # candump/ssh closed → reader hits EOF
 
-    assert _wait_until(lambda: transport.healthy is False)
+    assert wait_until(lambda: transport.healthy is False)
 
 
 def test_healthy_false_on_dead_proc(fake_ssh, make_codec, make_transport):
     ebus, codec = make_codec()
     transport = make_transport(ebus)
-    assert _wait_until(lambda: transport.healthy is True)
+    assert wait_until(lambda: transport.healthy is True)
 
-    fake_ssh.tx.die(1)  # tx ssh proc exited
+    fake_ssh.proc.die(1)  # the ssh session exited
 
     assert transport.healthy is False
 
@@ -399,17 +403,16 @@ def test_healthy_false_on_dead_proc(fake_ssh, make_codec, make_transport):
 def test_teardown_joins_threads(fake_ssh, make_codec):
     ebus, codec = make_codec()
     transport = ssh_socketcan.SshTransport(ebus, "user@host:can0")
-    reader, writer = transport._reader, transport._writer
-    rx_err, tx_err = transport._rx_err, transport._tx_err
-    assert _wait_until(lambda: transport.healthy is True)
+    threads = (transport._reader, transport._writer, transport._err)
+    assert wait_until(lambda: transport.healthy is True)
 
     transport.teardown()
 
-    # All four threads joined (dead), and the refs nulled to break the cycle.
-    for thread in (reader, writer, rx_err, tx_err):
+    # All three threads joined (dead), and the refs nulled to break the cycle.
+    for thread in threads:
         assert not thread.is_alive()
     assert transport._reader is None and transport._writer is None
-    assert transport._rx_err is None and transport._tx_err is None
+    assert transport._err is None
     assert transport.healthy is False
 
 
@@ -418,15 +421,14 @@ def test_teardown_joins_threads(fake_ssh, make_codec):
 
 def test_partial_construction_no_leak(fake_ssh, make_codec):
     ebus, codec = make_codec()
-    fake_ssh.fail_on_call = 2  # the TX Popen raises
+    fake_ssh.fail_on_call = 1  # the ssh Popen raises
 
     before = {t.ident for t in threading.enumerate()}
     with pytest.raises(can.exceptions.CanInitializationError):
         ssh_socketcan.SshTransport(ebus, "user@host:can0")
 
-    # First (RX) proc created and torn down; no second proc; no leaked threads.
-    assert len(fake_ssh.procs) == 1
-    assert fake_ssh.procs[0].poll() is not None
+    # Teardown ran on a transport with no proc at all, and leaked no threads.
+    assert fake_ssh.procs == []
     leaked = [t for t in threading.enumerate() if t.ident not in before and t.is_alive()]
     assert leaked == []
 
@@ -457,29 +459,13 @@ def test_teardown_idempotent(fake_ssh, make_codec):
 # ── startup connection probe ─────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "stderr, expect",
-    [
-        # host key not trusted / changed
-        (b"Host key verification failed.\r\n", "host key"),
-        (b"@@@ REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\r\n", "host key"),
-        # auth failure (BatchMode → publickey)
-        (b"zelos@edge: Permission denied (publickey).\r\n", "authentication"),
-        # unreachable / refused / timed out
-        (b"ssh: connect to host edge port 22: Connection refused\r\n", "cannot reach"),
-        (b"ssh: connect to host edge port 22: Operation timed out\r\n", "cannot reach"),
-        # DNS
-        (b"ssh: Could not resolve hostname edge: nodename nor servname provided\r\n", "resolve"),
-        # remote is missing can-utils
-        (b"bash: candump: command not found\r\n", "can-utils"),
-    ],
-)
-def test_startup_probe_fails_fast_on_dead_rx(fake_ssh, make_codec, stderr, expect):
-    """A candump proc that exits immediately (permanent ssh failure) makes the
-    probe raise a classified, actionable CanInitializationError — fast, with the
-    raw stderr appended — and leaks no threads."""
+def test_startup_probe_fails_fast_on_dead_rx(fake_ssh, make_codec):
+    """A candump proc that exits immediately makes the probe raise a classified,
+    actionable CanInitializationError — fast, with the raw stderr appended — and
+    leaks no threads. The needle table lives in
+    ``test_classification_class_is_the_verdict``."""
     ebus, codec = make_codec()
-    fake_ssh.rx_dead_stderr = stderr
+    fake_ssh.rx_dead_stderr = b"zelos@edge: Permission denied (publickey).\r\n"
 
     before = {t.ident for t in threading.enumerate()}
     t0 = time.monotonic()
@@ -488,7 +474,7 @@ def test_startup_probe_fails_fast_on_dead_rx(fake_ssh, make_codec, stderr, expec
     elapsed = time.monotonic() - t0
 
     msg = str(ei.value)
-    assert expect in msg, f"expected {expect!r} in classified message: {msg!r}"
+    assert "authentication" in msg, f"unclassified message: {msg!r}"
     assert "(ssh:" in msg  # raw stderr is always appended
     assert elapsed < 3.0  # failed fast, did not spin the full connect timeout
     # The partial transport was torn down: no leaked threads survive the raise.
@@ -506,7 +492,7 @@ def test_startup_probe_generic_when_no_stderr(fake_ssh, make_codec, monkeypatch)
     with pytest.raises(can.exceptions.CanInitializationError) as ei:
         ssh_socketcan.SshTransport(ebus, "zelos@edge:can0")
     msg = str(ei.value)
-    assert "ssh-socketcan failed to start on edge:can0" in msg
+    assert "ssh-socketcan on edge:can0 failed" in msg
     assert "<no stderr>" in msg
 
 
@@ -524,7 +510,7 @@ def test_startup_probe_succeeds_when_frames_stream(fake_ssh, make_codec, make_tr
     assert transport.healthy is True
     # Broke on the first frame, before the (already-short) idle grace elapsed.
     assert elapsed < ssh_socketcan._STARTUP_GRACE + 0.1
-    assert _wait_until(lambda: codec.metrics().messages_received >= 1)
+    assert wait_until(lambda: codec.metrics().messages_received >= 1)
 
 
 def test_startup_probe_succeeds_on_idle_alive_proc(fake_ssh, make_codec, make_transport):
@@ -543,61 +529,209 @@ def test_startup_probe_succeeds_on_idle_alive_proc(fake_ssh, make_codec, make_tr
     assert 0.1 <= elapsed < 2.0
 
 
-# ── argv construction ────────────────────────────────────────────────────────
+# ── failure classification + log hygiene ─────────────────────────────────────
+
+# ssh's real changed-host-key output: ~4 KB of banner around two useful lines.
+CHANGED_KEY_STDERR = """\
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @
+@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!
+Someone could be eavesdropping on you right now (man-in-the-middle attack)!
+It is also possible that a host key has just been changed.
+The fingerprint for the ED25519 key sent by the remote host is
+SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s.
+Please contact your system administrator.
+Add correct host key in /Users/z/.ssh/known_hosts to get rid of this message.
+Offending ECDSA key in /Users/z/.ssh/known_hosts:12
+Host key for edge has changed and you have requested strict checking.
+Host key verification failed.
+"""
 
 
-def test_argv_options(fake_ssh, make_codec, make_transport):
-    ebus, codec = make_codec()
-    make_transport(
-        ebus,
-        channel="zelos@edge:can1",
-        ssh_port=2222,
-        ssh_key_path="/home/z/id_ed25519",
-        ssh_extra_opts="-o StrictHostKeyChecking=no",
+def test_clean_stderr_tail_keeps_only_fingerprint_and_cause():
+    """The banner is dropped, the fingerprint and the final cause survive, and
+    the result fits the cap that bounds every reported suffix."""
+    cleaned = ssh_socketcan._clean_stderr_tail(CHANGED_KEY_STDERR)
+
+    assert len(cleaned) <= ssh_socketcan._TAIL_CAP
+    assert "SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s." in cleaned
+    assert cleaned.endswith("Host key verification failed.")
+    for noise in ("@@@", "IT IS POSSIBLE", "eavesdropping", "system administrator", "Offending"):
+        assert noise not in cleaned
+
+
+@pytest.mark.parametrize(
+    "stderr, expect, permanent, streamed, ever_connected",
+    [
+        # permanent: an operator must act, retrying is futile
+        ("Host key verification failed.", "host key", True, False, False),
+        ("zelos@edge: Permission denied (publickey).", "authentication", True, False, False),
+        ("bash: candump: command not found", "can-utils", True, False, False),
+        # the session's own cansend preflight (missing can-utils on the edge)
+        ("cansend: not found", "can-utils", True, False, False),
+        # a bus that never made contact names an interface the edge does not
+        # have: retrying cannot conjure it
+        ("SIOCGIFINDEX: No such device", "has no CAN interface can0;", True, False, False),
+        # transient: keep reconnecting with backoff
+        # after a working session, sshd is just up before can0 is configured again
+        ("SIOCGIFINDEX: No such device", "no CAN interface can0 (yet)", False, False, True),
+        ("Could not resolve hostname edge: nodename nor servname", "resolve", False, False, False),
+        ("connect to host edge port 22: Connection refused", "cannot reach", False, False, False),
+        ("connect to host edge port 22: Operation timed out", "cannot reach", False, False, False),
+        ("Connection to edge closed by remote host.", "failed", False, False, False),
+        # a login profile's unrelated missing command is NOT a can-utils verdict:
+        # it would otherwise make every later transient drop on this bus permanent
+        ("sh: 1: motd-fortune: command not found", "failed", False, False, False),
+        ("", "failed", False, False, False),  # EOF mid-capture, nothing written
+        # a frame streamed => auth/can-utils were fine, so pre-auth noise still
+        # in the whole-session ring can never read as permanent
+        ("zelos@edge: Permission denied (publickey).", "authentication", False, True, False),
+    ],
+)
+def test_classification_class_is_the_verdict(stderr, expect, permanent, streamed, ever_connected):
+    err = ssh_socketcan._classify_ssh_failure(
+        "edge",
+        "can0",
+        22,
+        stderr,
+        user="zelos",
+        streamed=streamed,
+        ever_connected=ever_connected,
     )
-    argv = fake_ssh.rx.argv
+    assert expect in str(err)
+    assert isinstance(err, ssh_socketcan.SshPermanentError) is permanent
+    assert isinstance(err, can.exceptions.CanError)  # the app layer's handler
+
+
+def test_host_key_error_quotes_the_offending_file():
+    err = ssh_socketcan._classify_ssh_failure("edge", "can0", 22, CHANGED_KEY_STDERR, user="zelos")
+    msg = str(err)
+    assert "/Users/z/.ssh/known_hosts:12" in msg  # which entry is stale
+    assert "ssh-keygen -R edge" in msg
+    assert '"auto"' in msg  # the one-setting way out
+
+
+def test_host_key_remedy_is_port_qualified():
+    """known_hosts keys a non-default port as `[host]:port`, and a bare
+    `ssh host` would re-trust a DIFFERENT server, so both halves carry it."""
+    err = ssh_socketcan._classify_ssh_failure(
+        "edge", "can0", 2222, CHANGED_KEY_STDERR, user="zelos"
+    )
+    msg = str(err)
+    assert "ssh-keygen -R '[edge]:2222'" in msg
+    assert "ssh -p 2222 zelos@edge" in msg
+
+
+@pytest.mark.parametrize(
+    "platform, expect",
+    [
+        ("linux", "ssh-copy-id -i /home/z/id_ed25519 -p 2222 zelos@edge"),
+        # cmd.exe form, with the .pub derived from the configured key
+        ("win32", "type /home/z/id_ed25519.pub | ssh -p 2222 zelos@edge"),
+    ],
+)
+def test_auth_error_carries_platform_remedy(monkeypatch, platform, expect):
+    """The auth message is a copy-paste command for THIS bus on THIS platform."""
+    monkeypatch.setattr(ssh_socketcan.sys, "platform", platform)
+    err = ssh_socketcan._classify_ssh_failure(
+        "edge",
+        "can0",
+        2222,
+        "zelos@edge: Permission denied (publickey).",
+        user="zelos",
+        ssh_key_path="/home/z/id_ed25519",
+    )
+    msg = str(err)
+    assert expect in msg
+    assert "restart this bus" in msg
+
+
+# ── remote command / argv construction (pure; no proc, no threads) ───────────
+
+
+def test_remote_command_hardware_timestamps():
+    """On (the default), candump asks for the adapter's clock, but only where
+    the edge's candump has `-H`: support is detected there, and `$H` is empty
+    on an older can-utils that would otherwise exit on an unknown option. Off,
+    nothing is detected and no `$H` is expanded at all."""
+    on = ssh_socketcan.SshTransport._remote_command("can0")
+    assert "candump -h </dev/null 2>&1 | grep -q --" in on
+    assert "candump $H -L can0" in on
+
+    off = ssh_socketcan.SshTransport._remote_command("can0", False)
+    assert "candump -h" not in off
+    assert "$H" not in off
+    assert "candump -L can0" in off
+
+
+def test_remote_command_requires_cansend_and_keeps_its_stderr():
+    """A missing cansend would drop every TX on a bus reporting healthy, so the
+    session refuses to start (127, pre-trap so no `kill 0`, with the needle the
+    classifier calls permanent). A cansend that RUNS and fails loses only its
+    stdout, so the errno line reaches the local stderr ring."""
+    cmd = ssh_socketcan.SshTransport._remote_command("can0")
+    preflight = "command -v cansend >/dev/null 2>&1 || { echo cansend: not found >&2; exit 127; }"
+
+    assert preflight in cmd
+    assert cmd.index(preflight) < cmd.index("trap reap")
+    assert 'cansend can0 "$f" >/dev/null; done' in cmd
+    assert "2>&1; done" not in cmd  # never a discarded stderr on the TX loop
+    # The session is single-quoted whole, so it may not contain a quote itself.
+    assert cmd.count("'") == 2
+
+
+# ── argv construction (pure; no proc, no threads) ────────────────────────────
+
+
+def test_argv_options():
+    argv = ssh_socketcan.SshTransport._build_argv("zelos", "edge", 2222, "/home/z/id_ed25519", None)
     assert argv[0] == "ssh"
     assert "BatchMode=yes" in argv
     assert "ConnectTimeout=10" in argv  # bounds TCP connect (ServerAlive* is post-connect)
     assert argv[argv.index("-p") + 1] == "2222"
     assert argv[argv.index("-i") + 1] == "/home/z/id_ed25519"
     assert "IdentitiesOnly=yes" in argv
-    assert "StrictHostKeyChecking=no" in argv
-    assert "zelos@edge" in argv
-    assert "candump -L can1 &" in argv[-1]
+    assert argv[-1] == "zelos@edge"
 
 
-def test_argv_omits_default_port_and_key(fake_ssh, make_codec, make_transport):
-    ebus, codec = make_codec()
-    make_transport(ebus, channel="host:can0")
-    argv = fake_ssh.rx.argv
+def test_argv_omits_default_port_and_key():
+    argv = ssh_socketcan.SshTransport._build_argv(None, "host", 22, None, None)
     assert "-p" not in argv
     assert "-i" not in argv
-    assert argv[-1] == (
-        "exec 3<&0; "
-        "trap 'trap - EXIT TERM INT HUP; kill 0 2>/dev/null' EXIT TERM INT HUP; "
-        "candump -L can0 & p=$!; "
-        "{ cat <&3 >/dev/null; kill $p 2>/dev/null; } & wait $p"
+    assert argv[-1] == "host"
+
+
+def test_argv_policy_auto_trusts_any_key():
+    """Default policy: no host-key check, nothing written to known_hosts, so a
+    reimaged device (new host key) reconnects with no manual step."""
+    argv = ssh_socketcan.SshTransport._build_argv("zelos", "edge", 22, None, None)
+    assert "StrictHostKeyChecking=no" in argv
+    assert "UserKnownHostsFile=/dev/null" in argv
+    # A stale /etc/ssh/ssh_known_hosts entry would otherwise print the CHANGED
+    # banner into the stderr ring on a connection ssh allows anyway.
+    assert "GlobalKnownHostsFile=/dev/null" in argv
+    # ...and this policy's per-connect "Permanently added" line is INFO, so it is
+    # suppressed at the source rather than filtered out of the ring.
+    assert "LogLevel=ERROR" in argv
+
+
+def test_argv_policy_strict_defers_to_known_hosts():
+    argv = ssh_socketcan.SshTransport._build_argv("zelos", "edge", 22, None, None, "strict")
+    assert "StrictHostKeyChecking=yes" in argv
+    assert "UserKnownHostsFile=/dev/null" not in argv  # ssh's own known_hosts
+    assert "LogLevel=ERROR" not in argv  # the banner is the diagnosis here
+
+
+def test_argv_extra_opts_precede_our_options():
+    """ssh_extra_opts must come FIRST to be able to override anything: ssh honours
+    the first occurrence of an option (`ssh -o X=yes -o X=accept-new -G` says yes)."""
+    argv = ssh_socketcan.SshTransport._build_argv(
+        "zelos", "edge", 22, None, "-o StrictHostKeyChecking=accept-new -J bastion", "strict"
     )
-
-
-def test_rx_remote_command_two_way_watchdog_shape(fake_ssh, make_codec, make_transport):
-    """The RX remote command must close the channel when ANY party dies.
-
-    Structural requirements: a process-group kill (`kill 0`) armed on both
-    normal exit and fatal signals (dash/ash skip the EXIT trap on untrapped
-    signals), the shell parked on `wait $p` so candump's death ends the
-    command, cat reading the real stdin via a pre-dup'd fd (backgrounded
-    lists get /dev/null stdin), and the iface interpolated exactly once.
-    """
-    ebus, codec = make_codec()
-    make_transport(ebus, channel="host:can2")
-    cmd = fake_ssh.rx.argv[-1]
-    assert "kill 0" in cmd
-    assert "EXIT TERM INT HUP" in cmd  # signal-hardened trap, not EXIT-only
-    assert "wait $p" in cmd  # shell lives exactly as long as candump
-    assert "exec 3<&0" in cmd and "cat <&3" in cmd  # cat reads the real stdin
-    assert cmd.count("can2") == 1  # iface interpolated exactly once
+    assert argv.index("StrictHostKeyChecking=accept-new") < argv.index("StrictHostKeyChecking=yes")
+    assert argv[:6] == ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new", "-J", "bastion"]
+    assert argv[-1] == "zelos@edge"
 
 
 # ── CodecTxAdapter ───────────────────────────────────────────────────────────
@@ -637,7 +771,7 @@ def test_adapter_periodic_shim(make_codec):
     assert got is not None and got.arbitration_id == 0x300
 
     shim.stop()
-    assert _wait_until(lambda: shim.is_active is False)
+    assert wait_until(lambda: shim.is_active is False)
 
 
 def test_adapter_periodic_modify_data(make_codec):
@@ -646,7 +780,7 @@ def test_adapter_periodic_modify_data(make_codec):
     shim = adapter.send_periodic(can.Message(arbitration_id=0x300, data=b"\x01"), 0.02)
     # modify_data accepts a can.Message and must not raise.
     shim.modify_data(can.Message(arbitration_id=0x300, data=b"\x02"))
-    assert _wait_until(
+    assert wait_until(
         lambda: (msg := ebus.next_tx(timeout=0.5)) is not None and bytes(msg.data) == b"\x02"
     )
     shim.stop()
