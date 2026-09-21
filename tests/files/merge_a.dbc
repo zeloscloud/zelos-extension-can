@@ -1,0 +1,20 @@
+VERSION "merge-a"
+
+NS_ :
+BS_:
+BU_: DUT DBG
+
+BO_ 768 Merge_A: 1 DUT
+ SG_ a_value : 0|8@1+ (1,0) [0|255] "" DBG
+
+BO_ 769 Merge_Same: 2 DUT
+ SG_ same_value : 0|16@1+ (0.1,0) [0|6553.5] "V" DBG
+
+BO_ 770 Merge_Conflict_A: 1 DUT
+ SG_ conflict_a : 0|8@1+ (1,0) [0|255] "" DBG
+
+BO_ 771 Merge_Dup: 1 DUT
+ SG_ dup_value : 0|8@1+ (1,0) [0|255] "" DBG
+
+BO_ 850 Merge_Moved: 1 DUT
+ SG_ moved_value : 0|8@1+ (1,0) [0|255] "" DBG

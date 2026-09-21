@@ -7,7 +7,7 @@ from pathlib import Path
 import rich_click as click
 import zelos_sdk
 
-from ..codec import CanCodec
+from ..codec import DEFAULT_PREFIX, CanCodec, name_error
 from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 @click.command()
 @click.argument("interface", type=str)
 @click.argument("channel", type=str)
-@click.argument("database_file", type=click.Path(exists=True, path_type=Path))
+@click.argument("database_files", nargs=-1, type=click.Path(exists=True, path_type=Path))
 @click.option(
     "--bitrate",
     type=int,
@@ -41,14 +41,20 @@ logger = logging.getLogger(__name__)
     type=int,
     help="CAN-FD data phase bitrate",
 )
+@click.option(
+    "--prefix",
+    default=DEFAULT_PREFIX,
+    help="Leading trace-source name; pass '' to name the source after the bus",
+)
 def trace(
     interface: str,
     channel: str,
-    database_file: Path,
+    database_files: tuple[Path, ...],
     bitrate: int,
     file: Path | None,
     fd: bool,
     data_bitrate: int | None,
+    prefix: str,
 ) -> None:
     """Trace CAN bus without app configuration.
 
@@ -71,12 +77,23 @@ def trace(
       # Trace CAN-FD
 
       zelos-extension-can trace socketcan can0 vehicle.dbc --fd --data-bitrate 2000000
+
+      # Several databases, later files win a conflicting message id
+
+      zelos-extension-can trace socketcan can0 base.dbc overlay.dbc
+
+      # Name the source after the bus instead of the prefix
+
+      zelos-extension-can trace socketcan can0 vehicle.dbc --prefix ''
     """
+    if error := name_error(prefix, "Prefix"):
+        raise click.BadParameter(error)
+
     # Build config from CLI arguments
     config = {
         "interface": interface,
         "channel": channel,
-        "database_file": str(database_file),
+        "database_files": [str(p) for p in database_files],
         "bitrate": bitrate,
         "fd_mode": fd,
         "log_raw_frames": True,  # Enable raw logging in CLI mode
@@ -87,7 +104,7 @@ def trace(
         config["data_bitrate"] = data_bitrate
 
     logger.info(f"Tracing {interface} interface on {channel}")
-    logger.info(f"Database: {database_file}")
+    logger.info("Databases: %s", ", ".join(str(p) for p in database_files) or "(none)")
     logger.info(f"Bitrate: {bitrate}")
     if fd:
         logger.info(f"CAN-FD enabled, data bitrate: {data_bitrate}")
@@ -102,8 +119,13 @@ def trace(
         output_file = file
         logger.info(f"Recording trace to: {output_file}")
 
-    # Create CAN codec
-    codec = CanCodec(config)
+    # Same naming rule as app mode: with a prefix the source is the prefix and
+    # events nest under the channel-derived bus, cleared the bus owns the
+    # source. Channels carry catalog separators (`.`, `@`, `:`), so sanitize.
+    bus_name = zelos_sdk.sanitize_name(channel, kind="source")
+    codec = CanCodec(
+        config, bus_name=bus_name, source=zelos_sdk.TraceSource(prefix) if prefix else None
+    )
 
     setup_shutdown_handler(codec)
 

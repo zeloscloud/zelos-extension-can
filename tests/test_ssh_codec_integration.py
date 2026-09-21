@@ -18,12 +18,18 @@ import asyncio
 import contextlib
 import itertools
 import json
+import logging
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import can.exceptions
 import pytest
 import zelos_can
+import zelos_sdk
+from conftest import trace_event_paths
 
+from zelos_extension_can import codec as codec_mod
 from zelos_extension_can import ssh_socketcan
 from zelos_extension_can.cli import app as app_mod
 from zelos_extension_can.cli.app import _create_codecs, _prepare_bus_config, _run_codecs_async
@@ -49,23 +55,37 @@ class _StubTransport:
         ssh_port=22,
         ssh_key_path=None,
         ssh_extra_opts=None,
+        ssh_host_key_policy="auto",
+        ssh_hw_timestamps=True,
         fd_mode=False,
+        ever_connected=False,
     ):
         self.bus = bus
         self.channel = channel
         self.ssh_port = ssh_port
         self.ssh_key_path = ssh_key_path
         self.ssh_extra_opts = ssh_extra_opts
+        self.ssh_host_key_policy = ssh_host_key_policy
+        self.ssh_hw_timestamps = ssh_hw_timestamps
         self.fd_mode = fd_mode
+        self.ever_connected = ever_connected
         self.healthy = True
+        # A real transport sets this from its reader thread on the first frame;
+        # the codec reads it as the only proof this bus made contact.
+        self.streamed = False
+        self.tx_errors = 0
         self.teardowns = 0
         self.stderr = ""
+        self.failure = can.exceptions.CanInitializationError("transient")
 
     def teardown(self):
         self.teardowns += 1
 
     def stderr_tail(self):
         return self.stderr
+
+    def classify_failure(self):
+        return self.failure
 
 
 @pytest.fixture
@@ -91,7 +111,7 @@ def make_ssh_codec(stub_transports):
         cfg = {
             "interface": "ssh-socketcan",
             "channel": "zelos@edge:vcan0",
-            "database_file": TEST_DBC,
+            "database_files": [TEST_DBC],
         }
         if overrides:
             cfg.update(overrides)
@@ -133,25 +153,69 @@ def test_start_threads_ssh_kwargs_to_transport(make_ssh_codec, stub_transports):
         {
             "ssh_port": 2222,
             "ssh_key_path": "/home/z/id_ed25519",
-            "ssh_extra_opts": "-o StrictHostKeyChecking=no",
+            "ssh_extra_opts": "-J bastion",
+            "ssh_host_key_policy": "strict",
+            "ssh_hw_timestamps": False,
             "fd_mode": True,
         }
     )
     transport = stub_transports[0]
     assert transport.ssh_port == 2222
     assert transport.ssh_key_path == "/home/z/id_ed25519"
-    assert transport.ssh_extra_opts == "-o StrictHostKeyChecking=no"
+    assert transport.ssh_extra_opts == "-J bastion"
+    assert transport.ssh_host_key_policy == "strict"
+    assert transport.ssh_hw_timestamps is False
     assert transport.fd_mode is True
+
+
+def test_start_defaults_host_key_policy_to_auto(make_ssh_codec, stub_transports):
+    """Unset in config → "auto", so a reimaged edge needs no manual step."""
+    make_ssh_codec()
+    assert stub_transports[0].ssh_host_key_policy == "auto"
+    assert stub_transports[0].ssh_hw_timestamps is True  # hardware clock by default
 
 
 def test_ssh_flags_set_in_init():
     codec = CanCodec(
-        {"interface": "ssh-socketcan", "channel": "h:can0", "database_file": TEST_DBC},
+        {"interface": "ssh-socketcan", "channel": "h:can0", "database_files": [TEST_DBC]},
         bus_name=f"ssh_itest_{next(_name_counter)}",
     )
     assert codec._use_ssh is True
     assert codec._use_native is False
     assert codec._use_rust is True
+
+
+# ── naming: the Rust codec nests decoded events under the bus ───────────────
+
+
+@pytest.mark.parametrize("with_prefix", [True, False])
+def test_rust_path_nests_events_under_the_bus(tmp_path, stub_transports, with_prefix):
+    """Same layout as the python-can path: `<prefix>/<bus>/<id>_<Msg>` on a
+    shared source, `<bus>/<id>_<Msg>` on the bus's own."""
+    namespace = zelos_sdk.TraceNamespace("ssh_naming")
+    output = tmp_path / "out.trz"
+    config = {
+        "interface": "ssh-socketcan",
+        "channel": "zelos@edge:vcan0",
+        "database_files": [TEST_DBC],
+        "log_raw_frames": True,
+    }
+
+    with zelos_sdk.TraceWriter(str(output), namespace=namespace):
+        source = zelos_sdk.TraceSource("CAN", namespace=namespace) if with_prefix else None
+        codec = CanCodec(config, namespace=namespace, bus_name="can0", source=source)
+        try:
+            codec.start()
+            codec._ebus.inject(0x64, bytes(8), timestamp=1704067200.0)
+            deadline = time.monotonic() + 2.0
+            while codec._native.metrics().messages_decoded == 0 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            codec._native.flush()
+        finally:
+            codec.stop()
+
+    prefix = "CAN/" if with_prefix else ""
+    assert {f"{prefix}can0/Frame", f"{prefix}can0/0064_DUT_Status"} <= trace_event_paths(output)
 
 
 # ── health supervisor delegates to the transport via the adapter ─────────────
@@ -171,7 +235,7 @@ def test_check_bus_health_tracks_transport(make_ssh_codec):
 # ── reconnect: rebuild ONLY the transport; codec/port/periodics survive ──────
 
 
-def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports):
+def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports, caplog):
     codec = make_ssh_codec()
     native_before = codec._native
     ebus_before = codec._ebus
@@ -184,9 +248,14 @@ def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports):
     assert shim.is_active is True
 
     old_transport.healthy = False  # simulate a dead ssh link
-    ok = asyncio.run(codec._reconnect_bus())
+    old_transport.tx_errors = 2  # cansend failures reported before it died
+    with caplog.at_level(logging.INFO, logger=codec_mod.__name__):
+        ok = asyncio.run(codec._reconnect_bus())
 
     assert ok is True
+    # Supervisor/reconnect lines name their bus, like start/stop do.
+    rebuilt = next(r.getMessage() for r in caplog.records if "transport rebuilt" in r.getMessage())
+    assert rebuilt.startswith(f"[{codec.bus_name}]")
     # Only the transport was rebuilt.
     assert old_transport.teardowns == 1
     assert len(stub_transports) == 2
@@ -201,6 +270,30 @@ def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports):
     # The rebuilt transport carries the same durable ExternalBus + channel.
     assert new_transport.bus is ebus_before
     assert new_transport.channel == "zelos@edge:vcan0"
+    # Neither transport ever streamed a frame, so "no such device" still reads
+    # as a wrong remote_channel (see test_ever_connected_needs_a_streamed_frame).
+    assert old_transport.ever_connected is False
+    assert new_transport.ever_connected is False
+    # The dead transport's TX failures are folded in, not reset by the rebuild.
+    assert codec.get_tx_state()["bus"]["metrics"]["tx_errors"] == 2
+
+
+def test_ever_connected_needs_a_streamed_frame(make_ssh_codec, stub_transports):
+    """`ever_connected` is what turns a later "no such device" transient, so it
+    must come from PROOF. Construction proves nothing: the startup probe passes
+    an idle-but-alive session after its grace, and a wrong remote_channel on a
+    slow connect would otherwise look transient forever."""
+    codec = make_ssh_codec()
+    assert codec._ssh_ever_connected is False
+
+    codec._transport.healthy = False
+    assert asyncio.run(codec._reconnect_bus()) is True
+    assert stub_transports[1].ever_connected is False  # still nothing streamed
+
+    stub_transports[1].streamed = True  # a frame reached this session
+    stub_transports[1].healthy = False
+    assert asyncio.run(codec._reconnect_bus()) is True
+    assert stub_transports[2].ever_connected is True
 
 
 def test_reconnect_transport_build_failure_preserves_codec_then_recovers(
@@ -234,13 +327,14 @@ def test_reconnect_transport_build_failure_preserves_codec_then_recovers(
     ok = asyncio.run(codec._reconnect_bus())
 
     assert ok is False
-    # Old transport reaped, but NOTHING else changed — no second codec, no
-    # object-identity churn, periodic still armed.
+    # Old transport reaped and dropped (nothing must read a torn-down ring), but
+    # NOTHING else changed — no second codec, no object-identity churn, periodic
+    # still armed.
     assert old_transport.teardowns == 1
+    assert codec._transport is None
     assert codec._native is native_before
     assert codec._ebus is ebus_before
     assert codec.bus is bus_before
-    assert codec._transport is old_transport  # not replaced on failure
     assert shim.is_active is True
     assert len(stub_transports) == 1  # no new transport was constructed
 
@@ -288,8 +382,45 @@ def test_reconnect_stop_during_teardown_does_not_resurrect(make_ssh_codec, stub_
 
     assert ok is False
     assert len(stub_transports) == 1  # re-check bailed before building
-    assert codec._transport is old_transport
+    assert codec._transport is None  # the dead one was reaped and dropped
     assert codec.bus is bus_before
+
+
+# ── permanent failure mid-run: report once and exit, never retry forever ─────
+
+
+def test_reconnect_propagates_permanent_failure(make_ssh_codec, monkeypatch):
+    """A rebuild that fails for a reason retrying cannot fix (auth, host key,
+    no can-utils, no iface) must NOT be swallowed into "retrying next tick" —
+    it propagates so the app layer reports it once and exits."""
+    codec = make_ssh_codec()
+
+    def denied(bus, channel, **kwargs):
+        raise ssh_socketcan.SshPermanentError("ssh authentication to edge failed")
+
+    monkeypatch.setattr(ssh_socketcan, "SshTransport", denied)
+
+    with pytest.raises(ssh_socketcan.SshPermanentError):
+        asyncio.run(codec._reconnect_bus())
+
+
+def test_supervisor_raises_on_permanent_failure(make_ssh_codec, monkeypatch):
+    """An unhealthy link whose cause is permanent ends the supervision loop with
+    the actionable CanError instead of backing off 5 s → 60 s forever."""
+    codec = make_ssh_codec()
+    codec._transport.healthy = False
+    codec._transport.failure = ssh_socketcan.SshPermanentError(
+        "ssh host key for edge is not trusted"
+    )
+
+    # Collapse the 5 s health tick; the loop's only await is this sleep.
+    async def _no_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(codec_mod.asyncio, "sleep", _no_sleep)
+
+    with pytest.raises(ssh_socketcan.SshPermanentError):
+        asyncio.run(codec._run_async())
 
 
 # ── clean failure: a doomed transport surfaces a CanError, not a traceback ───
@@ -310,6 +441,8 @@ def test_start_raises_can_error_on_transport_failure(make_ssh_codec, monkeypatch
 
     with pytest.raises(can.exceptions.CanError):
         codec.start()
+    # The half-built native state is torn down, not left running.
+    assert (codec._native, codec._ebus) == (None, None)
 
 
 def test_run_codecs_async_propagates_can_error_and_cleans_up(make_ssh_codec, monkeypatch):
@@ -342,8 +475,8 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
     # start/run path; capture the real codecs it builds so we can stop them.
     created: list[CanCodec] = []
 
-    def capture_create(config, dbc):
-        pairs = _create_codecs(config, dbc)
+    def capture_create(config, dbc, advanced=None, source=None):
+        pairs = _create_codecs(config, dbc, advanced, source)
         created.extend(c for c, _ in pairs)
         return pairs
 
@@ -353,7 +486,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
         lambda: {
             "log_level": "INFO",
             "buses": [
-                {"interface": "ssh-socketcan", "remote_host": "edge", "database_file": TEST_DBC}
+                {"interface": "ssh-socketcan", "remote_host": "edge", "database_files": [TEST_DBC]}
             ],
         },
     )
@@ -361,6 +494,8 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
     monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
     monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
 
     try:
         with pytest.raises(SystemExit) as ei:
@@ -432,7 +567,7 @@ def test_prepare_bus_config_channel_with_user():
             "remote_host": "edge",
             "ssh_user": "zelos",
             "remote_channel": "vcan0",
-            "database_file": TEST_DBC,
+            "database_files": [TEST_DBC],
         },
         Path("/nonexistent/demo.dbc"),
     )
@@ -444,7 +579,7 @@ def test_prepare_bus_config_channel_without_user_defaults_can0():
         {
             "interface": "ssh-socketcan",
             "remote_host": "edge",
-            "database_file": TEST_DBC,
+            "database_files": [TEST_DBC],
         },
         Path("/nonexistent/demo.dbc"),
     )
@@ -454,7 +589,7 @@ def test_prepare_bus_config_channel_without_user_defaults_can0():
 def test_prepare_bus_config_missing_host_exits():
     with pytest.raises(SystemExit):
         _prepare_bus_config(
-            {"interface": "ssh-socketcan", "database_file": TEST_DBC},
+            {"interface": "ssh-socketcan", "database_files": [TEST_DBC]},
             Path("/nonexistent/demo.dbc"),
         )
 
@@ -472,14 +607,14 @@ def test_create_codecs_sanitizes_dotted_ssh_source_names():
             {
                 "interface": "ssh-socketcan",
                 "remote_host": "192.168.1.10",
-                "database_file": TEST_DBC,
+                "database_files": [TEST_DBC],
             },
             {
                 "interface": "ssh-socketcan",
                 "remote_host": "10.0.0.5",
                 "ssh_user": "zelos",
                 "remote_channel": "can1",
-                "database_file": TEST_DBC,
+                "database_files": [TEST_DBC],
             },
         ]
     }
@@ -517,7 +652,7 @@ def test_schema_enum_includes_ssh_socketcan():
 def test_schema_ssh_branch_structure():
     """Structural check (always runs, no jsonschema dep needed)."""
     branch = _ssh_branch(_load_schema())
-    assert branch["required"] == ["interface", "remote_host", "database_file"]
+    assert branch["required"] == ["interface", "remote_host"]
     props = branch["properties"]
     for field in (
         "remote_host",
@@ -525,18 +660,20 @@ def test_schema_ssh_branch_structure():
         "ssh_user",
         "ssh_port",
         "ssh_key_path",
+        "ssh_host_key_policy",
         "ssh_extra_opts",
-        "database_file",
-        "name",
+        "ssh_hw_timestamps",
         "fd_mode",
-        "timestamp_mode",
-        "log_raw_frames",
-        "emit_schemas_on_init",
     ):
         assert field in props, f"ssh branch missing property {field!r}"
     assert props["remote_channel"]["default"] == "can0"
     assert props["ssh_port"]["default"] == 22
     assert props["ssh_key_path"]["ui:widget"] == "file-picker"
+    # Default "auto": a reimaged edge reconnects with no manual host-key step.
+    assert props["ssh_host_key_policy"]["enum"] == ["auto", "strict"]
+    assert props["ssh_host_key_policy"]["default"] == "auto"
+    # Hardware timestamps by default; the edge's candump decides whether it can.
+    assert props["ssh_hw_timestamps"]["default"] is True
     # The remote kernel loopback always echoes TX; there is no receive_own_messages.
     assert "receive_own_messages" not in props
 
@@ -550,7 +687,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
             {
                 "interface": "ssh-socketcan",
                 "remote_host": "edge",
-                "database_file": TEST_DBC,
+                "database_files": [TEST_DBC],
             }
         ]
     }
@@ -565,17 +702,15 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
                 "ssh_user": "zelos",
                 "ssh_port": 2222,
                 "ssh_key_path": "/home/z/id_ed25519",
-                "ssh_extra_opts": "-o StrictHostKeyChecking=no",
-                "database_file": TEST_DBC,
+                "ssh_host_key_policy": "strict",
+                "ssh_extra_opts": "-J bastion",
+                "database_files": [TEST_DBC],
                 "name": "edge-bus",
                 "fd_mode": False,
-                "timestamp_mode": "auto",
-                "log_raw_frames": True,
-                "emit_schemas_on_init": False,
             }
         ]
     }
     assert validator.is_valid(full)
 
-    missing_host = {"buses": [{"interface": "ssh-socketcan", "database_file": TEST_DBC}]}
+    missing_host = {"buses": [{"interface": "ssh-socketcan", "database_files": [TEST_DBC]}]}
     assert not validator.is_valid(missing_host)

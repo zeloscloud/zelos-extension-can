@@ -207,6 +207,15 @@ def test_parse_nanosecond_precision_timestamp():
     assert f.timestamp == pytest.approx(1234567890.123456789)
 
 
+def test_parse_zero_timestamp_is_no_timestamp():
+    """`candump -H` on an interface with no hardware clock (vcan, some slcan)
+    stamps every frame (0000000000.000000); the frame keeps its data and the
+    codec stamps wall clock."""
+    f = parse_candump_line(b"(0000000000.000000) vcan0 100#AABB")
+    assert f.timestamp is None
+    assert f.data == b"\xaa\xbb"
+
+
 def test_parse_max_len_classic():
     f = parse_candump_line(b"(1.0) can0 100#0011223344556677")
     assert len(f.data) == 8

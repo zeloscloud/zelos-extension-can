@@ -109,13 +109,13 @@ class EVSimulator:
 
 async def run_demo_ev_simulation(
     bus: can.Bus,
-    db: cantools.database.can.Database,
+    messages: dict[str, cantools.database.can.Message],
     running_flag: Any,
 ) -> None:
     """Run physics-based EV simulation and transmit CAN messages.
 
     :param bus: CAN bus instance to send messages on
-    :param db: CAN database with message definitions
+    :param messages: Merged DBC messages by name
     :param running_flag: Object with 'running' attribute to check if simulation should continue
     """
     try:
@@ -143,7 +143,7 @@ async def run_demo_ev_simulation(
                 # BMS_BatteryStatus (100ms / iteration 2)
                 if iteration % 2 == 0:
                     send(
-                        db.get_message_by_name("BMS_BatteryStatus"),
+                        messages["BMS_BatteryStatus"],
                         {
                             "pack_voltage": sim.pack_voltage,
                             "pack_current": sim.pack_current,
@@ -157,7 +157,7 @@ async def run_demo_ev_simulation(
                 # BMS_CellVoltages (1000ms / iteration 20)
                 if iteration % 20 == 0:
                     send(
-                        db.get_message_by_name("BMS_CellVoltages"),
+                        messages["BMS_CellVoltages"],
                         {
                             "cell_01_voltage": sim.cell_voltages[0],
                             "cell_02_voltage": sim.cell_voltages[1],
@@ -170,7 +170,7 @@ async def run_demo_ev_simulation(
                 # BMS_Temperatures (500ms / iteration 10)
                 if iteration % 10 == 0:
                     send(
-                        db.get_message_by_name("BMS_Temperatures"),
+                        messages["BMS_Temperatures"],
                         {
                             "module_01_temp": int(sim.pack_temp),
                             "module_02_temp": int(sim.pack_temp + 2),
@@ -185,7 +185,7 @@ async def run_demo_ev_simulation(
                 # BMS_Limits (200ms / iteration 4)
                 if iteration % 4 == 0:
                     send(
-                        db.get_message_by_name("BMS_Limits"),
+                        messages["BMS_Limits"],
                         {
                             "max_charge_current": 200.0,
                             "max_discharge_current": 400.0,
@@ -197,7 +197,7 @@ async def run_demo_ev_simulation(
                 # BMS_Status (100ms / iteration 2)
                 if iteration % 2 == 0:
                     send(
-                        db.get_message_by_name("BMS_Status"),
+                        messages["BMS_Status"],
                         {
                             "bms_state": 3,  # READY
                             "contactor_state": 2,  # CLOSED
@@ -215,7 +215,7 @@ async def run_demo_ev_simulation(
                     cell_group = (iteration // 5) % 3
                     if cell_group == 0:
                         send(
-                            db.get_message_by_name("BMS_CellDetail"),
+                            messages["BMS_CellDetail"],
                             {
                                 "cell_group": 0,
                                 "cell_a_voltage": sim.cell_voltages[0],
@@ -228,7 +228,7 @@ async def run_demo_ev_simulation(
                     elif cell_group == 1:
                         base = int(sim.pack_temp)
                         send(
-                            db.get_message_by_name("BMS_CellDetail"),
+                            messages["BMS_CellDetail"],
                             {
                                 "cell_group": 1,
                                 "cell_a_temp": base,
@@ -240,7 +240,7 @@ async def run_demo_ev_simulation(
                         )
                     else:
                         send(
-                            db.get_message_by_name("BMS_CellDetail"),
+                            messages["BMS_CellDetail"],
                             {
                                 "cell_group": 2,
                                 "balancing_target_cell": 0,
@@ -252,7 +252,7 @@ async def run_demo_ev_simulation(
 
                 # Motor_Status (50ms / iteration 1)
                 send(
-                    db.get_message_by_name("Motor_Status"),
+                    messages["Motor_Status"],
                     {
                         "motor_speed": sim.motor_speed,
                         "motor_torque": sim.motor_torque,
@@ -268,7 +268,7 @@ async def run_demo_ev_simulation(
                 if iteration % 2 == 0:
                     power_output = (sim.motor_torque * sim.motor_speed / 9550) / 1000
                     send(
-                        db.get_message_by_name("Motor_Power"),
+                        messages["Motor_Power"],
                         {
                             "dc_voltage": sim.pack_voltage,
                             "dc_current": sim.pack_current,
@@ -280,7 +280,7 @@ async def run_demo_ev_simulation(
                 # Motor_Command (20ms but just use same values / iteration 1 with less frequency)
                 if iteration % 2 == 0:
                     send(
-                        db.get_message_by_name("Motor_Command"),
+                        messages["Motor_Command"],
                         {
                             "torque_request": sim.motor_torque,
                             "speed_limit": 10000,
@@ -292,7 +292,7 @@ async def run_demo_ev_simulation(
                 # Gateway_VehicleSpeed (100ms / iteration 2)
                 if iteration % 2 == 0:
                     send(
-                        db.get_message_by_name("Gateway_VehicleSpeed"),
+                        messages["Gateway_VehicleSpeed"],
                         {
                             "vehicle_speed": sim.speed,
                             "odometer": int(sim.uptime * 10),
@@ -305,7 +305,7 @@ async def run_demo_ev_simulation(
                 # Gateway_BodyControls (200ms / iteration 4)
                 if iteration % 4 == 0:
                     send(
-                        db.get_message_by_name("Gateway_BodyControls"),
+                        messages["Gateway_BodyControls"],
                         {
                             "door_driver_open": 0,
                             "door_passenger_open": 0,
@@ -326,7 +326,7 @@ async def run_demo_ev_simulation(
                 # Gateway_ChargeStatus (500ms / iteration 10)
                 if iteration % 10 == 0:
                     send(
-                        db.get_message_by_name("Gateway_ChargeStatus"),
+                        messages["Gateway_ChargeStatus"],
                         {
                             "charge_port_open": 0,
                             "charge_cable_connected": 0,
@@ -340,7 +340,7 @@ async def run_demo_ev_simulation(
                 # Gateway_Diagnostics (1000ms / iteration 20)
                 if iteration % 20 == 0:
                     send(
-                        db.get_message_by_name("Gateway_Diagnostics"),
+                        messages["Gateway_Diagnostics"],
                         {
                             "system_uptime": int(sim.uptime),
                             "battery_12v_voltage": 13.8,
@@ -352,7 +352,7 @@ async def run_demo_ev_simulation(
                 # Diag_DTCStatus — 29-bit extended ID (1000ms / iteration 20)
                 if iteration % 20 == 0:
                     send(
-                        db.get_message_by_name("Diag_DTCStatus"),
+                        messages["Diag_DTCStatus"],
                         {
                             "active_dtc_count": 0,
                             "pending_dtc_count": 0,
@@ -366,7 +366,7 @@ async def run_demo_ev_simulation(
                 # Charger_EVSEStatus — 29-bit extended ID (500ms / iteration 10)
                 if iteration % 10 == 0:
                     send(
-                        db.get_message_by_name("Charger_EVSEStatus"),
+                        messages["Charger_EVSEStatus"],
                         {
                             "evse_max_current": 32.0,
                             "evse_max_voltage": 480.0,

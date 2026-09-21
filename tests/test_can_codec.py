@@ -1,9 +1,10 @@
 """Essential unit tests for CAN codec."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+import zelos_sdk
 
 from zelos_extension_can.codec import CanCodec, TimestampMode
 from zelos_extension_can.utils.schema_utils import cantools_signal_to_trace_type
@@ -31,7 +32,7 @@ def mock_config(test_dbc_path):
         "interface": "virtual",
         "channel": "vcan0",
         "bitrate": 500000,
-        "database_file": test_dbc_path,
+        "database_files": [test_dbc_path],
     }
 
 
@@ -46,9 +47,13 @@ class TestCanCodecInitialization:
     """Test codec initialization and setup."""
 
     def test_loads_dbc(self, codec, test_dbc_path):
-        """Test DBC file is loaded."""
-        assert codec.db is not None
-        assert len(codec.db.messages) == 13  # test.dbc has 13 messages
+        """Test DBC file is loaded and merged.
+
+        Two of test.dbc's 13 definitions share CAN id 800 under different names,
+        so both survive — the same set the Rust decoder reports."""
+        assert len(codec.databases) == 1
+        assert len(codec.databases[0].messages) == 13
+        assert len(codec.messages) == 13
 
     def test_creates_message_lookups(self, codec):
         """Test message lookup dictionaries are populated."""
@@ -56,16 +61,16 @@ class TestCanCodecInitialization:
         assert len(codec.messages_by_name) > 0
 
     def test_handles_duplicate_message_names(self, codec):
-        """Test duplicate message names are handled gracefully."""
-        # test.dbc has duplicate "Duplicate_Message" entries
-        # Should only keep first one in messages_by_name
-        duplicate_count = sum(1 for msg in codec.db.messages if msg.name == "Duplicate_Message")
+        """A repeated message name resolves to the LAST definition, so
+        messages_by_name and messages_by_id agree."""
+        # test.dbc defines "Duplicate_Message" at ids 400 and 500.
+        duplicate_count = sum(1 for msg in codec.messages if msg.name == "Duplicate_Message")
         assert duplicate_count == 2
-        assert "Duplicate_Message" in codec.messages_by_name
+        assert codec.messages_by_name["Duplicate_Message"].frame_id == 500
 
     def test_generates_event_names(self, codec):
         """Test event name generation format."""
-        msg = codec.db.get_message_by_name("DUT_Status")
+        msg = codec.messages_by_name["DUT_Status"]
         event_name = codec._get_event_name(msg)
         assert event_name == "0064_DUT_Status"  # 0x64 = 100
 
@@ -77,7 +82,7 @@ class TestCanCodecInitialization:
         assert len(codec._events) == 0
 
         # Event should not exist before first message
-        assert (0x64, False) not in codec._events
+        assert (0x64, False, "DUT_Status") not in codec._events
 
         msg = can.Message(
             arbitration_id=0x64,
@@ -90,8 +95,8 @@ class TestCanCodecInitialization:
         codec._handle_message(msg)
 
         # Now the event should exist
-        assert (0x64, False) in codec._events
-        assert codec._events[(0x64, False)] is not None
+        assert (0x64, False, "DUT_Status") in codec._events
+        assert codec._events[(0x64, False, "DUT_Status")] is not None
 
         # Handling the same message again should not increase cache size
         cache_size_after_first = len(codec._events)
@@ -114,8 +119,8 @@ class TestCanCodecInitialization:
         assert len(codec._events) > 0
 
         # Specific event should exist
-        assert (0x64, False) in codec._events
-        assert codec._events[(0x64, False)] is not None
+        assert (0x64, False, "DUT_Status") in codec._events
+        assert codec._events[(0x64, False, "DUT_Status")] is not None
 
         msg = can.Message(
             arbitration_id=0x64,
@@ -162,7 +167,7 @@ class TestSchemaUtils:
     def test_float_signal_mapping(self, codec):
         """An IEEE float raw with identity conversion keeps its declared width;
         a scaled signal is Float64 (fp32 folds adjacent raws at factor 0.001)."""
-        msg = codec.db.get_message_by_name("DUT_Status")
+        msg = codec.messages_by_name["DUT_Status"]
         from zelos_sdk import DataType
 
         assert (
@@ -195,7 +200,7 @@ class TestSchemaUtils:
     def test_integer_signal_mapping(self, codec):
         """Test integer signal maps correctly."""
         # Use real signal from DBC
-        msg = codec.db.get_message_by_name("DUT_Status")
+        msg = codec.messages_by_name["DUT_Status"]
         state_signal = msg.get_signal_by_name("state")  # 2-bit unsigned
 
         from zelos_sdk import DataType
@@ -206,7 +211,7 @@ class TestSchemaUtils:
     def test_signed_integer_mapping(self, codec):
         """Test signed integer mapping."""
         # Use real signal from DBC
-        msg = codec.db.get_message_by_name("DUT_Status")
+        msg = codec.messages_by_name["DUT_Status"]
         signed_signal = msg.get_signal_by_name("signed_signal")  # 2-bit signed
 
         from zelos_sdk import DataType
@@ -220,7 +225,7 @@ class TestMessageDecoding:
 
     def test_get_event_name_format(self, codec):
         """Test event names follow {id:04x}_{name} or {id:08x}_{name} format for extended IDs."""
-        for msg in codec.db.messages:
+        for msg in codec.messages:
             event_name = codec._get_event_name(msg)
             assert "_" in event_name
             msg_id_hex, msg_name = event_name.split("_", 1)
@@ -234,7 +239,7 @@ class TestMessageDecoding:
             "interface": "virtual",
             "channel": "vcan0",
             "bitrate": 500000,
-            "database_file": low_id_collision_dbc_path,
+            "database_files": [low_id_collision_dbc_path],
         }
 
         import can
@@ -249,8 +254,8 @@ class TestMessageDecoding:
         assert codec.metrics.unknown_messages == 0
         assert (0x100, False) in codec.messages_by_id
         assert (0x100, True) in codec.messages_by_id
-        assert codec._events[(0x100, False)] is not None
-        assert codec._events[(0x100, True)] is not None
+        assert codec._events[(0x100, False, "StdMessage")] is not None
+        assert codec._events[(0x100, True, "ExtMessage")] is not None
 
 
 class TestConfiguration:
@@ -258,14 +263,14 @@ class TestConfiguration:
 
     def test_requires_interface(self, test_dbc_path):
         """Test interface is required."""
-        config = {"channel": "can0", "database_file": test_dbc_path}
+        config = {"channel": "can0", "database_files": [test_dbc_path]}
         with pytest.raises(KeyError), patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
             codec.start()
 
     def test_requires_channel(self, test_dbc_path):
         """Test channel is required."""
-        config = {"interface": "virtual", "database_file": test_dbc_path}
+        config = {"interface": "virtual", "database_files": [test_dbc_path]}
         with pytest.raises(KeyError), patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
             codec.start()
@@ -498,7 +503,7 @@ class TestErrorHandling:
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "database_file": "/nonexistent/file.dbc",
+            "database_files": ["/nonexistent/file.dbc"],
         }
         with (
             pytest.raises(FileNotFoundError, match="CAN database file not found"),
@@ -511,7 +516,7 @@ class TestErrorHandling:
         bad_dbc = tmp_path / "bad.dbc"
         bad_dbc.write_text("not a valid dbc file")
 
-        config = {"interface": "virtual", "channel": "vcan0", "database_file": str(bad_dbc)}
+        config = {"interface": "virtual", "channel": "vcan0", "database_files": [str(bad_dbc)]}
         with (
             pytest.raises(ValueError, match="Failed to load database file"),
             patch("zelos_sdk.TraceSource"),
@@ -530,6 +535,8 @@ class TestEmitFailureSuppression:
     CODEC_LOGGER = "zelos_extension_can.codec"
     FAILING_ID = 0x64  # DUT_Status, 8 data bytes
     HEALTHY_ID = 0xC8  # DUT_Command, 1 data byte
+    FAILING_KEY = (FAILING_ID, False, "DUT_Status")
+    HEALTHY_KEY = (HEALTHY_ID, False, "DUT_Command")
 
     @staticmethod
     def _frame(arbitration_id: int, data: bytes):
@@ -542,7 +549,7 @@ class TestEmitFailureSuppression:
         """Make source.add_event return a distinct mock per event name."""
         from unittest.mock import MagicMock
 
-        codec.source.add_event.side_effect = lambda name, fields: MagicMock()
+        codec.source.add_event.side_effect = lambda name, fields, event_type=None: MagicMock()
 
     def test_emit_failure_logs_once_then_suppresses(self, codec, caplog, monkeypatch):
         """N frames of a message whose emit always fails produce exactly one log record."""
@@ -577,7 +584,7 @@ class TestEmitFailureSuppression:
             assert "schema registration exploded" in message
             assert "suppressing further errors for this message" in message
 
-            assert (self.FAILING_ID, False) in codec._failed_messages
+            assert self.FAILING_KEY in codec._failed_messages
             assert codec.metrics.emit_errors == 1
 
             # Every later frame: silent short-circuit, still counted.
@@ -593,9 +600,9 @@ class TestEmitFailureSuppression:
                 codec._decode_and_emit_message(healthy, None)
             assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
-        healthy_event = codec._events[(self.HEALTHY_ID, False)]
+        healthy_event = codec._events[self.HEALTHY_KEY]
         assert healthy_event.log.call_count == frames
-        assert (self.HEALTHY_ID, False) not in codec._failed_messages
+        assert self.HEALTHY_KEY not in codec._failed_messages
 
         # Emit failures never touch decode_errors (bus-noise semantics).
         assert codec.metrics.decode_errors == 0
@@ -616,7 +623,7 @@ class TestEmitFailureSuppression:
 
         assert codec.metrics.decode_errors == 3
         assert codec.metrics.emit_errors == 0
-        assert (self.FAILING_ID, False) not in codec._failed_messages
+        assert self.FAILING_KEY not in codec._failed_messages
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
@@ -654,14 +661,31 @@ class TestMultiBusSupport:
             CanCodec(mock_config)
             mock_source.assert_any_call("can_codec")
 
-    def test_codec_with_bus_name_raw_source(self, mock_config):
-        """Test that bus_name is used for raw trace source when enabled."""
+    def test_raw_frames_share_the_bus_source(self, mock_config):
+        """Raw frames land on the bus's own source as 'Frame' — there is no
+        separate '{bus}_raw' source any more."""
         mock_config["log_raw_frames"] = True
         with patch("zelos_sdk.TraceSource") as mock_source:
-            CanCodec(mock_config, bus_name="chassis")
+            codec = CanCodec(mock_config, bus_name="chassis")
             calls = [str(c) for c in mock_source.call_args_list]
             assert any("'chassis'" in c for c in calls)
-            assert any("'chassis_raw'" in c for c in calls)
+            assert not any("_raw" in c for c in calls)
+        assert codec.raw_event_name == "Frame"
+        codec.source.add_event.assert_any_call("Frame", zelos_sdk.schemas.CanFrame)
+
+    def test_shared_source_nests_events_under_the_bus(self, mock_config):
+        """With a shared prefix source, every event this bus registers is
+        nested under the bus name and no new source is created."""
+        mock_config["log_raw_frames"] = True
+        shared = MagicMock()
+        with patch("zelos_sdk.TraceSource") as mock_source:
+            codec = CanCodec(mock_config, bus_name="chassis", source=shared)
+        mock_source.assert_not_called()
+        assert codec.source is shared
+        assert codec.raw_event_name == "chassis/Frame"
+        assert codec._get_event_name(codec.messages_by_name["DUT_Status"]) == (
+            "chassis/0064_DUT_Status"
+        )
 
     def test_prepare_bus_config_demo_mode(self, test_dbc_path):
         """Test _prepare_bus_config handles demo interface."""
@@ -685,7 +709,7 @@ class TestMultiBusSupport:
             "name": "can0",
             "interface": "socketcan",
             "channel": "can0",
-            "database_file": test_dbc_path,
+            "database_files": [test_dbc_path],
         }
 
         result = _prepare_bus_config(bus_config, Path(test_dbc_path))
@@ -694,12 +718,15 @@ class TestMultiBusSupport:
         assert result["channel"] == "can0"
         assert "demo_mode" not in result
 
-    def test_single_bus_no_name_backward_compatible(self, test_dbc_path):
-        """Test single bus without name uses default 'can_codec' (backward compatible)."""
+    def test_single_bus_no_name_derives_from_channel(self, test_dbc_path):
+        """An unnamed bus is always named after its channel — no 'can_codec'
+        special case for the single-bus setup."""
         from zelos_extension_can.cli.app import _create_codecs
 
         config = {
-            "buses": [{"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path}]
+            "buses": [
+                {"interface": "virtual", "channel": "vcan0", "database_files": [test_dbc_path]}
+            ]
         }
 
         with patch("zelos_sdk.TraceSource"):
@@ -707,8 +734,8 @@ class TestMultiBusSupport:
 
         assert len(codecs) == 1
         codec, action_name = codecs[0]
-        assert action_name == "can_codec"
-        assert codec.bus_name is None
+        assert action_name == "vcan0"
+        assert codec.bus_name == "vcan0"
 
     def test_multi_bus_defaults_name_to_channel(self, test_dbc_path):
         """Test multi-bus without names defaults to channel names."""
@@ -716,8 +743,8 @@ class TestMultiBusSupport:
 
         config = {
             "buses": [
-                {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
-                {"interface": "virtual", "channel": "vcan1", "database_file": test_dbc_path},
+                {"interface": "virtual", "channel": "vcan0", "database_files": [test_dbc_path]},
+                {"interface": "virtual", "channel": "vcan1", "database_files": [test_dbc_path]},
             ]
         }
 
@@ -741,13 +768,13 @@ class TestMultiBusSupport:
                     "name": "bus",
                     "interface": "virtual",
                     "channel": "vcan0",
-                    "database_file": test_dbc_path,
+                    "database_files": [test_dbc_path],
                 },
                 {
                     "name": "bus",
                     "interface": "virtual",
                     "channel": "vcan1",
-                    "database_file": test_dbc_path,
+                    "database_files": [test_dbc_path],
                 },
             ]
         }
@@ -757,8 +784,8 @@ class TestMultiBusSupport:
         # Same channel = same default name = collision
         config_same_channel = {
             "buses": [
-                {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
-                {"interface": "virtual", "channel": "vcan0", "database_file": test_dbc_path},
+                {"interface": "virtual", "channel": "vcan0", "database_files": [test_dbc_path]},
+                {"interface": "virtual", "channel": "vcan0", "database_files": [test_dbc_path]},
             ]
         }
         with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):

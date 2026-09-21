@@ -6,11 +6,16 @@ import time
 from pathlib import Path
 
 import rich_click as click
-from zelos_sdk.hooks.logging import TraceLoggingHandler
 
+from zelos_extension_can import ACTION_PREFIX as _ACTION_PREFIX
 from zelos_extension_can import cli as cli_commands
 
 DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.dbc"
+
+#: Re-exported so the at-rest inventory dump — which reads this entry module —
+#: sees the same namespace the live registration uses. See the definition in
+#: `zelos_extension_can/__init__.py`.
+ACTION_PREFIX = _ACTION_PREFIX
 
 # Configure rich-click
 click.rich_click.USE_RICH_MARKUP = True
@@ -27,12 +32,6 @@ logging.basicConfig(
     format="%(asctime)s.%(msecs)03dZ %(levelname)5s %(name)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
-
-# Add the built-in handler to capture logs at INFO level and above
-# (DEBUG logs won't be sent to backend to avoid duplicate trace data)
-handler = TraceLoggingHandler("can_log")
-handler.setLevel(logging.INFO)
-logging.getLogger().addHandler(handler)
 
 
 @click.group(invoke_without_command=True)

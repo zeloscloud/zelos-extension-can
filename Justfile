@@ -65,5 +65,5 @@ release VERSION:
 
 # Clean build artifacts
 clean:
-    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts
+    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts actions.json
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
