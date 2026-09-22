@@ -7,12 +7,14 @@ discovery action) is its own thing and worth covering directly.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from zelos_sdk.extensions.actions import get_standalone_actions
 
-from zelos_extension_can import actions
+from zelos_extension_can import ACTION_PREFIX, actions
 from zelos_extension_can.codec import CanCodec
 
 DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
@@ -350,3 +352,18 @@ class TestConfigFormHooks:
 
         assert result["status"] == "error"
         assert "ssh-socketcan" in result["message"]  # the way out on a laptop
+
+    def test_schema_hooks_name_actions_that_exist(self):
+        """Both hooks wire the form to an action by name, so a rename breaks the
+        form silently. `get_standalone_actions` is the same index the packaged
+        `actions.json` is dumped from, keyed without the prefix.
+        """
+        schema = json.loads((Path(__file__).parents[1] / "config.schema.json").read_text())
+        branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
+        channels = [b["properties"].get("channel", {}) for b in branches]
+        named = {schema["ui:options"]["autoconfig"]} | {
+            ch["ui:options"]["action"] for ch in channels if "action" in ch.get("ui:options", {})
+        }
+
+        assert named == {f"{ACTION_PREFIX}/auto_config", f"{ACTION_PREFIX}/list_interfaces"}
+        assert {n.split("/", 1)[1] for n in named} <= set(get_standalone_actions())

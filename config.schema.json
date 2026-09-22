@@ -2,6 +2,9 @@
   "type": "object",
   "title": "CAN Extension Configuration",
   "description": "Configure one or more CAN buses to monitor in parallel.",
+  "ui:options": {
+    "autoconfig": "CAN/auto_config"
+  },
   "properties": {
     "buses": {
       "type": "array",
@@ -90,8 +93,12 @@
                   "channel": {
                     "type": "string",
                     "title": "Channel",
-                    "description": "SocketCAN interface name (can0, vcan0, slcan0, ...)",
-                    "default": "can0"
+                    "description": "SocketCAN interface name (can0, vcan0, slcan0, ...). Choose from the interfaces on the machine running the agent, or type a name.",
+                    "default": "can0",
+                    "ui:widget": "action-choices",
+                    "ui:options": {
+                      "action": "CAN/list_interfaces"
+                    }
                   },
                   "fd_mode": {
                     "type": "boolean",
