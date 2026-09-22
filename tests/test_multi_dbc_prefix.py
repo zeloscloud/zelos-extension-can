@@ -216,9 +216,9 @@ def test_resolve_advanced_honours_a_legacy_top_level_log_level():
     )
 
 
-def test_resolve_advanced_prefix_is_empty_unless_set():
-    assert resolve_advanced({})["prefix"] == ""
-    assert resolve_advanced({"advanced": {"prefix": "CAN"}})["prefix"] == "CAN"
+def test_resolve_advanced_distinguishes_a_cleared_prefix_from_an_absent_one():
+    assert resolve_advanced({})["prefix"] == "CAN"
+    assert resolve_advanced({"advanced": {"prefix": ""}})["prefix"] == ""
 
 
 def test_validate_name_rejects_a_catalog_separator():

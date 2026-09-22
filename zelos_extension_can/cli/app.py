@@ -18,6 +18,7 @@ from zelos_sdk.hooks.logging import TraceLoggingHandler
 from .. import ACTION_PREFIX
 from .. import actions as can_actions
 from ..codec import (
+    DEFAULT_PREFIX,
     LOG_SOURCE_NAME,
     CanCodec,
     bus_database_files,
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 #: still honoured per-bus (see `_prepare_bus_config`) so old configs keep their
 #: settings, but they are no longer offered in the schema.
 ADVANCED_DEFAULTS: dict = {
-    "prefix": "",
+    "prefix": DEFAULT_PREFIX,
     "log_raw_frames": True,
     "receive_own_messages": True,
     "emit_schemas_on_init": False,
