@@ -510,9 +510,8 @@
         "prefix": {
           "type": "string",
           "title": "Prefix",
-          "description": "Leading trace source every bus publishes under, so events read '<prefix>/<bus>/<message>'. Clear it to give each bus its own trace source with unprefixed events.",
-          "default": "CAN",
-          "ui:placeholder": "CAN",
+          "description": "Leading trace source every bus publishes under, so events read '<prefix>/<bus>/<message>' (e.g. CAN). Leave it empty to give each bus its own trace source with unprefixed events.",
+          "default": "",
           "ui:emptyValue": ""
         },
         "log_raw_frames": {
