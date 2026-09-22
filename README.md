@@ -73,7 +73,7 @@ One value each, applied to every bus.
 
 | Setting | What it does |
 |---|---|
-| **Prefix** | Leading trace source every bus publishes under (e.g. `CAN`; empty by default). |
+| **Prefix** | Leading trace source every bus publishes under (default `CAN`). |
 | **Log Raw CAN Frames** | Log undecoded frames alongside the decoded signals (default on). |
 | **Receive Own Messages** | Receive frames this host transmits. |
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
@@ -82,7 +82,7 @@ One value each, applied to every bus.
 
 ### Trace layout
 
-With a prefix, one source carries every bus. Every interface names
+With the default prefix, one source carries every bus. Every interface names
 events the same way; a conversion uses the input file's stem as its segment.
 
 | What | Prefix `CAN` | Prefix cleared |
@@ -92,8 +92,8 @@ events the same way; a conversion uses the input file's stem as its segment.
 | Extension logs | `CAN/log` | `can_log/log` |
 | Converted `capture.log` | `CAN/capture/0064_DUT_Status` | `capture/0064_DUT_Status` |
 
-With **Prefix** empty (the default) each bus (or converted file) is its own
-source with events unprefixed; set it in Advanced settings to share one.
+Clear **Prefix** in Advanced settings to keep the previous layout: one source
+per bus (or per converted file) with events unprefixed.
 
 ## Remote CAN over SSH (`ssh-socketcan`)
 
