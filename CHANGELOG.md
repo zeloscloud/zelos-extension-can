@@ -33,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   transmit rather than picking one.
 
 ### Changed
+- Requires Zelos App 26.0.8 or newer: older apps cannot render the config
+  form's Choose widget.
 - Default trace paths are `CAN/<bus>/...` — decoded signals, raw frames, and
   the extension's own logs all under one source.
 - The separate `<bus>_raw` source is gone; raw frames ride the bus's source.
