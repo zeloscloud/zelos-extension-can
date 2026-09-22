@@ -12,6 +12,18 @@
 
 ## Quick Start
 
+[![Install the CAN extension, auto-configure can0, start it and view frames](assets/howto/quickstart/quickstart.avif)](assets/howto/quickstart/quickstart.mp4)
+
+From the CLI, on the agent that has the CAN interface:
+
+```bash
+zelos extensions install zeloscloud/zelos-extension-can
+zelos extensions start zeloscloud.zelos-extension-can \
+  --config '{"buses": [{"interface": "zelos-socketcan", "channel": "can0"}]}'
+```
+
+In the app:
+
 1. **Install** the extension from the Zelos App
 2. **Configure** your CAN connection and add your database files (.dbc, .arxml, .kcd, or .sym)
 3. **Start** the extension to begin streaming data
