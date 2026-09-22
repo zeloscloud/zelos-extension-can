@@ -6,11 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
-- **Auto-configure** on the config form: one `zelos-socketcan` bus per SocketCAN
-  interface on the machine running the agent, hardware before `vcan`.
-- **A picker on a SocketCAN bus's Channel**, listing that machine's CAN
-  interfaces with their state and driver (`can0 (up, gs_usb)`). A name typed by
-  hand still works.
 - **A list of database files per bus**, applied in order: a later file wins a
   message an earlier one defines differently.
 - **Definitions of one frame id coexist**: two DBCs naming one id differently
