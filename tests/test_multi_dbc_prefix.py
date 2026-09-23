@@ -233,11 +233,12 @@ def test_create_codecs_rejects_an_illegal_bus_name(name):
         _create_codecs(config, TEST_DBC, resolve_advanced({}))
 
 
-def test_create_codecs_sanitizes_a_channel_derived_bus_name():
-    config = {"buses": [{"interface": "ssh-socketcan", "remote_host": "host", "ssh_user": "user"}]}
+def test_create_codecs_names_an_ssh_bus_after_its_remote_channel():
+    bus = {"interface": "ssh-socketcan", "remote_host": "host", "ssh_user": "user"}
+    config = {"buses": [bus, {**bus, "remote_channel": "vcan.1"}]}
     with patch("zelos_sdk.TraceSource"):
         pairs = _create_codecs(config, TEST_DBC, resolve_advanced({}))
-    assert [name for _, name in pairs] == ["user_host_can0"]
+    assert [name for _, name in pairs] == ["can0", "vcan_1"]
 
 
 # ── wire contract ────────────────────────────────────────────────────────────

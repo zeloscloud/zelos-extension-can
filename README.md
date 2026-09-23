@@ -52,7 +52,7 @@ which have no SocketCAN.
 | Setting | What it does |
 |---|---|
 | **Database Files (.dbc)** | Ordered list of CAN databases. Order is precedence: a later file wins a message an earlier one defines differently. Leave empty for a raw-frames-only bus. |
-| **Name** | Trace segment for this bus. Letters, digits, space, `_`, `-` only. Defaults to the sanitized channel. |
+| **Name** | Trace segment for this bus. Letters, digits, space, `_`, `-` only. Defaults to the sanitized channel (for `ssh-socketcan`, the remote channel). |
 | **Bitrate** | CAN bus bitrate (default 500000). |
 | **FD Mode** | Enable CAN-FD support. |
 
