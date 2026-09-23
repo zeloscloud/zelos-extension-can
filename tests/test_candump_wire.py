@@ -137,10 +137,14 @@ def test_parse_rtr_frame():
     f = parse_candump_line(b"(1.0) can0 100#R")
     assert f.is_remote is True
     assert f.data == b""
+    assert f.dlc == 0
     assert f.is_extended is False
 
 
-def test_parse_rtr_with_dlc_ignores_dlc():
+def test_parse_rtr_carries_its_dlc():
+    assert parse_candump_line(b"(1.0) can0 100#R8").dlc == 8
+    assert parse_candump_line(b"(1.0) can0 100#RF").dlc == 8  # len8_dlc raw DLC
+    assert parse_candump_line(b"(1.0) can0 100#R12") is None
     f = parse_candump_line(b"(1.0) can0 100#R8")
     assert f.is_remote is True
     assert f.data == b""
