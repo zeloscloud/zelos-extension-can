@@ -692,16 +692,16 @@ wheels = [
 
 [[package]]
 name = "zelos-can"
-version = "0.0.9"
+version = "0.0.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "zelos-sdk" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/17/235c8436772d066154f737284f40040eb27ddfa9205d3e7f5b8c1617f10b/zelos_can-0.0.9-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:6f5820f26e7f86e9429c6ce9af74eb62686ed8e315010a57c60b628a48c78a68", size = 1665506 },
-    { url = "https://files.pythonhosted.org/packages/69/0a/9f60c2cd8c22ab40793db3b93e64bf61bd5d479a1527d09d8bf56f2300d5/zelos_can-0.0.9-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:0c45126891cd0443f5585076fbfe8b5b85e8052dd13d986f7467620dcfc07ac0", size = 2282591 },
-    { url = "https://files.pythonhosted.org/packages/07/54/9d9b3dfa34cc4baa97496820f992ea5eaa2911dbd463581062ce373f826a/zelos_can-0.0.9-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:bfee29ef3900fab461e603af1ccdbd9f7c2a72ed1b851863d9d30db1ca992211", size = 2589418 },
-    { url = "https://files.pythonhosted.org/packages/2f/71/9c925a062ffe29f9db662a2ab5f33229dd6281b1dbb5be0514120f3fd1bb/zelos_can-0.0.9-cp310-abi3-win_amd64.whl", hash = "sha256:99bf590f583f47dd154e3440f2f86f13e14c7ccda74aa4160aeffaae5ee5df83", size = 1727693 },
+    { url = "https://files.pythonhosted.org/packages/70/87/45c25ba2c412fa0ad2b4edaf1f9e439b52b7664e0a42ccd817b64ad0f34c/zelos_can-0.0.10-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:54b578784e5f060a65a153e5c9bc518d7f2029f0558af00a397c71737d1c0136", size = 1666738 },
+    { url = "https://files.pythonhosted.org/packages/48/85/664fafa1c793625a2cc1ba4c0cca561d410177ceb44e56d86e9c7852d5b5/zelos_can-0.0.10-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:755caebd1870fa577369b7cca4b1e8c1d3d58a51aa0bbb77e4c6136368f29d8a", size = 2288845 },
+    { url = "https://files.pythonhosted.org/packages/0e/6b/c7f5e3691a80c81913236c8bf88e35cba3b106ff4117b85f36387344322b/zelos_can-0.0.10-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:76c166713253ccb7797ee0bb8e2324d49f6a41f8351e21f0f4ff52cc517447e9", size = 2590854 },
+    { url = "https://files.pythonhosted.org/packages/a7/8a/dd5b7daed51525887dd4e41442d617dec114e5b8795f331bed82225ad63c/zelos_can-0.0.10-cp310-abi3-win_amd64.whl", hash = "sha256:6cea9f3a7846de4b50c684fb453eafe0a85b693fa36fffc2ee25a71d630d2452", size = 1730927 },
 ]
 
 [package.optional-dependencies]
@@ -745,7 +745,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.2" },
     { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.3.0" },
     { name = "tqdm", marker = "extra == 'cli'", specifier = ">=4.0.0" },
-    { name = "zelos-can", extras = ["python-can"], specifier = ">=0.0.9" },
+    { name = "zelos-can", extras = ["python-can"], specifier = ">=0.0.10" },
     { name = "zelos-sdk", specifier = ">=0.0.12a1" },
 ]
 
