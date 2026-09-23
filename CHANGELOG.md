@@ -53,6 +53,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   coexist, and types every signal the way the cantools path does.
 
 ### Fixed
+- A bus's database file path may start with `~`, which expands to the home
+  directory on the agent's host.
 - The legacy singular `database_file` left a bare label under the DBC list in
   the app's config form. It is no longer declared; a config carrying one is
   still read and folded into the list.

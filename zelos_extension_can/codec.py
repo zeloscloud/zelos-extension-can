@@ -581,8 +581,11 @@ class CanCodec(can.Listener):
         self.demo_task: asyncio.Task | None = None
 
         # Load the DBC list. Order is precedence; zero files is a legal
-        # raw-only bus (nothing decodes, raw frames still land).
-        self.database_files: list[Path] = [Path(p) for p in (config.get("database_files") or [])]
+        # raw-only bus (nothing decodes, raw frames still land). `~` expands
+        # on the agent host.
+        self.database_files: list[Path] = [
+            Path(p).expanduser() for p in (config.get("database_files") or [])
+        ]
         for path in self.database_files:
             if not path.exists():
                 raise FileNotFoundError(f"CAN database file not found: {path}")

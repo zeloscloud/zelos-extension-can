@@ -1,5 +1,6 @@
 """Essential unit tests for CAN codec."""
 
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -510,6 +511,16 @@ class TestErrorHandling:
             patch("zelos_sdk.TraceSource"),
         ):
             CanCodec(config)
+
+    def test_expands_home_in_dbc_path(self, test_dbc_path, tmp_path, monkeypatch):
+        """`~` resolves to the agent host's home."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        shutil.copy(test_dbc_path, tmp_path / "bus.dbc")
+        config = {"interface": "virtual", "channel": "vcan0", "database_files": ["~/bus.dbc"]}
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(config)
+        assert codec.database_files == [tmp_path / "bus.dbc"]
 
     def test_handles_invalid_dbc_file(self, tmp_path):
         """Test proper error when DBC file is invalid."""
