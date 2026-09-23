@@ -18,17 +18,16 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface type. zelos-socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan is the python-can implementation. macOS/Windows: pcan/kvaser/vector. ssh-socketcan works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface type. socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan-py is the python-can implementation. macOS/Windows: pcan/kvaser/vector. ssh-socketcan works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
-              "zelos-socketcan",
-              "ssh-socketcan",
-              "demo",
-              "virtual",
               "socketcan",
+              "ssh-socketcan",
+              "socketcan-py",
               "pcan",
               "kvaser",
               "vector",
-              "other"
+              "other",
+              "demo"
             ]
           },
           "name": {
@@ -68,26 +67,8 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "virtual"
-                    ]
-                  },
-                  "channel": {
-                    "type": "string",
-                    "title": "Channel",
-                    "description": "Virtual CAN channel identifier (e.g. vcan0)",
-                    "default": "vcan0"
-                  }
-                },
-                "required": [
-                  "channel"
-                ]
-              },
-              {
-                "properties": {
-                  "interface": {
-                    "enum": [
                       "socketcan",
-                      "zelos-socketcan"
+                      "socketcan-py"
                     ]
                   },
                   "channel": {

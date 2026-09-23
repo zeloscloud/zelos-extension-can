@@ -506,6 +506,9 @@ class CanCodec(can.Listener):
             this codec registers is nested under `{bus_name}/`; when None the
             codec owns a source named after the bus and events are unprefixed.
         """
+        # `zelos-socketcan` is the pre-rename name of the native `socketcan` bus.
+        if config.get("interface") == "zelos-socketcan":
+            config["interface"] = "socketcan"
         self.config = config
         self.namespace = namespace
         self.bus_name = bus_name
@@ -513,14 +516,14 @@ class CanCodec(can.Listener):
         self.last_message_time = time.time()
         self.start_time = time.time()
 
-        # zelos-socketcan and ssh-socketcan both run the full recv -> DBC decode
+        # socketcan and ssh-socketcan both run the full recv -> DBC decode
         # -> trace pipeline in Rust (zelos_can.CanCodec): no python-can Notifier,
         # no cantools, and no per-frame Python on RX. self._native holds that
         # codec while running. TX actions still go through self.bus (a python-can
-        # compat bus for zelos-socketcan, or a CodecTxAdapter over the Rust codec
+        # compat bus for socketcan, or a CodecTxAdapter over the Rust codec
         # for ssh-socketcan) so the bus-based action layer below is reused as-is.
         #
-        #   - zelos-socketcan: Rust owns a real SocketCAN socket (Linux-only) and
+        #   - socketcan: Rust owns a real SocketCAN socket (Linux-only) and
         #     self-heals its recv loop internally.
         #   - ssh-socketcan: Rust decodes frames shuttled over ssh by a disposable
         #     SshTransport feeding a durable zelos_can.ExternalBus (any OS); the
@@ -528,7 +531,7 @@ class CanCodec(can.Listener):
         #
         # self._use_rust unifies the "Rust owns RX/decode/schema/metrics" seams so
         # the native path stays byte-identical while ssh shares them.
-        self._use_native = config.get("interface") == "zelos-socketcan"
+        self._use_native = config.get("interface") == "socketcan"
         self._use_ssh = config.get("interface") == "ssh-socketcan"
         self._use_rust = self._use_native or self._use_ssh
         self._native: Any = None
@@ -650,7 +653,7 @@ class CanCodec(can.Listener):
                 else zelos_sdk.TraceSource(source_name)
             )
 
-        # On the Rust paths (zelos-socketcan / ssh-socketcan) the Rust codec
+        # On the Rust paths (socketcan / ssh-socketcan) the Rust codec
         # owns the raw-frame schema and emit (driven by `raw_event_name`), so
         # don't register an event here.
         self.raw_event = (
@@ -689,7 +692,7 @@ class CanCodec(can.Listener):
                     ", ".join(sorted(keys)),
                 )
 
-        # On the Rust paths (zelos-socketcan / ssh-socketcan) the Rust codec
+        # On the Rust paths (socketcan / ssh-socketcan) the Rust codec
         # generates/emits schemas itself (gated by its own emit_schemas_on_init);
         # don't double-register here.
         if self.emit_schemas_on_init and not self._use_rust:
@@ -809,11 +812,11 @@ class CanCodec(can.Listener):
             f"channel={self.config['channel']}"
         )
 
-        if self.config["interface"] == "zelos-socketcan" and sys.platform != "linux":
+        if self._use_native and sys.platform != "linux":
             raise can.CanInterfaceNotImplementedError(
-                "The 'zelos-socketcan' interface is Linux-only (it wraps the Rust "
-                "zelos-can SocketCAN bus). Use 'socketcan' on Linux, or 'pcan'/"
-                "'kvaser'/'vector' on macOS/Windows."
+                "The 'socketcan' interface is Linux-only (it wraps the Rust "
+                "zelos-can SocketCAN bus). Use 'pcan'/'kvaser'/'vector' on "
+                "macOS/Windows, or 'ssh-socketcan' for a remote Linux device."
             )
 
         if self._use_native:
@@ -824,8 +827,10 @@ class CanCodec(can.Listener):
             self._start_ssh()
             return
 
+        # `socketcan-py` is python-can's own `socketcan`.
+        interface = self.config["interface"]
         bus_config = {
-            "interface": self.config["interface"],
+            "interface": "socketcan" if interface == "socketcan-py" else interface,
             "channel": self.config["channel"],
         }
 
@@ -866,7 +871,7 @@ class CanCodec(can.Listener):
                 time.sleep(1)
 
     def _start_native(self) -> None:
-        """Start the Rust-first pipeline for zelos-socketcan.
+        """Start the Rust-first pipeline for socketcan.
 
         zelos_can.CanCodec owns recv -> DBC decode -> trace entirely in Rust
         (no python-can Notifier, no cantools, no per-frame Python) and begins
@@ -896,7 +901,7 @@ class CanCodec(can.Listener):
             interface="zelos-socketcan", channel=self.config["channel"], fd=self.fd_mode
         )
         self.running = True
-        logger.info("zelos-socketcan native codec started on %s", self.config["channel"])
+        logger.info("native socketcan codec started on %s", self.config["channel"])
 
     def _start_ssh(self) -> None:
         """Start the Rust-first pipeline for ssh-socketcan.
@@ -1226,7 +1231,7 @@ class CanCodec(can.Listener):
         # loop and auto-reconnects internally. No python-can Notifier, no health
         # supervisor, no per-frame Python — just idle until stopped.
         if self._use_native:
-            logger.info("[%s] Starting CAN rx (native zelos-socketcan pipeline)", self.bus_name)
+            logger.info("[%s] Starting CAN rx (native socketcan pipeline)", self.bus_name)
             try:
                 while self.running:
                     await asyncio.sleep(1.0)
@@ -1742,11 +1747,11 @@ class CanCodec(can.Listener):
         # is canonical at the `extensions.list` bridge surface and the webapp
         # consumes it from there, not from this 1 Hz polled action.
         db_path = self._first_dbc()
-        # On the Rust paths (zelos-socketcan / ssh-socketcan) RX counters live in
+        # On the Rust paths (socketcan / ssh-socketcan) RX counters live in
         # the Rust codec. TX counters merge the Python-side self.metrics (one-shot
         # send failures via the bus/adapter) with the Rust codec's own tx counters
         # (a stalled ssh transport surfaces there, not in self.metrics). For the
-        # native zelos-socketcan path TX goes through a separate python-can compat
+        # native socketcan path TX goes through a separate python-can compat
         # bus so the Rust tx counters stay 0 — the reported values are unchanged.
         tx_errors = self.metrics.tx_errors
         tx_overflows = self.metrics.tx_overflows
