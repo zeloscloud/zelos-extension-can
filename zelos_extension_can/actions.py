@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any
 
 from zelos_sdk.actions import ActionsRegistry, action
 
+from .utils.file_utils import resolve_database_file
+
 if TYPE_CHECKING:
     from .codec import CanCodec
 
@@ -307,10 +309,7 @@ def convert_trace_file(
         # "input file not found" when the real problem is missing config.
         supplied = _as_paths(database_path)
         if supplied:
-            database_files = [p.expanduser().resolve() for p in supplied]
-            for database_file in database_files:
-                if not database_file.exists():
-                    raise FileNotFoundError(f"CAN database file not found: {database_file}")
+            database_files = [resolve_database_file(p).resolve() for p in supplied]
             logger.info("Using user-specified databases: %s", database_files)
         elif codec:
             # _get_codec raises ValueError on unknown codec — propagated
@@ -695,12 +694,7 @@ def convert(
         )
 
     supplied = _as_paths(database_file)
-    database_paths = [p.expanduser() for p in supplied] or [
-        Path(d).expanduser() for d in _configured_database_files()
-    ]
-    for database_path in database_paths:
-        if not database_path.is_file():
-            raise FileNotFoundError(f"Database file not found: {database_path}")
+    database_paths = [resolve_database_file(p) for p in supplied or _configured_database_files()]
 
     # Resolved, not just expanded. Two reasons: a relative path would otherwise
     # resolve against the extension's working directory rather than the caller's,

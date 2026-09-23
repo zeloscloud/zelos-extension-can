@@ -1,6 +1,7 @@
 """File utilities for handling data URLs and file conversions."""
 
 import base64
+import difflib
 import os
 from pathlib import Path
 
@@ -69,3 +70,34 @@ def data_url_to_file(data_url: str, output_path: str, detect_extension: bool = F
         f.write(file_bytes)
 
     return str(output_path_obj)
+
+
+# Formats cantools loads as a CAN database.
+DATABASE_SUFFIXES = {".dbc", ".arxml", ".kcd", ".sym"}
+
+
+def resolve_database_file(value: str | Path) -> Path:
+    """A DBC path on this host, `~` expanded; a missing file raises with nearby names.
+
+    Relative paths are rejected: the extension's working directory is its
+    install directory, which moves on every upgrade.
+    """
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        raise ValueError(
+            f"CAN database path must be absolute or start with ~: {value} "
+            "(paths are on the agent's host)"
+        )
+    if path.is_file():
+        return path
+    msg = f"CAN database file not found: {path}"
+    if not path.parent.is_dir():
+        raise FileNotFoundError(f"{msg} ({path.parent} does not exist)")
+    names = [
+        f.name
+        for f in path.parent.iterdir()
+        if f.is_file() and f.suffix.lower() in DATABASE_SUFFIXES
+    ]
+    if close := difflib.get_close_matches(path.name, names, n=3):
+        msg += f" (did you mean {', '.join(close)}?)"
+    raise FileNotFoundError(msg)

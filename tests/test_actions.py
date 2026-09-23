@@ -184,7 +184,7 @@ class TestStandaloneConvert:
 
     def test_missing_database_raises(self, tmp_path):
         src = self._log(tmp_path)
-        with pytest.raises(FileNotFoundError, match="Database file not found"):
+        with pytest.raises(FileNotFoundError, match="CAN database file not found"):
             actions.convert(input_file=str(src), database_file=str(tmp_path / "nope.dbc"))
 
     def test_existing_output_without_force_raises(self, tmp_path):

@@ -20,6 +20,7 @@ import cantools
 import zelos_sdk
 
 from .demo.demo import run_demo_ev_simulation
+from .utils.file_utils import resolve_database_file
 from .utils.schema_utils import cantools_signal_to_trace_metadata
 
 logger = logging.getLogger(__name__)
@@ -581,14 +582,10 @@ class CanCodec(can.Listener):
         self.demo_task: asyncio.Task | None = None
 
         # Load the DBC list. Order is precedence; zero files is a legal
-        # raw-only bus (nothing decodes, raw frames still land). `~` expands
-        # on the agent host.
+        # raw-only bus (nothing decodes, raw frames still land).
         self.database_files: list[Path] = [
-            Path(p).expanduser() for p in (config.get("database_files") or [])
+            resolve_database_file(p) for p in (config.get("database_files") or [])
         ]
-        for path in self.database_files:
-            if not path.exists():
-                raise FileNotFoundError(f"CAN database file not found: {path}")
 
         # Each file is loaded on its own (never `add_dbc_file`) so the merge
         # below owns precedence and reports what it did.
