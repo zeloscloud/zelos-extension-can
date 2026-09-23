@@ -22,10 +22,10 @@
             "enum": [
               "socketcan",
               "ssh-socketcan",
-              "socketcan-py",
               "pcan",
               "kvaser",
               "vector",
+              "socketcan-py",
               "other",
               "demo"
             ]

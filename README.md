@@ -45,7 +45,7 @@ which have no SocketCAN.
 | **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `socketcan-py` bus. You can still type a name. |
 
 ### Required Settings
-- **Interface**: Choose your CAN adapter type (socketcan, ssh-socketcan, socketcan-py, pcan, kvaser, vector, other, or demo). On Linux, `socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
+- **Interface**: Choose your CAN adapter type (socketcan, ssh-socketcan, pcan, kvaser, vector, socketcan-py, other, or demo). On Linux, `socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
 - **Channel**: Specify the CAN channel/device name
 
 ### Per-Bus Settings
