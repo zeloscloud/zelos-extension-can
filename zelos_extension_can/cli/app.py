@@ -187,16 +187,20 @@ def _create_codecs(
             # source name; either way it must already be a legal trace name.
             _validate_name(bus_name, "bus Name", (LOG_SOURCE_NAME,))
         else:
-            # No explicit name: derive from the channel. Channels can contain
-            # '.', '@', ':' (ssh-socketcan's "user@host:iface"), which are
-            # catalog PATH SEPARATORS in Zelos trace names and would break
-            # catalog / `latest` lookups.
-            bus_name = zelos_sdk.sanitize_name(
-                prepared_config.get("channel", f"bus{i}"), kind="source"
-            )
+            # No explicit name: derive from the channel, for ssh-socketcan the
+            # remote interface alone (not "user@host:iface"). Channels can
+            # contain '.', which is a catalog PATH SEPARATOR in Zelos trace
+            # names and would break catalog / `latest` lookups.
+            channel = prepared_config.get("channel", f"bus{i}")
+            if prepared_config.get("interface") == "ssh-socketcan":
+                channel = channel.rpartition(":")[2]
+            bus_name = zelos_sdk.sanitize_name(channel, kind="source")
 
         if bus_name in seen_names:
-            logger.error(f"Duplicate bus name '{bus_name}'. Each bus must have a unique name.")
+            logger.error(
+                f"Duplicate bus name '{bus_name}'. Each bus must have a unique name; "
+                "set Name on one of them."
+            )
             sys.exit(1)
         seen_names.add(bus_name)
 

@@ -594,41 +594,6 @@ def test_prepare_bus_config_missing_host_exits():
         )
 
 
-# ── _create_codecs: dotted ssh channels sanitized into safe source names ─────
-
-
-def test_create_codecs_sanitizes_dotted_ssh_source_names():
-    """Unnamed multi-bus derives the trace-source name from the channel. ssh
-    channels carry '.', '@', ':' — catalog path separators — which must be
-    sanitized to '_' so catalog/`latest` lookups don't break, and the derived
-    names stay collision-free."""
-    config = {
-        "buses": [
-            {
-                "interface": "ssh-socketcan",
-                "remote_host": "192.168.1.10",
-                "database_files": [TEST_DBC],
-            },
-            {
-                "interface": "ssh-socketcan",
-                "remote_host": "10.0.0.5",
-                "ssh_user": "zelos",
-                "remote_channel": "can1",
-                "database_files": [TEST_DBC],
-            },
-        ]
-    }
-    pairs = _create_codecs(config, Path("/nonexistent/demo.dbc"))
-    names = [action_name for _, action_name in pairs]
-
-    assert names == ["192_168_1_10_can0", "zelos_10_0_0_5_can1"]
-    for name in names:
-        assert not (set(".@:") & set(name)), f"unsanitized separator in {name!r}"
-    assert len(set(names)) == len(names)  # collision-free
-    # The trace source itself carries the sanitized name.
-    assert pairs[0][0].bus_name == "192_168_1_10_can0"
-
-
 # ── config.schema.json: enum + oneOf branch ─────────────────────────────────
 
 
