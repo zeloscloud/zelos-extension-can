@@ -35,7 +35,7 @@
             "type": "string",
             "title": "Channel Display Name",
             "description": "Label this channel appears under in the trace (its event-name segment). Letters, digits, space, '_' and '-' only. Defaults to Channel, sanitized.",
-            "ui:placeholder": "defaults to Channel"
+            "ui:placeholder": "defaults to channel"
           },
           "database_files": {
             "type": "array",
