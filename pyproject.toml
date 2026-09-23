@@ -30,9 +30,9 @@ dependencies = [
     # Rust-backed CAN codec. Registers the 'zelos-socketcan' python-can plugin
     # (Linux) and provides zelos_can.ExternalBus, which drives the cross-platform
     # 'ssh-socketcan' interface. Wheels cover all platforms, so there is no
-    # sys_platform marker. 0.0.7 is the first formal release carrying the
-    # cp1252 DBC fallback. Floor (not exact) pin.
-    "zelos-can[python-can]>=0.0.9",
+    # sys_platform marker. 0.0.10 carries DBC units on the Rust paths and
+    # ExternalBus.inject(dlc=). Floor (not exact) pin.
+    "zelos-can[python-can]>=0.0.10",
 ]
 
 [project.scripts]

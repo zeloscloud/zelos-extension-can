@@ -55,6 +55,8 @@ class ParsedFrame(NamedTuple):
     is_error: bool
     brs: bool
     esi: bool
+    # Set only on a remote frame, which requests a DLC but carries no data.
+    dlc: int | None = None
 
 
 def parse_ssh_channel(channel: str) -> tuple[str | None, str, str]:
@@ -118,7 +120,7 @@ def parse_candump_line(line: bytes) -> ParsedFrame | None:
       * payload ``#…`` (i.e. ``id##…``) → CAN FD; the first hex nibble after
         ``##`` is the flag field (BRS ``0x01``, ESI ``0x02``), the rest is data.
       * payload starting ``R`` → remote frame (RTR); data is empty and the
-        optional dlc suffix is ignored.
+        optional one-hex-digit suffix is the requested DLC (none → 0).
       * otherwise → classic data frame (hex payload).
 
     A timestamp of ``0000000000.000000`` becomes ``timestamp=None``: that is
@@ -184,8 +186,12 @@ def parse_candump_line(line: bytes) -> ParsedFrame | None:
                 esi=bool(flags & _FD_ESI),
             )
 
-        # Remote frame: 'R' optionally followed by a dlc we ignore.
+        # Remote frame: 'R', then the requested DLC as one hex digit unless 0.
+        # A raw DLC past 8 (len8_dlc) still means 8 bytes.
         if payload.startswith("R"):
+            dlc_hex = payload[1:]
+            if len(dlc_hex) > 1:
+                return None
             return ParsedFrame(
                 arb_id=arb,
                 data=b"",
@@ -196,6 +202,7 @@ def parse_candump_line(line: bytes) -> ParsedFrame | None:
                 is_error=is_error,
                 brs=False,
                 esi=False,
+                dlc=min(int(dlc_hex, 16), 8) if dlc_hex else 0,
             )
 
         # Classic data frame.

@@ -565,6 +565,7 @@ class SshTransport:
                         is_error_frame=frame.is_error,
                         bitrate_switch=frame.brs,
                         error_state_indicator=frame.esi,
+                        dlc=frame.dlc,
                     )
                 except RuntimeError:
                     return
