@@ -522,6 +522,23 @@ class TestErrorHandling:
             codec = CanCodec(config)
         assert codec.database_files == [tmp_path / "bus.dbc"]
 
+    def test_missing_dbc_suggests_a_close_name(self, tmp_path):
+        (tmp_path / "vehicle_full.dbc").touch()
+        config = {"interface": "virtual", "database_files": [str(tmp_path / "vehicle.dbc")]}
+        with (
+            pytest.raises(FileNotFoundError, match=r"did you mean vehicle_full\.dbc\?"),
+            patch("zelos_sdk.TraceSource"),
+        ):
+            CanCodec(config)
+
+    def test_relative_dbc_path_is_rejected(self):
+        config = {"interface": "virtual", "database_files": ["bus.dbc"]}
+        with (
+            pytest.raises(ValueError, match="must be absolute or start with ~"),
+            patch("zelos_sdk.TraceSource"),
+        ):
+            CanCodec(config)
+
     def test_handles_invalid_dbc_file(self, tmp_path):
         """Test proper error when DBC file is invalid."""
         bad_dbc = tmp_path / "bad.dbc"
