@@ -711,7 +711,7 @@ python-can = [
 
 [[package]]
 name = "zelos-extension-can"
-version = "0.1.15"
+version = "0.1.16"
 source = { editable = "." }
 dependencies = [
     { name = "cantools" },
