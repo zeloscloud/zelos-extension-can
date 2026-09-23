@@ -308,6 +308,16 @@ class TestConfigJsonMerging:
             CanCodec(mock_config).start()
             assert mock_bus.call_args.kwargs["interface"] == "socketcan"
 
+    def test_pcan_on_macos_drops_receive_own_messages(self, mock_config):
+        mock_config.update(interface="pcan", receive_own_messages=True)
+        with (
+            patch("zelos_sdk.TraceSource"),
+            patch("can.Bus") as mock_bus,
+            patch("zelos_extension_can.codec.sys.platform", "darwin"),
+        ):
+            CanCodec(mock_config).start()
+            assert "receive_own_messages" not in mock_bus.call_args.kwargs
+
     def test_config_json_empty_string_ignored(self, mock_config):
         """Test empty config_json is ignored."""
         mock_config["config_json"] = ""

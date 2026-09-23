@@ -856,6 +856,16 @@ class CanCodec(can.Listener):
                 logger.error("Failed to parse config_json: %s", e)
                 raise ValueError(f"Invalid config_json: {e}") from e
 
+        # PCAN's macOS library (PCBUSB) cannot echo TX frames, and python-can
+        # fails the whole init on it.
+        if bus_config["interface"] == "pcan" and sys.platform == "darwin":
+            if bus_config.pop("receive_own_messages", False):
+                logger.warning(
+                    "[%s] PCAN on macOS cannot receive its own messages; ignoring "
+                    "receive_own_messages, so transmitted frames are not traced",
+                    self.bus_name,
+                )
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
