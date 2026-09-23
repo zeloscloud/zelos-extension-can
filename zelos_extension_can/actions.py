@@ -525,7 +525,7 @@ def list_interfaces() -> dict[str, Any]:
 
 @action(
     "Auto-configure",
-    "One zelos-socketcan bus per SocketCAN interface on the machine running the "
+    "One socketcan bus per SocketCAN interface on the machine running the "
     "agent, for the config form's Auto-configure button. Review it, then save "
     "and start.",
     standalone=True,
@@ -545,7 +545,7 @@ def auto_config() -> dict[str, Any]:
                 "remote device, or a pcan/kvaser/vector bus."
             ),
         }
-    # zelos-socketcan, not socketcan: the Rust bus is the native local path.
+    # socketcan, not socketcan-py: the Rust bus is the native local path.
     # No `name`, so each bus is named after its channel. A down interface is
     # configured as it is, with no note: the button surfaces only an error
     # message, and the Channel picker already labels it `down`.
@@ -553,7 +553,7 @@ def auto_config() -> dict[str, Any]:
         "status": "success",
         "config": {
             "buses": [
-                {"interface": "zelos-socketcan", "channel": iface["name"], "database_files": []}
+                {"interface": "socketcan", "channel": iface["name"], "database_files": []}
                 for iface in interfaces
             ]
         },

@@ -19,7 +19,7 @@ From the CLI, on the agent that has the CAN interface:
 ```bash
 zelos extensions install zeloscloud/zelos-extension-can
 zelos extensions start zeloscloud.zelos-extension-can \
-  --config '{"buses": [{"interface": "zelos-socketcan", "channel": "can0"}]}'
+  --config '{"buses": [{"interface": "socketcan", "channel": "can0"}]}'
 ```
 
 In the app:
@@ -41,11 +41,11 @@ which have no SocketCAN.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One `zelos-socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`, a down interface included as it is. Review it, save, then start. Advanced settings are left as they are. |
-| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `zelos-socketcan` bus. You can still type a name. |
+| **Auto-configure** (button above the form) | One `socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`, a down interface included as it is. Review it, save, then start. Advanced settings are left as they are. |
+| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `socketcan-py` bus. You can still type a name. |
 
 ### Required Settings
-- **Interface**: Choose your CAN adapter type (zelos-socketcan, ssh-socketcan, socketcan, pcan, kvaser, vector, virtual, or demo). On Linux, `zelos-socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
+- **Interface**: Choose your CAN adapter type (socketcan, ssh-socketcan, socketcan-py, pcan, kvaser, vector, other, or demo). On Linux, `socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
 - **Channel**: Specify the CAN channel/device name
 
 ### Per-Bus Settings
@@ -101,7 +101,7 @@ Trace a remote edge device's SocketCAN bus over an SSH connection, using the
 edge's **own** `can-utils`. Nothing is installed on the edge, no local `vcan` is
 needed, and it runs from macOS, Linux, or Windows. Decode, tracing, metrics, and
 periodic transmit all run in the same high-throughput Rust pipeline as the local
-`zelos-socketcan` interface. Sent frames are echoed back by the edge's kernel
+`socketcan` interface. Sent frames are echoed back by the edge's kernel
 loopback, so every transmit is traced exactly once.
 
 ### Prerequisites on the edge

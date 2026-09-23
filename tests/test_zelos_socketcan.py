@@ -1,13 +1,13 @@
-"""Functional tests for the zelos-socketcan interface in the extension.
+"""Functional tests for the native socketcan interface in the extension.
 
 Two layers:
 
-  * Platform guard (always runs): selecting ``zelos-socketcan`` on a
+  * Platform guard (always runs): selecting ``socketcan`` on a
     non-Linux host must fail fast with a clear, actionable error rather than
     python-can's opaque "interface not found".
 
   * End-to-end over vcan (opt-in via ``ZELOS_CAN_TEST_SOCKETCAN=1``): a codec
-    configured with ``interface="zelos-socketcan"`` decodes received frames
+    configured with ``interface="socketcan"`` decodes received frames
     and transmits via the agent ``send_message`` / periodic actions, proving
     the Rust-backed bus is a drop-in for the extension's tracing + transmit
     paths.
@@ -33,10 +33,12 @@ WIRE_ID = 100  # DUT_Status (8 bytes, standard id) in tests/files/test.dbc
 # ── Platform guard (always runs) ────────────────────────────────────────────
 
 
+# `zelos-socketcan` is the legacy name, aliased to the native `socketcan`.
+@pytest.mark.parametrize("interface", ["socketcan", "zelos-socketcan"])
 @pytest.mark.parametrize("platform", ["darwin", "win32"])
-def test_zelos_socketcan_rejected_off_linux(platform):
+def test_zelos_socketcan_rejected_off_linux(platform, interface):
     config = {
-        "interface": "zelos-socketcan",
+        "interface": interface,
         "channel": "can0",
         "database_files": [TEST_DBC],
     }
@@ -76,7 +78,7 @@ IFACE = os.environ.get("ZELOS_CAN_TEST_IFACE", "vcan0")
 
 @pytest.fixture
 def zelos_codec():
-    """A started CanCodec on the zelos-socketcan interface.
+    """A started CanCodec on the native socketcan interface.
 
     The native path runs the full Rust pipeline (recv -> decode -> trace) and
     requires a real zelos_sdk.TraceSource, so this uses a live SDK source (no
@@ -84,7 +86,7 @@ def zelos_codec():
     bus_name isolates the trace source per test run.
     """
     config = {
-        "interface": "zelos-socketcan",
+        "interface": "socketcan",
         "channel": IFACE,
         "database_files": [TEST_DBC],
         "receive_own_messages": False,
@@ -124,7 +126,7 @@ def test_zelos_socketcan_decodes_received_frames(zelos_codec):
 
 @vcan_only
 def test_zelos_socketcan_send_raw_action(zelos_codec):
-    """The send_raw agent action transmits on the zelos-socketcan bus."""
+    """The send_raw agent action transmits on the native socketcan bus."""
     observer = can.Bus(interface="socketcan", channel=IFACE)
     try:
         result = zelos_codec.send_raw(f"0x{WIRE_ID:x}", "01 02 03 04 05 06 07 08")

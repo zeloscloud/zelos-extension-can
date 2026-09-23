@@ -302,6 +302,12 @@ class TestConfigJsonMerging:
             assert call_kwargs["interface"] == "virtual"
             assert call_kwargs["channel"] == "vcan0"
 
+    def test_socketcan_py_is_python_cans_socketcan(self, mock_config):
+        mock_config["interface"] = "socketcan-py"
+        with patch("zelos_sdk.TraceSource"), patch("can.Bus") as mock_bus:
+            CanCodec(mock_config).start()
+            assert mock_bus.call_args.kwargs["interface"] == "socketcan"
+
     def test_config_json_empty_string_ignored(self, mock_config):
         """Test empty config_json is ignored."""
         mock_config["config_json"] = ""

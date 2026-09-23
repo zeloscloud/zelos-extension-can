@@ -337,9 +337,9 @@ class TestConfigFormHooks:
             "status": "success",
             "config": {
                 "buses": [
-                    {"interface": "zelos-socketcan", "channel": "can0", "database_files": []},
-                    {"interface": "zelos-socketcan", "channel": "can1", "database_files": []},
-                    {"interface": "zelos-socketcan", "channel": "vcan0", "database_files": []},
+                    {"interface": "socketcan", "channel": "can0", "database_files": []},
+                    {"interface": "socketcan", "channel": "can1", "database_files": []},
+                    {"interface": "socketcan", "channel": "vcan0", "database_files": []},
                 ]
             },
         }
