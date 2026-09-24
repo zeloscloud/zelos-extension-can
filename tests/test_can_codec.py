@@ -367,6 +367,22 @@ class TestTimestampHandling:
             assert timestamp_ns is not None
             assert timestamp_ns == int(first_hw_ts * 1e9)
 
+    def test_timestamp_mode_auto_re_anchors_on_clock_step(self, mock_config):
+        """A remote clock stepping +120 s is re-anchored within two windows."""
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            out = []
+            for i in range(60):
+                now = 1000.0 + i
+                remote = now if i < 15 else now + 120.0
+                with patch("zelos_extension_can.codec.time.time", return_value=now):
+                    out.append(codec.get_timestamp(remote) / 1e9)
+            assert out[14] == 1014.0
+            assert out[15] == 1135.0  # misstamped until detected
+            assert codec.metrics.clock_steps == 1
+            assert codec.hw_timestamp_offset == -120.0
+            assert out[59] == 1059.0
+
     def test_timestamp_mode_absolute(self, mock_config):
         """Test absolute mode uses timestamps as-is."""
         mock_config["timestamp_mode"] = "absolute"

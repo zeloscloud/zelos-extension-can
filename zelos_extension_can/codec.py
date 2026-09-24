@@ -476,6 +476,15 @@ class Metrics:
     # Reserved for future BCM queue-overflow tracking; currently always 0.
     # The shape is kept stable so the app's wire contract doesn't churn.
     tx_overflows: int = 0
+    # AUTO timestamp mode: times the source clock stepped and the offset was
+    # re-anchored (python-can path; the Rust paths report theirs via zelos_can).
+    clock_steps: int = 0
+
+
+# Same constants as zelos_can's Rust handler: a residual (local receive time
+# minus resolved stamp) past the threshold for a whole window is a clock step.
+STEP_THRESHOLD_S = 1.0
+STEP_WINDOW_S = 10.0
 
 
 class TimestampMode(IntEnum):
@@ -560,6 +569,9 @@ class CanCodec(can.Listener):
         self.timestamp_mode = TimestampMode[timestamp_mode_str]
         self.hw_timestamp_offset: float | None = None  # Offset to convert HW time to wall-clock
         self.first_hw_timestamp: float | None = None  # First HW timestamp seen
+        self._clock_window_start: float | None = None
+        self._clock_window_min = 0.0
+        self._clock_window_max = 0.0
 
         # Cache frequently accessed config values as booleans to avoid repeated string hashing
         self.log_raw_frames = config.get("log_raw_frames", False)
@@ -733,14 +745,14 @@ class CanCodec(can.Listener):
         return f"{self._event_prefix}{self._key_of(msg)}"
 
     def get_timestamp(self, hw_timestamp: float | None) -> int | None:
-        """Get timestamp in nanoseconds for logging, handling boot-relative timestamps.
+        """Timestamp in ns for logging, or None to use system time.
 
-        This method handles different timestamp modes:
-        - AUTO: Detects boot-relative timestamps (starting near zero) and converts
-                them to wall-clock time by tracking the offset between hardware
-                time and system time at first message.
-        - ABSOLUTE: Uses hardware timestamp as-is (assumes it's already wall-clock time)
-        - IGNORE: Returns None to use system time
+        Mirrors ``zelos_can``'s Rust handler. AUTO anchors on the first frame
+        (a stamp within STEP_THRESHOLD_S of local time is used verbatim, anything
+        else is mapped by a constant offset) and watches every frame's residual
+        ``local_now - resolved``. Transport delay only adds to the residual, so
+        when a whole STEP_WINDOW_S window sits beyond the threshold the source
+        clock stepped, and the offset is re-anchored by the sample nearest zero.
 
         :param hw_timestamp: Hardware timestamp in seconds (can be None)
         :return: Timestamp in nanoseconds, or None to use system time
@@ -751,38 +763,46 @@ class CanCodec(can.Listener):
         if self.timestamp_mode == TimestampMode.ABSOLUTE:
             return int(hw_timestamp * 1e9)
 
-        # Auto mode: detect timestamp type and calculate offset if needed
+        now = time.time()
         if self.hw_timestamp_offset is None:
             self.first_hw_timestamp = hw_timestamp
-            wall_clock_time = time.time()
+            diff = now - hw_timestamp
+            self.hw_timestamp_offset = 0.0 if abs(diff) < STEP_THRESHOLD_S else diff
+            logger.info(
+                "[%s] Anchored timestamps (first=%.3f s, offset=%+.3f s)",
+                self.bus_name,
+                hw_timestamp,
+                self.hw_timestamp_offset,
+            )
 
-            # If timestamp is within 15 seconds of current time, treat as absolute wall-clock
-            # Otherwise treat as monotonic timestamp needing adjustment to current time
-            time_diff = abs(wall_clock_time - hw_timestamp)
+        resolved = hw_timestamp + self.hw_timestamp_offset
+        self._observe_residual(now - resolved, now)
+        return int(resolved * 1e9)
 
-            if time_diff < 15.0:
-                self.hw_timestamp_offset = 0.0
-                logger.info(
-                    "Detected absolute timestamps (first=%.3f s). Using hardware timestamps as-is.",
-                    hw_timestamp,
-                )
-            else:
-                # Hardware timestamp is monotonic but not aligned with wall-clock time
-                # This could be: boot-relative (dongle timer starts at 0), or
-                # fixed-offset (PCAN-style timer started at arbitrary past time)
-                # Either way, apply constant offset to map to current wall-clock time
-                self.hw_timestamp_offset = wall_clock_time - hw_timestamp
-                logger.info(
-                    "Detected monotonic timestamps with offset (first=%.3f s, offset=%.3f s). "
-                    "Mapping to wall-clock time while preserving relative timing.",
-                    hw_timestamp,
-                    self.hw_timestamp_offset,
-                )
-
-        # Apply offset to map monotonic timestamps to wall-clock time
-        # The offset is constant, so relative timing between messages is preserved
-        wall_clock_timestamp = hw_timestamp + self.hw_timestamp_offset
-        return int(wall_clock_timestamp * 1e9)
+    def _observe_residual(self, residual: float, now: float) -> None:
+        if self._clock_window_start is None:
+            self._clock_window_start = now
+            self._clock_window_min = self._clock_window_max = residual
+            return
+        self._clock_window_min = min(self._clock_window_min, residual)
+        self._clock_window_max = max(self._clock_window_max, residual)
+        if now - self._clock_window_start < STEP_WINDOW_S:
+            return
+        step = None
+        if self._clock_window_min > STEP_THRESHOLD_S:
+            step = self._clock_window_min
+        elif self._clock_window_max < -STEP_THRESHOLD_S:
+            step = self._clock_window_max
+        if step is not None:
+            self.hw_timestamp_offset += step
+            self.metrics.clock_steps += 1
+            logger.warning(
+                "[%s] Remote clock stepped %+.3f s; re-anchored timestamps (offset now %+.3f s)",
+                self.bus_name,
+                -step,
+                self.hw_timestamp_offset,
+            )
+        self._clock_window_start = None
 
     # Extension timestamp modes -> zelos_can.CanCodec modes. "absolute" maps to
     # "hardware" (kernel SO_TIMESTAMPNS, wall-clock on SocketCAN).
@@ -1712,10 +1732,19 @@ class CanCodec(can.Listener):
                 "messages_received": m.messages_received,
                 "messages_decoded": m.messages_decoded,
                 "unknown_messages": m.unknown_messages,
+                # zelos-can < 0.0.11 has no clock tracking.
+                "clock_steps": getattr(m, "clock_steps", 0),
+                "clock_offset_s": getattr(m, "clock_offset_s", 0.0),
             }
         if self._native_metrics is not None:
             return self._native_metrics
-        return {"messages_received": 0, "messages_decoded": 0, "unknown_messages": 0}
+        return {
+            "messages_received": 0,
+            "messages_decoded": 0,
+            "unknown_messages": 0,
+            "clock_steps": 0,
+            "clock_offset_s": 0.0,
+        }
 
     def _native_tx_counts(self) -> dict[str, int]:
         """TX counters for the Rust path, from the live codec or the stop-time
@@ -1779,6 +1808,8 @@ class CanCodec(can.Listener):
                 "messages_received": self.metrics.messages_received,
                 "messages_decoded": self.metrics.messages_decoded,
                 "unknown_messages": self.metrics.unknown_messages,
+                "clock_steps": self.metrics.clock_steps,
+                "clock_offset_s": self.hw_timestamp_offset or 0.0,
             }
         return {
             "captured_at_unix_ms": int(time.time() * 1000),

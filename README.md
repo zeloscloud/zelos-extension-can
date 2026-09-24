@@ -149,8 +149,12 @@ loopback, so every transmit is traced exactly once.
   adapter) reconnect automatically with backoff; decoded state and any armed
   periodic transmissions are preserved across the reconnect.
 - Timestamps in `auto`/`absolute` mode come from the **edge's** clock (its
-  adapter's, with **Hardware timestamps** on) — keep the edge's time in sync
-  (NTP) if absolute timestamps matter.
+  adapter's, with **Hardware timestamps** on). `auto` follows that clock for
+  relative timing but re-anchors to this machine's time whenever the two
+  disagree by more than 1 s for 10 s straight, so an edge whose clock steps
+  (NTP sync, RTC-less boot) is corrected within ~20 s; each re-anchor is
+  logged and counted as `clock_steps` in the bus metrics. `absolute` never
+  corrects: keep the edge's time in sync (NTP) if you use it.
 
 ## Actions
 
