@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import zelos_sdk
 
-from zelos_extension_can.codec import CanCodec, TimestampMode
+from zelos_extension_can.codec import CanCodec, ClockState, TimestampMode
 from zelos_extension_can.utils.schema_utils import cantools_signal_to_trace_type
 
 
@@ -143,15 +143,19 @@ class TestCanCodecInitialization:
             assert codec.timestamp_mode == TimestampMode.AUTO
             assert isinstance(codec.timestamp_mode, TimestampMode)
 
-        mock_config["timestamp_mode"] = "absolute"
+        mock_config["timestamp_mode"] = "interface"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            assert codec.timestamp_mode == TimestampMode.ABSOLUTE
+            assert codec.timestamp_mode == TimestampMode.INTERFACE
+
+        mock_config["timestamp_mode"] = "host"
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            assert codec.timestamp_mode == TimestampMode.HOST
 
         mock_config["timestamp_mode"] = "ignore"
-        with patch("zelos_sdk.TraceSource"):
-            codec = CanCodec(mock_config)
-            assert codec.timestamp_mode == TimestampMode.IGNORE
+        with patch("zelos_sdk.TraceSource"), pytest.raises(ValueError, match="timestamp_mode"):
+            CanCodec(mock_config)
 
     def test_inherits_can_listener(self, codec):
         """Test codec inherits from can.Listener for direct callbacks."""
@@ -332,91 +336,87 @@ class TestConfigJsonMerging:
 
 
 class TestTimestampHandling:
-    """Test timestamp handling modes."""
+    """Timestamp modes; the auto state machine is drawn in docs/timestamps.md."""
 
-    def test_timestamp_mode_auto_boot_relative(self, mock_config):
-        """Test auto mode detects boot-relative timestamps."""
+    @staticmethod
+    def _run(codec, secs, remote):
+        """One frame per second with `remote(now)` stamps; resolved seconds."""
+        out = []
+        for i in range(secs):
+            now = 1000.0 + i
+            with patch("zelos_extension_can.codec.time.time", return_value=now):
+                ns = codec.get_timestamp(remote(now))
+            out.append(None if ns is None else ns / 1e9)
+        return out
+
+    def test_auto_in_sync_is_interface(self, mock_config):
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
+            out = self._run(codec, 30, lambda t: t + 0.2)
+            assert codec.clock_state == ClockState.INTERFACE
+            assert out[0] == 1000.2
+            assert codec.metrics.clock_steps == 0
 
-            # First timestamp is small (< 1 hour) - should be detected as boot-relative
-            first_hw_ts = 15.5  # 15.5 seconds since boot
-            timestamp_ns = codec.get_timestamp(first_hw_ts)
-
-            assert codec.hw_timestamp_offset is not None
-            assert codec.hw_timestamp_offset > 0
-            assert timestamp_ns is not None
-            # Result should be close to current time
-            import time
-
-            expected_ns = time.time() * 1e9
-            assert abs(timestamp_ns - expected_ns) < 1e9  # Within 1 second
-
-    def test_timestamp_mode_auto_absolute(self, mock_config):
-        """Test auto mode detects absolute wall-clock timestamps."""
+    def test_auto_boot_relative_is_relative(self, mock_config):
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
+            out = self._run(codec, 3, lambda t: t - 990.0)  # stamps 10, 11, 12
+            assert codec.clock_state == ClockState.RELATIVE
+            assert codec.hw_timestamp_offset == 990.0
+            assert out == [1000.0, 1001.0, 1002.0]
 
-            # First timestamp is large (> 1 hour) - should be detected as absolute
-            import time
+    def test_auto_no_stamp_is_host(self, mock_config):
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            assert codec.get_timestamp(None) is None
+            assert codec.clock_state == ClockState.HOST
+            assert codec.get_timestamp(15.5) is None  # terminal
 
-            first_hw_ts = time.time()  # Current wall-clock time
-            timestamp_ns = codec.get_timestamp(first_hw_ts)
-
+    def test_auto_step_forward_then_back(self, mock_config):
+        """In sync 15 s, +120 s for 40 s, back in sync: two re-anchors, ends interface."""
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            out = self._run(codec, 80, lambda t: t + 120.0 if 1015.0 <= t < 1055.0 else t)
+            assert out[15] == 1135.0  # misstamped until detected
+            assert out[40] == 1040.0
+            assert out[79] == 1079.0
+            assert codec.metrics.clock_steps == 2
+            assert codec.clock_state == ClockState.INTERFACE
             assert codec.hw_timestamp_offset == 0.0
-            assert timestamp_ns is not None
-            assert timestamp_ns == int(first_hw_ts * 1e9)
 
-    def test_timestamp_mode_absolute(self, mock_config):
-        """Test absolute mode uses timestamps as-is."""
-        mock_config["timestamp_mode"] = "absolute"
+    def test_auto_transient_backlog_does_not_re_anchor(self, mock_config):
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
+            for i in range(60):
+                stamp = 1000.0 + i
+                delay = 5.0 if 20 <= i < 25 else 0.0
+                with patch("zelos_extension_can.codec.time.time", return_value=stamp + delay):
+                    codec.get_timestamp(stamp)
+            assert codec.metrics.clock_steps == 0
+            assert codec.clock_state == ClockState.INTERFACE
 
-            # Small timestamp - should still use as-is
-            hw_ts = 15.5
-            timestamp_ns = codec.get_timestamp(hw_ts)
-
-            assert timestamp_ns == int(hw_ts * 1e9)
-            assert codec.hw_timestamp_offset is None  # Not set in absolute mode
-
-    def test_timestamp_mode_ignore(self, mock_config):
-        """Test ignore mode returns None to use system time."""
-        mock_config["timestamp_mode"] = "ignore"
+    def test_interface_mode_is_verbatim(self, mock_config):
+        mock_config["timestamp_mode"] = "interface"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
+            assert codec.get_timestamp(15.5) == int(15.5 * 1e9)
+            assert codec.get_timestamp(None) is None
 
-            hw_ts = 15.5
-            timestamp_ns = codec.get_timestamp(hw_ts)
-
-            assert timestamp_ns is None
-
-    def test_timestamp_mode_none_hw_timestamp(self, mock_config):
-        """Test handling of None hardware timestamp."""
+    def test_relative_mode_never_re_anchors(self, mock_config):
+        mock_config["timestamp_mode"] = "relative"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
+            out = self._run(codec, 60, lambda t: t + 120.0 if t >= 1015.0 else t)
+            assert codec.clock_state == ClockState.RELATIVE
+            assert out[0] == 1000.0
+            assert out[59] == 1179.0  # step carried, by design
+            assert codec.metrics.clock_steps == 0
 
-            timestamp_ns = codec.get_timestamp(None)
-            assert timestamp_ns is None
-
-    def test_timestamp_mode_auto_consistent_offset(self, mock_config):
-        """Test auto mode applies consistent offset to subsequent timestamps."""
+    def test_host_mode_returns_none(self, mock_config):
+        mock_config["timestamp_mode"] = "host"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-
-            # First timestamp establishes offset
-            first_hw_ts = 10.0
-            timestamp_ns1 = codec.get_timestamp(first_hw_ts)
-            offset = codec.hw_timestamp_offset
-
-            # Second timestamp should use same offset
-            second_hw_ts = 20.0
-            timestamp_ns2 = codec.get_timestamp(second_hw_ts)
-
-            # Verify offset is preserved
-            assert codec.hw_timestamp_offset == offset
-            # Verify the time difference is preserved
-            assert (timestamp_ns2 - timestamp_ns1) == int((second_hw_ts - first_hw_ts) * 1e9)
+            assert codec.get_timestamp(15.5) is None
 
     def test_message_handling_with_boot_relative_timestamps(self, mock_config):
         """Test full message handling flow with boot-relative timestamps."""
@@ -437,9 +437,8 @@ class TestTimestampHandling:
             codec._handle_message(msg)
 
             # Verify timestamp was processed correctly
-            assert codec.hw_timestamp_offset is not None
+            assert codec.clock_state == ClockState.RELATIVE
             assert codec.hw_timestamp_offset > 0
-            assert codec.first_hw_timestamp == 15.5
 
             # Create second message with later timestamp
             msg2 = can.Message(
@@ -452,8 +451,6 @@ class TestTimestampHandling:
             # Handle second message
             codec._handle_message(msg2)
 
-            # Verify offset remained the same
-            assert codec.first_hw_timestamp == 15.5  # Should not change
             # Offset should be consistent
             import time
 
@@ -462,7 +459,7 @@ class TestTimestampHandling:
 
     def test_message_handling_with_absolute_timestamps(self, mock_config):
         """Test full message handling flow with absolute wall-clock timestamps."""
-        mock_config["timestamp_mode"] = "absolute"
+        mock_config["timestamp_mode"] = "interface"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
 
@@ -483,7 +480,7 @@ class TestTimestampHandling:
             codec._handle_message(msg)
 
             # In absolute mode, offset should not be set
-            assert codec.hw_timestamp_offset is None
+            assert codec.hw_timestamp_offset == 0.0
 
     def test_message_handling_preserves_relative_timing(self, mock_config):
         """Test that relative timing between messages is preserved."""

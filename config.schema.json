@@ -527,11 +527,24 @@
         "timestamp_mode": {
           "type": "string",
           "title": "Timestamp Mode",
-          "description": "How to treat the timestamp the interface reports: 'auto' trusts it when it is within ~15s of local time, otherwise maps monotonic stamps onto local wall-clock; 'absolute' uses it as-is; 'ignore' uses the local receive time. For ssh-socketcan the stamp comes from the REMOTE clock, so a skewed edge NTP/RTC will shift trace timestamps.",
-          "enum": [
-            "auto",
-            "absolute",
-            "ignore"
+          "description": "Which clock becomes the trace time. Host: when this machine received the frame. Interface: the interface's own stamp, unchecked. Relative: the interface's timing, offset to this machine's clock once at the first frame. Auto (default) picks one of those from the first frame and re-anchors when the interface clock steps (more than 1 s off for 10 s straight; corrected within ~20 s and logged). For ssh-socketcan the interface stamp is the edge's clock. See docs/timestamps.md.",
+          "oneOf": [
+            {
+              "const": "auto",
+              "title": "Auto: interface timing, anchored to this machine, follows clock steps"
+            },
+            {
+              "const": "interface",
+              "title": "Interface clock, as reported"
+            },
+            {
+              "const": "relative",
+              "title": "Interface timing, offset to this machine once at start"
+            },
+            {
+              "const": "host",
+              "title": "Host receive time"
+            }
           ],
           "default": "auto"
         },

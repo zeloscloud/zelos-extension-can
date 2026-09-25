@@ -82,7 +82,7 @@ async def main():
         "database_file": str(demo_dbc),
         "log_raw_frames": False,  # Set True to see raw CAN frames
         "emit_schemas_on_init": True,  # Generate all schemas at startup
-        "timestamp_mode": "auto",  # Auto-detect timestamp format
+        "timestamp_mode": "auto",  # Pick interface / relative / host from evidence
         "fd_mode": False,  # Set True for CAN-FD
     }
 

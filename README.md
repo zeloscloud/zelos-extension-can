@@ -77,7 +77,7 @@ One value each, applied to every bus.
 | **Log Raw CAN Frames** | Log undecoded frames alongside the decoded signals (default on). |
 | **Receive Own Messages** | Receive frames this host transmits. |
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
-| **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
+| **Timestamp Mode** | Which clock becomes the trace time: `auto` (default), `interface`, `relative`, `host`. See [docs/timestamps.md](docs/timestamps.md). |
 | **Log Level** | Logging verbosity for all buses. |
 
 ### Trace layout
@@ -148,9 +148,12 @@ loopback, so every transmit is traced exactly once.
   went away after a working session — a rebooting edge, a re-enumerating
   adapter) reconnect automatically with backoff; decoded state and any armed
   periodic transmissions are preserved across the reconnect.
-- Timestamps in `auto`/`absolute` mode come from the **edge's** clock (its
-  adapter's, with **Hardware timestamps** on) — keep the edge's time in sync
-  (NTP) if absolute timestamps matter.
+- The interface stamp on an ssh bus is the **edge's** clock (its adapter's
+  with **Hardware timestamps** on, else its kernel's). `auto` keeps that
+  timing but re-anchors to this machine whenever the two disagree by more
+  than 1 s for 10 s straight, so an edge whose clock steps (NTP sync,
+  RTC-less boot) is corrected within ~20 s and logged. `interface` and
+  `relative` never correct. Details and examples: [docs/timestamps.md](docs/timestamps.md).
 
 ## Actions
 

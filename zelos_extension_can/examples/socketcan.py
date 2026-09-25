@@ -41,7 +41,7 @@ async def main():
         "database_file": str(demo_dbc),
         "log_raw_frames": False,  # Set True to see raw CAN frames
         "emit_schemas_on_init": False,  # Lazy schema generation
-        "timestamp_mode": "ignore",  # Use system time for trace events
+        "timestamp_mode": "host",  # Stamp frames at receive time
     }
 
     logger.info("=" * 80)
