@@ -159,13 +159,13 @@ def test_prepare_bus_config_keeps_a_legacy_per_bus_override():
             "interface": "socketcan",
             "channel": "can0",
             "log_raw_frames": False,
-            "timestamp_mode": "absolute",
+            "timestamp_mode": "interface",
         },
         TEST_DBC,
         advanced,
     )
     assert prepared["log_raw_frames"] is False
-    assert prepared["timestamp_mode"] == "absolute"
+    assert prepared["timestamp_mode"] == "interface"
 
 
 def test_schema_is_valid_and_carries_the_per_bus_block():

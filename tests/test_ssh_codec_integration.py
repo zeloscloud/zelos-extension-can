@@ -528,6 +528,7 @@ def test_stop_tears_down_transport_and_snapshots(make_ssh_codec):
         "unknown_messages",
         "clock_steps",
         "clock_offset_s",
+        "timestamp_state",
     }
 
 

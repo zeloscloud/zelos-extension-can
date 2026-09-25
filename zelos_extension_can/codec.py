@@ -476,23 +476,42 @@ class Metrics:
     # Reserved for future BCM queue-overflow tracking; currently always 0.
     # The shape is kept stable so the app's wire contract doesn't churn.
     tx_overflows: int = 0
-    # AUTO timestamp mode: times the source clock stepped and the offset was
+    # auto timestamp mode: times the interface clock stepped and the offset was
     # re-anchored (python-can path; the Rust paths report theirs via zelos_can).
     clock_steps: int = 0
 
 
-# Same constants as zelos_can's Rust handler: a residual (local receive time
+# Same constants as zelos_can's Rust handler: a residual (host receive time
 # minus resolved stamp) past the threshold for a whole window is a clock step.
 STEP_THRESHOLD_S = 1.0
 STEP_WINDOW_S = 10.0
 
 
 class TimestampMode(IntEnum):
-    """Timestamp handling modes for efficient comparison."""
+    """How an interface stamp becomes the trace time (see docs/timestamps.md)."""
 
-    IGNORE = 0
-    ABSOLUTE = 1
-    AUTO = 2
+    HOST = 0
+    INTERFACE = 1
+    RELATIVE = 2
+    AUTO = 3
+
+    @classmethod
+    def parse(cls, value: str) -> "TimestampMode":
+        try:
+            return cls[value.upper()]
+        except KeyError:
+            raise ValueError(
+                f"invalid timestamp_mode '{value}' (expected auto | interface | relative | host)"
+            ) from None
+
+
+class ClockState(IntEnum):
+    """Which clock the trace time currently comes from."""
+
+    START = 0
+    HOST = 1
+    INTERFACE = 2
+    RELATIVE = 3
 
 
 class CanCodec(can.Listener):
@@ -565,10 +584,12 @@ class CanCodec(can.Listener):
         self._ssh_tx_errors_retired = 0
 
         # Timestamp handling - use enum for fast comparison
-        timestamp_mode_str = config.get("timestamp_mode", "auto").upper()
-        self.timestamp_mode = TimestampMode[timestamp_mode_str]
-        self.hw_timestamp_offset: float | None = None  # Offset to convert HW time to wall-clock
-        self.first_hw_timestamp: float | None = None  # First HW timestamp seen
+        self.timestamp_mode = TimestampMode.parse(config.get("timestamp_mode", "auto"))
+        self.clock_state = {
+            TimestampMode.HOST: ClockState.HOST,
+            TimestampMode.INTERFACE: ClockState.INTERFACE,
+        }.get(self.timestamp_mode, ClockState.START)
+        self.hw_timestamp_offset = 0.0  # Seconds added to interface stamps
         self._clock_window_start: float | None = None
         self._clock_window_min = 0.0
         self._clock_window_max = 0.0
@@ -745,36 +766,43 @@ class CanCodec(can.Listener):
         return f"{self._event_prefix}{self._key_of(msg)}"
 
     def get_timestamp(self, hw_timestamp: float | None) -> int | None:
-        """Timestamp in ns for logging, or None to use system time.
+        """Trace time in ns for logging, or None for host receive time.
 
-        Mirrors ``zelos_can``'s Rust handler. AUTO anchors on the first frame
-        (a stamp within STEP_THRESHOLD_S of local time is used verbatim, anything
-        else is mapped by a constant offset) and watches every frame's residual
-        ``local_now - resolved``. Transport delay only adds to the residual, so
-        when a whole STEP_WINDOW_S window sits beyond the threshold the source
-        clock stepped, and the offset is re-anchored by the sample nearest zero.
-
-        :param hw_timestamp: Hardware timestamp in seconds (can be None)
-        :return: Timestamp in nanoseconds, or None to use system time
+        Mirrors ``zelos_can``'s Rust handler; the state machine is drawn in
+        docs/timestamps.md. Explicit modes are fixed; ``auto`` watches every
+        frame's residual (host receive time minus resolved stamp) and, when a
+        whole STEP_WINDOW_S window sits beyond STEP_THRESHOLD_S, re-anchors by
+        the sample nearest zero. Transport delay only adds to the residual, so
+        a burst that drains inside the window never qualifies.
         """
-        if hw_timestamp is None or self.timestamp_mode == TimestampMode.IGNORE:
+        mode = self.timestamp_mode
+        if mode == TimestampMode.HOST or hw_timestamp is None:
+            if mode == TimestampMode.AUTO and self.clock_state == ClockState.START:
+                self._transition(ClockState.HOST, "no interface stamp")
             return None
-
-        if self.timestamp_mode == TimestampMode.ABSOLUTE:
+        if mode == TimestampMode.INTERFACE:
             return int(hw_timestamp * 1e9)
 
         now = time.time()
-        if self.hw_timestamp_offset is None:
-            self.first_hw_timestamp = hw_timestamp
-            diff = now - hw_timestamp
-            self.hw_timestamp_offset = 0.0 if abs(diff) < STEP_THRESHOLD_S else diff
-            logger.info(
-                "[%s] Anchored timestamps (first=%.3f s, offset=%+.3f s)",
-                self.bus_name,
-                hw_timestamp,
-                self.hw_timestamp_offset,
-            )
+        if mode == TimestampMode.RELATIVE:
+            if self.clock_state == ClockState.START:
+                self.hw_timestamp_offset = now - hw_timestamp
+                self.clock_state = ClockState.RELATIVE
+                logger.info(
+                    "[%s] relative: offset %+.3f s", self.bus_name, self.hw_timestamp_offset
+                )
+            return int((hw_timestamp + self.hw_timestamp_offset) * 1e9)
 
+        # auto
+        if self.clock_state == ClockState.HOST:
+            return None
+        if self.clock_state == ClockState.START:
+            diff = now - hw_timestamp
+            if abs(diff) < STEP_THRESHOLD_S:
+                self._transition(ClockState.INTERFACE, "stamp within threshold of host")
+            else:
+                self.hw_timestamp_offset = diff
+                self._transition(ClockState.RELATIVE, "stamp beyond threshold of host")
         resolved = hw_timestamp + self.hw_timestamp_offset
         self._observe_residual(now - resolved, now)
         return int(resolved * 1e9)
@@ -788,25 +816,35 @@ class CanCodec(can.Listener):
         self._clock_window_max = max(self._clock_window_max, residual)
         if now - self._clock_window_start < STEP_WINDOW_S:
             return
-        step = None
-        if self._clock_window_min > STEP_THRESHOLD_S:
-            step = self._clock_window_min
-        elif self._clock_window_max < -STEP_THRESHOLD_S:
-            step = self._clock_window_max
-        if step is not None:
-            self.hw_timestamp_offset += step
-            self.metrics.clock_steps += 1
-            logger.warning(
-                "[%s] Remote clock stepped %+.3f s; re-anchored timestamps (offset now %+.3f s)",
-                self.bus_name,
-                -step,
-                self.hw_timestamp_offset,
-            )
         self._clock_window_start = None
+        # Whole window beyond the threshold on one side is a step. Delay only
+        # ever adds to the residual, so the window minimum is the sample with
+        # the least delay in either direction, and it is the step.
+        if not (
+            self._clock_window_min > STEP_THRESHOLD_S or self._clock_window_max < -STEP_THRESHOLD_S
+        ):
+            return
+        self.hw_timestamp_offset += self._clock_window_min
+        self.metrics.clock_steps += 1
+        if abs(self.hw_timestamp_offset) < STEP_THRESHOLD_S:
+            self.hw_timestamp_offset = 0.0
+            self._transition(ClockState.INTERFACE, "re-anchored within threshold")
+        else:
+            self._transition(ClockState.RELATIVE, "re-anchored")
 
-    # Extension timestamp modes -> zelos_can.CanCodec modes. "absolute" maps to
-    # "hardware" (kernel SO_TIMESTAMPNS, wall-clock on SocketCAN).
-    _NATIVE_TIMESTAMP_MODE = {"AUTO": "auto", "ABSOLUTE": "hardware", "IGNORE": "ignore"}
+    def _transition(self, to: ClockState, why: str) -> None:
+        frm, self.clock_state = self.clock_state, to
+        log = (
+            logger.warning if self.metrics.clock_steps and frm != ClockState.START else logger.info
+        )
+        log(
+            "[%s] auto: %s -> %s (%s), offset %+.3f s",
+            self.bus_name,
+            frm.name.lower(),
+            to.name.lower(),
+            why,
+            self.hw_timestamp_offset,
+        )
 
     def _native_dbc_kwargs(self) -> dict[str, Any]:
         """DBC + trace-source kwargs shared by the two Rust codec paths.
@@ -917,7 +955,7 @@ class CanCodec(can.Listener):
             "channel": self.config["channel"],
             "log_raw_frames": self.log_raw_frames,
             "emit_schemas_on_init": self.emit_schemas_on_init,
-            "timestamp_mode": self._NATIVE_TIMESTAMP_MODE.get(self.timestamp_mode.name, "auto"),
+            "timestamp_mode": self.timestamp_mode.name.lower(),
             "fd": self.fd_mode,
         }
         if self.config.get("rcvbuf_size") is not None:
@@ -963,7 +1001,7 @@ class CanCodec(can.Listener):
             **self._native_dbc_kwargs(),
             log_raw_frames=self.log_raw_frames,
             emit_schemas_on_init=self.emit_schemas_on_init,
-            timestamp_mode=self._NATIVE_TIMESTAMP_MODE.get(self.timestamp_mode.name, "auto"),
+            timestamp_mode=self.timestamp_mode.name.lower(),
             fd=self.fd_mode,
             bus=self._ebus,
         )
@@ -1735,6 +1773,7 @@ class CanCodec(can.Listener):
                 # zelos-can < 0.0.11 has no clock tracking.
                 "clock_steps": getattr(m, "clock_steps", 0),
                 "clock_offset_s": getattr(m, "clock_offset_s", 0.0),
+                "timestamp_state": getattr(m, "timestamp_state", "start"),
             }
         if self._native_metrics is not None:
             return self._native_metrics
@@ -1744,6 +1783,7 @@ class CanCodec(can.Listener):
             "unknown_messages": 0,
             "clock_steps": 0,
             "clock_offset_s": 0.0,
+            "timestamp_state": "start",
         }
 
     def _native_tx_counts(self) -> dict[str, int]:
@@ -1809,7 +1849,8 @@ class CanCodec(can.Listener):
                 "messages_decoded": self.metrics.messages_decoded,
                 "unknown_messages": self.metrics.unknown_messages,
                 "clock_steps": self.metrics.clock_steps,
-                "clock_offset_s": self.hw_timestamp_offset or 0.0,
+                "clock_offset_s": self.hw_timestamp_offset,
+                "timestamp_state": self.clock_state.name.lower(),
             }
         return {
             "captured_at_unix_ms": int(time.time() * 1000),
