@@ -339,15 +339,19 @@ class TestTimestampHandling:
     """Timestamp modes; the auto state machine is drawn in docs/timestamps.md."""
 
     @staticmethod
-    def _run(codec, secs, remote):
-        """One frame per second with `remote(now)` stamps; resolved seconds."""
+    def _run(codec, secs, remote, delay=lambda t: 0.0):
+        """One frame per second stamped `remote(now)`, arriving `delay(now)` later."""
         out = []
         for i in range(secs):
             now = 1000.0 + i
-            with patch("zelos_extension_can.codec.time.time", return_value=now):
+            with patch("zelos_extension_can.codec.time.time", return_value=now + delay(now)):
                 ns = codec.get_timestamp(remote(now))
             out.append(None if ns is None else ns / 1e9)
         return out
+
+    @staticmethod
+    def _corrected_at(out, start):
+        return next(i for i in range(start, len(out)) if abs(out[i] - (1000.0 + i)) < 1.0)
 
     def test_auto_in_sync_is_interface(self, mock_config):
         with patch("zelos_sdk.TraceSource"):
@@ -373,27 +377,43 @@ class TestTimestampHandling:
             assert codec.get_timestamp(15.5) is None  # terminal
 
     def test_auto_step_forward_then_back(self, mock_config):
-        """In sync 15 s, +120 s for 40 s, back in sync: two re-anchors, ends interface."""
+        """In sync 20 s, +120 s for 150 s, back: two re-anchors, 60-90 s each."""
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            out = self._run(codec, 80, lambda t: t + 120.0 if 1015.0 <= t < 1055.0 else t)
-            assert out[15] == 1135.0  # misstamped until detected
-            assert out[40] == 1040.0
-            assert out[79] == 1079.0
+            out = self._run(codec, 320, lambda t: t + 120.0 if 1020.0 <= t < 1170.0 else t)
+            assert out[20] == 1140.0  # misstamped until detected
+            assert 60 <= self._corrected_at(out, 20) - 20 <= 91
+            assert 60 <= self._corrected_at(out, 170) - 170 <= 91
             assert codec.metrics.clock_steps == 2
             assert codec.clock_state == ClockState.INTERFACE
             assert codec.hw_timestamp_offset == 0.0
 
+    def test_auto_small_offset_is_left_alone(self, mock_config):
+        """A 3 s step is below STEP_MIN_S: never corrected, never counted."""
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            out = self._run(codec, 200, lambda t: t if t < 1020.0 else t + 3.0)
+            assert codec.metrics.clock_steps == 0
+            assert codec.metrics.clock_deviation_windows == 0
+            assert out[199] == 1202.0
+
+    def test_auto_single_off_window_does_not_step(self, mock_config):
+        """40 s of +12 s excess delay: one OFF window, no step."""
+        with patch("zelos_sdk.TraceSource"):
+            codec = CanCodec(mock_config)
+            self._run(
+                codec, 150, lambda t: t, delay=lambda t: 12.0 if 1030.0 <= t < 1070.0 else 0.0
+            )
+            assert codec.metrics.clock_steps == 0
+            assert codec.metrics.clock_deviation_windows >= 1
+            assert codec.clock_state == ClockState.INTERFACE
+
     def test_auto_transient_backlog_does_not_re_anchor(self, mock_config):
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            for i in range(60):
-                stamp = 1000.0 + i
-                delay = 5.0 if 20 <= i < 25 else 0.0
-                with patch("zelos_extension_can.codec.time.time", return_value=stamp + delay):
-                    codec.get_timestamp(stamp)
+            self._run(codec, 120, lambda t: t, delay=lambda t: 5.0 if 1020.0 <= t < 1025.0 else 0.0)
             assert codec.metrics.clock_steps == 0
-            assert codec.clock_state == ClockState.INTERFACE
+            assert codec.metrics.clock_deviation_windows == 0
 
     def test_interface_mode_is_verbatim(self, mock_config):
         mock_config["timestamp_mode"] = "interface"
@@ -406,10 +426,10 @@ class TestTimestampHandling:
         mock_config["timestamp_mode"] = "relative"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            out = self._run(codec, 60, lambda t: t + 120.0 if t >= 1015.0 else t)
+            out = self._run(codec, 200, lambda t: t + 120.0 if t >= 1015.0 else t)
             assert codec.clock_state == ClockState.RELATIVE
             assert out[0] == 1000.0
-            assert out[59] == 1179.0  # step carried, by design
+            assert out[199] == 1319.0  # step carried, by design
             assert codec.metrics.clock_steps == 0
 
     def test_host_mode_returns_none(self, mock_config):

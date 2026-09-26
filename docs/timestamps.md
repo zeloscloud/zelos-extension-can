@@ -28,20 +28,41 @@ stateDiagram-v2
     host --> host: terminal
 ```
 
-- **Residual** per frame: `host receive time − (stamp + offset)`. Transport
-  delay only ever adds to it.
-- **Step**: a whole 10 s window of residuals sits beyond ±1 s. The window
-  minimum is the least-delay sample, so it is the step: `offset += min`.
-- **Not a step**: a burst of backlog. It ramps and drains inside the window,
-  and the fresh frames at its end sit at zero.
-- Frames inside the detecting window keep the old offset; nothing is
-  buffered. A step is corrected within 10–20 s.
-- Each transition is logged (`auto: interface -> relative (re-anchored),
-  offset +120.000 s`) and counted in the bus metrics as `clock_steps`; the
-  current state is `timestamp_state`, the offset `clock_offset_s`.
+A **step** is declared only after this, per frame in `interface` or `relative`:
 
-Constants: `STEP_THRESHOLD_S = 1.0`, `STEP_WINDOW_S = 10.0`, the same in
-`zelos_can` (Rust paths) and `codec.py` (python-can paths).
+```
+residual   r = host receive time − (stamp + offset)      delay only ever adds to r
+
+accumulate 30 s of host time (STEP_WINDOW_S): keep min(r) and max(r), then reset.
+           No averaging. One on-time frame puts min(r) near 0 and vetoes a
+           positive step, so a burst, a reconnect ride-through, or a draining
+           backlog can never qualify.
+
+verdict    OFF  if min(r) > +10 s  or  max(r) < −10 s      (STEP_MIN_S)
+           OK   otherwise → persistence resets to 0
+
+persist    1st OFF window  → log "deviation observed, not corrected", count it
+           2nd OFF in a row (STEP_PERSIST) with |min₂ − min₁| < 1 s → STEP:
+               offset += min₂   (the least-delay sample, either direction)
+               |offset| < 1 s → interface (snap to 0), else relative
+```
+
+| Constant | Value | Why |
+|---|---|---|
+| `ENTRY_BAND_S` | 1 s | the first frame has no backlog yet; decides verbatim vs offset only |
+| `STEP_MIN_S` | 10 s | 3 s of real link delay fooled a 1 s floor in testing; 10 s sustained excess delay is a dead link, not congestion; adapter drift at 50 ppm needs ~55 h to reach it |
+| `STEP_WINDOW_S` | 30 s | TCP recovery after a delay change was turbulent for ~20 s when measured |
+| `STEP_PERSIST` | 2 | a false step needs ≥10 s of constant excess delay, stable to ±1 s, for a full 60 s |
+
+- A real step is corrected 60–90 s after it happens. Frames inside the
+  detecting windows keep the old offset; nothing is buffered.
+- Nothing under 10 s is ever corrected; drift is not slewed.
+- Every transition and every OFF window is logged
+  (`auto: relative -> interface (re-anchored), offset +0.000 s`,
+  `auto: deviation observed (+12.3 s over 30 s), not corrected (1/2 windows)`).
+  Bus metrics: `timestamp_state`, `clock_offset_s`, `clock_steps`,
+  `clock_deviation_windows`. Watch the last one in the field before touching
+  a constant.
 
 ## Examples
 
@@ -51,10 +72,13 @@ Host clock is right; one frame per second.
 |---|---|---|
 | in sync | `interface` | 0 |
 | 2 min ahead from the start | `relative`, offset −120 s | ~first-frame delay |
-| in sync, then steps +2 min at t=15 | `interface` → `relative` at t≈30 | 120 s for 15–20 s, then 0 |
-| 5 min behind (no RTC), NTP fixes it at t=20 | `relative` (+300) → `interface` at t≈35 | 300 s for 15 s, then 0 |
+| in sync, then steps +2 min at t=20 | `interface` → `relative` at t≈80–110 | 120 s for 60–90 s, then 0 |
+| 5 min behind (no RTC), NTP fixes it at t=20 | `relative` (+300) → `interface` at t≈80–110 | 300 s for 60–90 s, then 0 |
+| in sync, then steps +3 s | stays `interface` | 3 s, by design (below `STEP_MIN_S`) |
 | stamps missing (vcan over ssh with `-H`) | `host` | transport delay |
 | in sync, delivery stalls 5 s then bursts | stays `interface` | 0 (stamps were right) |
+| in sync, link adds 3 s of delay for a minute | stays `interface`, 0 OFF windows | 0 (stamps were right; `host` mode would be 3 s late) |
+| in sync, link adds 12 s of delay for 40 s | stays `interface`, 1 OFF window logged | 0 |
 
 ## Which clock is the interface clock
 

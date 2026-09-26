@@ -529,6 +529,7 @@ def test_stop_tears_down_transport_and_snapshots(make_ssh_codec):
         "clock_steps",
         "clock_offset_s",
         "timestamp_state",
+        "clock_deviation_windows",
     }
 
 

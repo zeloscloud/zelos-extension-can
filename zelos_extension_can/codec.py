@@ -479,12 +479,17 @@ class Metrics:
     # auto timestamp mode: times the interface clock stepped and the offset was
     # re-anchored (python-can path; the Rust paths report theirs via zelos_can).
     clock_steps: int = 0
+    # auto timestamp mode: windows that sat beyond the step floor, whether or
+    # not they led to a step.
+    clock_deviation_windows: int = 0
 
 
-# Same constants as zelos_can's Rust handler: a residual (host receive time
-# minus resolved stamp) past the threshold for a whole window is a clock step.
-STEP_THRESHOLD_S = 1.0
-STEP_WINDOW_S = 10.0
+# Same constants as zelos_can's Rust handler; the machine is drawn in
+# docs/timestamps.md. Residual = host receive time minus resolved stamp.
+ENTRY_BAND_S = 1.0  # first-frame verbatim band; re-anchor snap-to-0 band
+STEP_MIN_S = 10.0  # a window is OFF only when every residual is beyond this
+STEP_WINDOW_S = 30.0  # host time accumulated (min/max only) per window
+STEP_PERSIST = 2  # OFF windows in a row, agreeing within ENTRY_BAND_S
 
 
 class TimestampMode(IntEnum):
@@ -593,6 +598,8 @@ class CanCodec(can.Listener):
         self._clock_window_start: float | None = None
         self._clock_window_min = 0.0
         self._clock_window_max = 0.0
+        self._clock_off_windows = 0
+        self._clock_last_estimate = 0.0
 
         # Cache frequently accessed config values as booleans to avoid repeated string hashing
         self.log_raw_frames = config.get("log_raw_frames", False)
@@ -768,12 +775,11 @@ class CanCodec(can.Listener):
     def get_timestamp(self, hw_timestamp: float | None) -> int | None:
         """Trace time in ns for logging, or None for host receive time.
 
-        Mirrors ``zelos_can``'s Rust handler; the state machine is drawn in
-        docs/timestamps.md. Explicit modes are fixed; ``auto`` watches every
-        frame's residual (host receive time minus resolved stamp) and, when a
-        whole STEP_WINDOW_S window sits beyond STEP_THRESHOLD_S, re-anchors by
-        the sample nearest zero. Transport delay only adds to the residual, so
-        a burst that drains inside the window never qualifies.
+        Mirrors ``zelos_can``'s Rust handler; the state machine, windows and
+        persistence are drawn in docs/timestamps.md. Explicit modes are fixed;
+        ``auto`` accumulates each frame's residual (host receive time minus
+        resolved stamp) as a window min/max and re-anchors only after
+        STEP_PERSIST windows in a row sit entirely beyond STEP_MIN_S.
         """
         mode = self.timestamp_mode
         if mode == TimestampMode.HOST or hw_timestamp is None:
@@ -798,11 +804,11 @@ class CanCodec(can.Listener):
             return None
         if self.clock_state == ClockState.START:
             diff = now - hw_timestamp
-            if abs(diff) < STEP_THRESHOLD_S:
-                self._transition(ClockState.INTERFACE, "stamp within threshold of host")
+            if abs(diff) < ENTRY_BAND_S:
+                self._transition(ClockState.INTERFACE, "stamp within entry band of host")
             else:
                 self.hw_timestamp_offset = diff
-                self._transition(ClockState.RELATIVE, "stamp beyond threshold of host")
+                self._transition(ClockState.RELATIVE, "stamp beyond entry band of host")
         resolved = hw_timestamp + self.hw_timestamp_offset
         self._observe_residual(now - resolved, now)
         return int(resolved * 1e9)
@@ -817,18 +823,38 @@ class CanCodec(can.Listener):
         if now - self._clock_window_start < STEP_WINDOW_S:
             return
         self._clock_window_start = None
-        # Whole window beyond the threshold on one side is a step. Delay only
-        # ever adds to the residual, so the window minimum is the sample with
-        # the least delay in either direction, and it is the step.
-        if not (
-            self._clock_window_min > STEP_THRESHOLD_S or self._clock_window_max < -STEP_THRESHOLD_S
-        ):
+        if not (self._clock_window_min > STEP_MIN_S or self._clock_window_max < -STEP_MIN_S):
+            if self._clock_off_windows:
+                logger.info("[%s] auto: deviation cleared without a step", self.bus_name)
+            self._clock_off_windows = 0
             return
-        self.hw_timestamp_offset += self._clock_window_min
+        # The window minimum is the least-delay sample in either direction.
+        estimate = self._clock_window_min
+        self.metrics.clock_deviation_windows += 1
+        agrees = (
+            self._clock_off_windows > 0 and abs(estimate - self._clock_last_estimate) < ENTRY_BAND_S
+        )
+        self._clock_off_windows = (
+            self._clock_off_windows + 1 if agrees or not self._clock_off_windows else 1
+        )
+        self._clock_last_estimate = estimate
+        if self._clock_off_windows < STEP_PERSIST:
+            logger.warning(
+                "[%s] auto: deviation observed (%+.3f s over %.0f s), "
+                "not corrected (%d/%d windows)",
+                self.bus_name,
+                -estimate,
+                STEP_WINDOW_S,
+                self._clock_off_windows,
+                STEP_PERSIST,
+            )
+            return
+        self._clock_off_windows = 0
+        self.hw_timestamp_offset += estimate
         self.metrics.clock_steps += 1
-        if abs(self.hw_timestamp_offset) < STEP_THRESHOLD_S:
+        if abs(self.hw_timestamp_offset) < ENTRY_BAND_S:
             self.hw_timestamp_offset = 0.0
-            self._transition(ClockState.INTERFACE, "re-anchored within threshold")
+            self._transition(ClockState.INTERFACE, "re-anchored within entry band")
         else:
             self._transition(ClockState.RELATIVE, "re-anchored")
 
@@ -1774,6 +1800,7 @@ class CanCodec(can.Listener):
                 "clock_steps": getattr(m, "clock_steps", 0),
                 "clock_offset_s": getattr(m, "clock_offset_s", 0.0),
                 "timestamp_state": getattr(m, "timestamp_state", "start"),
+                "clock_deviation_windows": getattr(m, "clock_deviation_windows", 0),
             }
         if self._native_metrics is not None:
             return self._native_metrics
@@ -1784,6 +1811,7 @@ class CanCodec(can.Listener):
             "clock_steps": 0,
             "clock_offset_s": 0.0,
             "timestamp_state": "start",
+            "clock_deviation_windows": 0,
         }
 
     def _native_tx_counts(self) -> dict[str, int]:
@@ -1851,6 +1879,7 @@ class CanCodec(can.Listener):
                 "clock_steps": self.metrics.clock_steps,
                 "clock_offset_s": self.hw_timestamp_offset,
                 "timestamp_state": self.clock_state.name.lower(),
+                "clock_deviation_windows": self.metrics.clock_deviation_windows,
             }
         return {
             "captured_at_unix_ms": int(time.time() * 1000),

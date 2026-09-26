@@ -150,9 +150,10 @@ loopback, so every transmit is traced exactly once.
   periodic transmissions are preserved across the reconnect.
 - The interface stamp on an ssh bus is the **edge's** clock (its adapter's
   with **Hardware timestamps** on, else its kernel's). `auto` keeps that
-  timing but re-anchors to this machine whenever the two disagree by more
-  than 1 s for 10 s straight, so an edge whose clock steps (NTP sync,
-  RTC-less boot) is corrected within ~20 s and logged. `interface` and
+  timing but re-anchors to this machine when the two disagree by 10 s or
+  more for a full minute, so an edge whose clock steps (NTP sync, RTC-less
+  boot) is corrected within ~90 s and logged; smaller disagreements and
+  link delay are left alone. `interface` and
   `relative` never correct. Details and examples: [docs/timestamps.md](docs/timestamps.md).
 
 ## Actions
