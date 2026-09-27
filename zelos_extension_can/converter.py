@@ -114,18 +114,18 @@ def _make_decoder(
     Naming is `trace_layout`'s, same as a live bus, with the input file's own
     segment standing in for the bus.
 
-    `timestamp_mode="interface"` preserves each frame's own timestamp verbatim.
-    The Rust side treats `absolute` as an alias for `hardware`; anything it
-    does not recognise falls back to `auto`, which would re-stamp a recording
-    against wall-clock.
+    `timestamp_mode="interface"` preserves each frame's own timestamp verbatim
+    (`auto` would re-stamp a recording against wall-clock).
     """
     from zelos_can import CanDecoder
+
+    from .codec import TimestampMode, native_timestamp_mode
 
     source_name, event_prefix, raw_event_name = trace_layout(prefix, bus)
     source = zelos_sdk.TraceSource(source_name, namespace=namespace)
     return CanDecoder(
         database_file=[str(p) for p in database_files] or None,
-        timestamp_mode="interface",
+        timestamp_mode=native_timestamp_mode(TimestampMode.INTERFACE),
         emit_schemas_on_init=emit_schemas_on_init,
         log_raw_frames=True,
         raw_event_name=raw_event_name,

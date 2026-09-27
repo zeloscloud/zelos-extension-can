@@ -491,6 +491,14 @@ STEP_MIN_S = 10.0  # a window is OFF only when every residual is beyond this
 STEP_WINDOW_S = 30.0  # host time accumulated (min/max only) per window
 STEP_PERSIST = 2  # OFF windows in a row, agreeing within ENTRY_BAND_S
 
+# Native clock metrics before start, or from a zelos-can without clock tracking.
+_NATIVE_CLOCK_METRICS_UNSET = {
+    "clock_steps": 0,
+    "clock_offset_s": 0.0,
+    "timestamp_state": "start",
+    "clock_deviation_windows": 0,
+}
+
 
 class TimestampMode(IntEnum):
     """How an interface stamp becomes the trace time (see docs/timestamps.md)."""
@@ -517,6 +525,20 @@ class ClockState(IntEnum):
     HOST = 1
     INTERFACE = 2
     RELATIVE = 3
+
+
+def native_timestamp_mode(mode: TimestampMode) -> str:
+    """The mode name `zelos_can` takes. zelos-can >= 0.0.11 speaks the new
+    names; an older wheel silently treated anything unknown as its old auto,
+    so map the two it has and refuse `relative`. Delete at the 0.0.11 floor.
+    """
+    import zelos_can
+
+    if hasattr(zelos_can.Metrics, "timestamp_state"):
+        return mode.name.lower()
+    if mode == TimestampMode.RELATIVE:
+        raise RuntimeError("timestamp_mode 'relative' needs zelos-can >= 0.0.11")
+    return {TimestampMode.HOST: "ignore", TimestampMode.INTERFACE: "absolute"}.get(mode, "auto")
 
 
 class CanCodec(can.Listener):
@@ -773,14 +795,8 @@ class CanCodec(can.Listener):
         return f"{self._event_prefix}{self._key_of(msg)}"
 
     def get_timestamp(self, hw_timestamp: float | None) -> int | None:
-        """Trace time in ns for logging, or None for host receive time.
-
-        Mirrors ``zelos_can``'s Rust handler; the state machine, windows and
-        persistence are drawn in docs/timestamps.md. Explicit modes are fixed;
-        ``auto`` accumulates each frame's residual (host receive time minus
-        resolved stamp) as a window min/max and re-anchors only after
-        STEP_PERSIST windows in a row sit entirely beyond STEP_MIN_S.
-        """
+        """Trace time in ns, or None for host receive time. Mirrors
+        ``zelos_can``'s Rust handler; see docs/timestamps.md."""
         mode = self.timestamp_mode
         if mode == TimestampMode.HOST or hw_timestamp is None:
             if mode == TimestampMode.AUTO and self.clock_state == ClockState.START:
@@ -831,17 +847,12 @@ class CanCodec(can.Listener):
         # The window minimum is the least-delay sample in either direction.
         estimate = self._clock_window_min
         self.metrics.clock_deviation_windows += 1
-        agrees = (
-            self._clock_off_windows > 0 and abs(estimate - self._clock_last_estimate) < ENTRY_BAND_S
-        )
-        self._clock_off_windows = (
-            self._clock_off_windows + 1 if agrees or not self._clock_off_windows else 1
-        )
+        agrees = abs(estimate - self._clock_last_estimate) < ENTRY_BAND_S
+        self._clock_off_windows = self._clock_off_windows + 1 if agrees else 1
         self._clock_last_estimate = estimate
         if self._clock_off_windows < STEP_PERSIST:
             logger.warning(
-                "[%s] auto: deviation observed (%+.3f s over %.0f s), "
-                "not corrected (%d/%d windows)",
+                "[%s] auto: interface clock %+.3f s vs host over %.0f s, pending (%d/%d windows)",
                 self.bus_name,
                 -estimate,
                 STEP_WINDOW_S,
@@ -860,9 +871,8 @@ class CanCodec(can.Listener):
 
     def _transition(self, to: ClockState, why: str) -> None:
         frm, self.clock_state = self.clock_state, to
-        log = (
-            logger.warning if self.metrics.clock_steps and frm != ClockState.START else logger.info
-        )
+        # Leaving START is the initial pick; every later transition is a step.
+        log = logger.info if frm == ClockState.START else logger.warning
         log(
             "[%s] auto: %s -> %s (%s), offset %+.3f s",
             self.bus_name,
@@ -981,7 +991,7 @@ class CanCodec(can.Listener):
             "channel": self.config["channel"],
             "log_raw_frames": self.log_raw_frames,
             "emit_schemas_on_init": self.emit_schemas_on_init,
-            "timestamp_mode": self.timestamp_mode.name.lower(),
+            "timestamp_mode": native_timestamp_mode(self.timestamp_mode),
             "fd": self.fd_mode,
         }
         if self.config.get("rcvbuf_size") is not None:
@@ -1027,7 +1037,7 @@ class CanCodec(can.Listener):
             **self._native_dbc_kwargs(),
             log_raw_frames=self.log_raw_frames,
             emit_schemas_on_init=self.emit_schemas_on_init,
-            timestamp_mode=self.timestamp_mode.name.lower(),
+            timestamp_mode=native_timestamp_mode(self.timestamp_mode),
             fd=self.fd_mode,
             bus=self._ebus,
         )
@@ -1797,10 +1807,7 @@ class CanCodec(can.Listener):
                 "messages_decoded": m.messages_decoded,
                 "unknown_messages": m.unknown_messages,
                 # zelos-can < 0.0.11 has no clock tracking.
-                "clock_steps": getattr(m, "clock_steps", 0),
-                "clock_offset_s": getattr(m, "clock_offset_s", 0.0),
-                "timestamp_state": getattr(m, "timestamp_state", "start"),
-                "clock_deviation_windows": getattr(m, "clock_deviation_windows", 0),
+                **{k: getattr(m, k, v) for k, v in _NATIVE_CLOCK_METRICS_UNSET.items()},
             }
         if self._native_metrics is not None:
             return self._native_metrics
@@ -1808,10 +1815,7 @@ class CanCodec(can.Listener):
             "messages_received": 0,
             "messages_decoded": 0,
             "unknown_messages": 0,
-            "clock_steps": 0,
-            "clock_offset_s": 0.0,
-            "timestamp_state": "start",
-            "clock_deviation_windows": 0,
+            **_NATIVE_CLOCK_METRICS_UNSET,
         }
 
     def _native_tx_counts(self) -> dict[str, int]:

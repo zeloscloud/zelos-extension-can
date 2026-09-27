@@ -152,8 +152,8 @@ loopback, so every transmit is traced exactly once.
   with **Hardware timestamps** on, else its kernel's). `auto` keeps that
   timing but re-anchors to this machine when the two disagree by 10 s or
   more for a full minute, so an edge whose clock steps (NTP sync, RTC-less
-  boot) is corrected within ~90 s and logged; smaller disagreements and
-  link delay are left alone. `interface` and
+  boot) is corrected within ~90 s of continuous traffic and logged; smaller
+  disagreements and link delay are left alone. `interface` and
   `relative` never correct. Details and examples: [docs/timestamps.md](docs/timestamps.md).
 
 ## Actions

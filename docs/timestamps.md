@@ -41,7 +41,7 @@ accumulate 30 s of host time (STEP_WINDOW_S): keep min(r) and max(r), then reset
 verdict    OFF  if min(r) > +10 s  or  max(r) < −10 s      (STEP_MIN_S)
            OK   otherwise → persistence resets to 0
 
-persist    1st OFF window  → log "deviation observed, not corrected", count it
+persist    1st OFF window  → log "interface clock ±N s vs host, pending", count it
            2nd OFF in a row (STEP_PERSIST) with |min₂ − min₁| < 1 s → STEP:
                offset += min₂   (the least-delay sample, either direction)
                |offset| < 1 s → interface (snap to 0), else relative
@@ -54,12 +54,16 @@ persist    1st OFF window  → log "deviation observed, not corrected", count it
 | `STEP_WINDOW_S` | 30 s | TCP recovery after a delay change was turbulent for ~20 s when measured |
 | `STEP_PERSIST` | 2 | a false step needs ≥10 s of constant excess delay, stable to ±1 s, for a full 60 s |
 
-- A real step is corrected 60–90 s after it happens. Frames inside the
-  detecting windows keep the old offset; nothing is buffered.
+- A real step is corrected 60–90 s after it happens with continuous traffic
+  (a window closes on the first frame past 30 s, so a sparse bus takes
+  longer). Frames inside the detecting windows keep the old offset; nothing
+  is buffered.
 - Nothing under 10 s is ever corrected; drift is not slewed.
 - Every transition and every OFF window is logged
   (`auto: relative -> interface (re-anchored), offset +0.000 s`,
-  `auto: deviation observed (+12.3 s over 30 s), not corrected (1/2 windows)`).
+  `auto: interface clock +120.0 s vs host over 30 s, pending (1/2 windows)`;
+  positive means the interface clock reads ahead of the host, so link delay
+  shows up negative).
   Bus metrics: `timestamp_state`, `clock_offset_s`, `clock_steps`,
   `clock_deviation_windows`. Watch the last one in the field before touching
   a constant.
@@ -78,7 +82,7 @@ Host clock is right; one frame per second.
 | stamps missing (vcan over ssh with `-H`) | `host` | transport delay |
 | in sync, delivery stalls 5 s then bursts | stays `interface` | 0 (stamps were right) |
 | in sync, link adds 3 s of delay for a minute | stays `interface`, 0 OFF windows | 0 (stamps were right; `host` mode would be 3 s late) |
-| in sync, link adds 12 s of delay for 40 s | stays `interface`, 1 OFF window logged | 0 |
+| in sync, link adds 12 s of delay for 45 s | stays `interface`, 0–1 OFF windows logged (window alignment) | 0 |
 
 ## Which clock is the interface clock
 

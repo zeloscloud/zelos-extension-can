@@ -527,7 +527,7 @@
         "timestamp_mode": {
           "type": "string",
           "title": "Timestamp Mode",
-          "description": "Which clock becomes the trace time. Host: when this machine received the frame. Interface: the interface's own stamp, unchecked. Relative: the interface's timing, offset to this machine's clock once at the first frame. Auto (default) picks one of those from the first frame and re-anchors when the interface clock steps by 10 s or more and stays there for a minute (corrected within ~90 s and logged; anything smaller is left alone). For ssh-socketcan the interface stamp is the edge's clock. See docs/timestamps.md.",
+          "description": "Which clock becomes the trace time. Auto (default) follows the interface clock anchored to this machine and re-anchors after it steps by 10 s or more for a minute; see docs/timestamps.md.",
           "oneOf": [
             {
               "const": "auto",
