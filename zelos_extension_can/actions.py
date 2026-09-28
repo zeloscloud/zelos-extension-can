@@ -526,25 +526,20 @@ def list_interfaces() -> dict[str, Any]:
 @action(
     "Auto-configure",
     "One socketcan bus per SocketCAN interface on the machine running the "
-    "agent, for the config form's Auto-configure button. Review it, then save "
-    "and start.",
+    "agent, or a demo bus where there is none (macOS/Windows), for the config "
+    "form's Auto-configure button. Review it, then save and start.",
     standalone=True,
 )
 def auto_config() -> dict[str, Any]:
     """The app's auto-configure contract: the keys of `config` replace the form's.
 
     Only `buses` is returned, so whatever is set under Advanced survives. Never
-    an ssh-socketcan bus: there is no remote host to guess.
+    an ssh-socketcan bus: there is no remote host to guess. No SocketCAN
+    interface (always the case on macOS/Windows) yields one demo bus.
     """
     interfaces = _local_can_interfaces()
     if not interfaces:
-        return {
-            "status": "error",
-            "message": (
-                "No SocketCAN interface on this machine. Add an ssh-socketcan bus for a "
-                "remote device, or a pcan/kvaser/vector/slcan bus."
-            ),
-        }
+        return {"status": "success", "config": {"buses": [{"name": "demo", "interface": "demo"}]}}
     # socketcan, not socketcan-py: the Rust bus is the native local path.
     # No `name`, so each bus is named after its channel. A down interface is
     # configured as it is, with no note: the button surfaces only an error

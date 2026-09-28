@@ -344,14 +344,15 @@ class TestConfigFormHooks:
             },
         }
 
-    def test_auto_config_without_an_interface_is_an_error(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(actions.sys, "platform", "linux")
+    @pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+    def test_auto_config_without_an_interface_is_a_demo_bus(self, monkeypatch, tmp_path, platform):
+        monkeypatch.setattr(actions.sys, "platform", platform)
         monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
 
-        result = actions.auto_config()
-
-        assert result["status"] == "error"
-        assert "ssh-socketcan" in result["message"]  # the way out on a laptop
+        assert actions.auto_config() == {
+            "status": "success",
+            "config": {"buses": [{"name": "demo", "interface": "demo"}]},
+        }
 
     def test_schema_hooks_name_actions_that_exist(self):
         """Both hooks wire the form to an action by name, so a rename breaks the
