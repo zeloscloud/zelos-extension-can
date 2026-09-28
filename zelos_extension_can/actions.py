@@ -542,7 +542,7 @@ def auto_config() -> dict[str, Any]:
             "status": "error",
             "message": (
                 "No SocketCAN interface on this machine. Add an ssh-socketcan bus for a "
-                "remote device, or a pcan/kvaser/vector bus."
+                "remote device, or a pcan/kvaser/vector/slcan bus."
             ),
         }
     # socketcan, not socketcan-py: the Rust bus is the native local path.

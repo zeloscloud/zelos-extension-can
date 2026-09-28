@@ -18,13 +18,14 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface type. socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan-py is the python-can implementation. macOS/Windows: pcan/kvaser/vector. ssh-socketcan works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface type. socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan-py is the python-can implementation. macOS/Windows: pcan/kvaser/vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. ssh-socketcan works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
               "socketcan",
               "ssh-socketcan",
               "pcan",
               "kvaser",
               "vector",
+              "slcan",
               "socketcan-py",
               "other",
               "demo"
@@ -461,13 +462,55 @@
                 "properties": {
                   "interface": {
                     "enum": [
+                      "slcan"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Serial Port",
+                    "description": "Serial device of the slcan adapter: /dev/ttyACM0 (Linux), /dev/tty.usbmodem... (macOS), COM3 (Windows).",
+                    "ui:placeholder": "/dev/ttyACM0"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "CAN bus bitrate",
+                    "enum": [
+                      10000,
+                      20000,
+                      50000,
+                      83300,
+                      100000,
+                      125000,
+                      250000,
+                      500000,
+                      750000,
+                      1000000
+                    ],
+                    "default": 500000
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can slcan Bus() kwargs as JSON object, e.g. {\"tty_baudrate\": 115200} for a UART adapter"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "bitrate"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
                       "other"
                     ]
                   },
                   "config_json": {
                     "type": "string",
                     "title": "Advanced Configuration (JSON)",
-                    "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"slcan\", \"channel\": \"/dev/ttyUSB0\", \"bitrate\": 500000}"
+                    "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"ixxat\", \"channel\": 0, \"bitrate\": 500000}"
                   }
                 },
                 "required": [

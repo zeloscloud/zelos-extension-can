@@ -23,7 +23,8 @@ dependencies = [
     # resolver pick one at all: without it, an installed extension resolves the
     # newest final release and its at-rest actions simply do not appear.
     "zelos-sdk>=0.0.12a1",
-    "python-can",
+    # serial extra: pyserial for the slcan interface. Pure Python, no deps.
+    "python-can[serial]",
     "cantools",
     "rich-click>=1.8.0",
     "pyarrow>=14.0.0",

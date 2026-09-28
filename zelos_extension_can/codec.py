@@ -815,7 +815,7 @@ class CanCodec(can.Listener):
         if self._use_native and sys.platform != "linux":
             raise can.CanInterfaceNotImplementedError(
                 "The 'socketcan' interface is Linux-only (it wraps the Rust "
-                "zelos-can SocketCAN bus). Use 'pcan'/'kvaser'/'vector' on "
+                "zelos-can SocketCAN bus). Use 'pcan'/'kvaser'/'vector'/'slcan' on "
                 "macOS/Windows, or 'ssh-socketcan' for a remote Linux device."
             )
 
