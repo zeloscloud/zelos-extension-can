@@ -41,7 +41,7 @@ which have no SocketCAN.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One `socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`, a down interface included as it is. Review it, save, then start. Advanced settings are left as they are. |
+| **Auto-configure** (button above the form) | One `socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`, a down interface included as it is. With no SocketCAN interface (always so on macOS/Windows), one `demo` bus. Review it, save, then start. Advanced settings are left as they are. |
 | **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `socketcan-py` bus. You can still type a name. |
 
 ### Required Settings
