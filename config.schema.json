@@ -8,7 +8,7 @@
   "properties": {
     "buses": {
       "type": "array",
-      "description": "Configure CAN buses to monitor. Click 'Add' to add a new bus.",
+      "description": "Add a bus for each CAN adapter on this system, or choose the demo interface for an example.",
       "title": "Buses",
       "minItems": 1,
       "items": {
