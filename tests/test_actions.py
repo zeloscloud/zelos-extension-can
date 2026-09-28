@@ -349,10 +349,10 @@ class TestConfigFormHooks:
         monkeypatch.setattr(actions.sys, "platform", platform)
         monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
 
-        assert actions.auto_config() == {
-            "status": "success",
-            "config": {"buses": [{"name": "demo", "interface": "demo"}]},
-        }
+        result = actions.auto_config()
+
+        assert result["config"] == {"buses": [{"name": "demo", "interface": "demo"}]}
+        assert "ssh-socketcan" in result["message"]  # the way out on a laptop
 
     def test_schema_hooks_name_actions_that_exist(self):
         """Both hooks wire the form to an action by name, so a rename breaks the

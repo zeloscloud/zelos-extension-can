@@ -535,11 +535,20 @@ def auto_config() -> dict[str, Any]:
 
     Only `buses` is returned, so whatever is set under Advanced survives. Never
     an ssh-socketcan bus: there is no remote host to guess. No SocketCAN
-    interface (always the case on macOS/Windows) yields one demo bus.
+    interface (always the case on macOS/Windows) yields one demo bus, with a
+    `message` the form shows as a warning (older apps ignore it).
     """
     interfaces = _local_can_interfaces()
     if not interfaces:
-        return {"status": "success", "config": {"buses": [{"name": "demo", "interface": "demo"}]}}
+        return {
+            "status": "success",
+            "config": {"buses": [{"name": "demo", "interface": "demo"}]},
+            "message": (
+                "No SocketCAN interface on this machine, so a demo bus was added. For "
+                "hardware, set its interface: pcan/kvaser/vector/slcan, or ssh-socketcan "
+                "for a remote device."
+            ),
+        }
     # socketcan, not socketcan-py: the Rust bus is the native local path.
     # No `name`, so each bus is named after its channel. A down interface is
     # configured as it is, with no note: the button surfaces only an error
