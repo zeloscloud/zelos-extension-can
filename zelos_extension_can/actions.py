@@ -536,7 +536,7 @@ def auto_config() -> dict[str, Any]:
     Only `buses` is returned, so whatever is set under Advanced survives. Never
     an ssh-socketcan bus: there is no remote host to guess. No SocketCAN
     interface (always the case on macOS/Windows) yields one demo bus, with a
-    `message` the form shows as a warning (older apps ignore it).
+    `message` the form shows in its confirmation toast (older apps ignore it).
     """
     interfaces = _local_can_interfaces()
     if not interfaces:
