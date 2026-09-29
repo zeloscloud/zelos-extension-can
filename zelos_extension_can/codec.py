@@ -584,6 +584,10 @@ class CanCodec(can.Listener):
         self.demo_mode = config.get("demo_mode", False)
         self.demo_task: asyncio.Task | None = None
 
+        # python-can reader for non-Rust interfaces; stop() joins it before
+        # shutting its bus down.
+        self._notifier: can.Notifier | None = None
+
         # Load the DBC list. Order is precedence; zero files is a legal
         # raw-only bus (nothing decodes, raw frames still land).
         self.database_files: list[Path] = [
@@ -1002,6 +1006,9 @@ class CanCodec(can.Listener):
             self._native.stop()
             self._native = None
 
+        # Join the reader thread first, or it reads a shut-down bus.
+        self._stop_notifier()
+
         if self.bus:
             self.bus.shutdown()
             self.bus = None
@@ -1164,7 +1171,7 @@ class CanCodec(can.Listener):
         self._handle_message(message)
         self.last_message_time = time.time()
 
-    def _check_notifier_health(self, notifier: can.Notifier) -> bool:
+    def _check_notifier_health(self, notifier: can.Notifier | None) -> bool:
         """Check if notifier threads are alive.
 
         :param notifier: CAN notifier instance
@@ -1212,24 +1219,27 @@ class CanCodec(can.Listener):
                 self.bus_name,
             )
 
-    async def _handle_reconnection(self, notifier: can.Notifier) -> can.Notifier:
-        """Handle bus reconnection and notifier recreation.
+    def _stop_notifier(self) -> None:
+        """Stop and join the python-can reader, if any.
 
-        :param notifier: Current notifier instance (will be stopped)
-        :return: New notifier instance if successful, otherwise the old one
+        Detached first: Notifier.stop() calls listener.stop(), i.e. stop().
         """
+        notifier, self._notifier = self._notifier, None
+        if notifier is not None:
+            notifier.stop()
+
+    async def _handle_reconnection(self) -> None:
+        """Handle bus reconnection and notifier recreation."""
         logger.debug("[%s] Stopping notifier...", self.bus_name)
-        notifier.stop()
+        self._stop_notifier()
 
         if await self._reconnect_bus():
-            new_notifier = can.Notifier(self.bus, [self])
-            return new_notifier
+            self._notifier = can.Notifier(self.bus, [self])
         else:
             logger.error(
                 "[%s] Reconnection failed - bus remains uninitialized, will retry in 5 seconds",
                 self.bus_name,
             )
-            return notifier
 
     async def _run_async(self) -> None:
         """Main async loop - health monitoring and reconnection handling.
@@ -1309,7 +1319,7 @@ class CanCodec(can.Listener):
             logger.error("[%s] Bus not initialized, call start() first", self.bus_name)
             return
 
-        notifier = can.Notifier(self.bus, [self])
+        self._notifier = can.Notifier(self.bus, [self])
 
         if self.demo_mode:
             self.demo_task = asyncio.create_task(
@@ -1322,18 +1332,18 @@ class CanCodec(can.Listener):
             while self.running:
                 await asyncio.sleep(5.0)
 
-                notifier_alive = self._check_notifier_health(notifier)
+                notifier_alive = self._check_notifier_health(self._notifier)
                 bus_healthy = self._check_bus_health()
 
                 if not notifier_alive or not bus_healthy:
                     self._log_reconnection_reason(notifier_alive, bus_healthy)
-                    notifier = await self._handle_reconnection(notifier)
+                    await self._handle_reconnection()
         except asyncio.CancelledError:
             logger.info("[%s] CAN reader cancelled", self.bus_name)
         except Exception as e:
             logger.exception("[%s] Error in CAN reception loop: %s", self.bus_name, e)
         finally:
-            notifier.stop()
+            self._stop_notifier()
             logger.info("[%s] CAN reception stopped", self.bus_name)
 
     def _update_receive_metrics(self, msg: can.Message) -> None:
