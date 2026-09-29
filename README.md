@@ -164,6 +164,18 @@ The extension provides several actions accessible from the Zelos App:
 - **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
 - **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
 
+## Using as a library
+
+Other extensions can `import zelos_extension_can`. Importing registers no actions; `zelos_extension_can.bus` loads without `cantools`.
+
+| Name | Use |
+|------|-----|
+| `CanCodec(config, bus_name=..., source=...)` | Open a bus, trace raw frames, decode DBCs; `codec.bus` transmits |
+| `bus.prepare_bus_config(bus, demo_dbc_path)` | One `buses[]` entry to a codec config; raises `BusConfigError` |
+| `bus.open_python_can_bus(config, bus_name)` | python-can bus with the extension's interface mapping and retry |
+| `bus.list_interfaces()` | Local SocketCAN interfaces as `action-choices` entries |
+| `ACTION_PREFIX` | This extension's action namespace |
+
 ## What is CAN?
 [See this tutorial](https://www.csselectronics.com/pages/can-bus-simple-intro-tutorial)
 

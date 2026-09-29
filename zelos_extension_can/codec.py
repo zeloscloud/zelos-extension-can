@@ -19,6 +19,8 @@ import can
 import cantools
 import zelos_sdk
 
+from .bus.config import bus_database_files  # noqa: F401  re-export
+from .bus.factory import open_python_can_bus
 from .demo.demo import run_demo_ev_simulation
 from .utils.file_utils import resolve_database_file
 from .utils.schema_utils import cantools_signal_to_trace_metadata
@@ -194,17 +196,6 @@ def name_error(value: str, label: str, reserved: Collection[str] = ()) -> str | 
         f"Invalid {label} {value!r}: {offender!r} is not allowed. "
         "Use letters, digits, space, '_' or '-'."
     )
-
-
-def bus_database_files(bus_config: dict[str, Any]) -> list[str]:
-    """A bus config's DBC list, in precedence order.
-
-    A pre-list config carries one `database_file`; it takes precedence, so it
-    is prepended to any list.
-    """
-    files = [str(p) for p in (bus_config.get("database_files") or [])]
-    legacy = bus_config.get("database_file")
-    return [str(legacy), *files] if legacy else files
 
 
 def _definition_key(msg: cantools.database.can.Message) -> tuple[int, bool, str]:
@@ -827,58 +818,8 @@ class CanCodec(can.Listener):
             self._start_ssh()
             return
 
-        # `socketcan-py` is python-can's own `socketcan`.
-        interface = self.config["interface"]
-        bus_config = {
-            "interface": "socketcan" if interface == "socketcan-py" else interface,
-            "channel": self.config["channel"],
-        }
-
-        # Pass through optional bus config parameters if specified
-        if "receive_own_messages" in self.config:
-            bus_config["receive_own_messages"] = self.config["receive_own_messages"]
-
-        if "bitrate" in self.config:
-            bus_config["bitrate"] = self.config["bitrate"]
-
-        if self.fd_mode:
-            bus_config["fd"] = True
-            if "data_bitrate" in self.config:
-                bus_config["data_bitrate"] = self.config["data_bitrate"]
-
-        # Merge additional config_json (advanced interface-specific options)
-        if "config_json" in self.config and self.config["config_json"]:
-            try:
-                additional_config = json.loads(self.config["config_json"])
-                logger.info("Merging additional config: %s", list(additional_config.keys()))
-                bus_config.update(additional_config)
-            except json.JSONDecodeError as e:
-                logger.error("Failed to parse config_json: %s", e)
-                raise ValueError(f"Invalid config_json: {e}") from e
-
-        # PCAN's macOS library (PCBUSB) cannot echo TX frames, and python-can
-        # fails the whole init on it.
-        if bus_config["interface"] == "pcan" and sys.platform == "darwin":
-            if bus_config.pop("receive_own_messages", False):
-                logger.warning(
-                    "[%s] PCAN on macOS cannot receive its own messages; ignoring "
-                    "receive_own_messages, so transmitted frames are not traced",
-                    self.bus_name,
-                )
-
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                self.bus = can.Bus(**bus_config)
-                self.running = True
-                logger.info("CAN bus started successfully")
-                return
-            except can.CanError as e:
-                if attempt == max_retries - 1:
-                    logger.error("Failed to initialize CAN bus after %d attempts", max_retries)
-                    raise
-                logger.warning("Bus init failed (attempt %d/%d): %s", attempt + 1, max_retries, e)
-                time.sleep(1)
+        self.bus = open_python_can_bus(self.config, self.bus_name)
+        self.running = True
 
     def _start_native(self) -> None:
         """Start the Rust-first pipeline for socketcan.
