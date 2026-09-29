@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from zelos_sdk.actions import ActionsRegistry, action
 
+from .converter import SUPPORTED_FORMATS
 from .utils.file_utils import resolve_database_file
 
 if TYPE_CHECKING:
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 # Shared codec registry — populated by `cli/app.py` (and any other entrypoint
 # that brings up a CanCodec instance and wants its actions exposed).
 CAN_CODECS: dict[str, CanCodec] = {}
+
+_LOG_FORMATS = ", ".join(SUPPORTED_FORMATS)
 
 
 def _available_codecs(*_args: Any) -> list[str]:
@@ -240,14 +243,14 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
 
 @action(
     "Convert Trace File",
-    "Convert a CAN log (.asc / .blf / .trc / candump .log) to Zelos trace "
+    f"Convert a CAN log ({_LOG_FORMATS}) to Zelos trace "
     "format (.trz). Provide `database_path` (one path or several) OR a `codec` "
     "whose loaded DBCs will be used; with neither, only raw frames are written.",
 )
 @action.text(
     "input_path",
     title="Input File Path",
-    description="Path to CAN log file (.asc, .blf, .trc, etc.)",
+    description=f"Path to CAN log file ({_LOG_FORMATS})",
     widget="file-picker",
 )
 @action.text(
@@ -644,7 +647,7 @@ def _open_in_app(path: Path) -> None:
 @action.text(
     "input_file",
     title="CAN log",
-    description="Source .asc, .blf, .trc, .log, .csv or .mf4",
+    description=f"Source {_LOG_FORMATS}",
     widget="file_path_picker",
 )
 @action.text(
@@ -687,15 +690,13 @@ def convert(
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
-    from .converter import SUPPORTED_FORMATS, convert_can_trace
+    from .converter import convert_can_trace
 
     source = Path(input_file).expanduser()
     if not source.is_file():
         raise FileNotFoundError(f"Input file not found: {source}")
     if source.suffix.lower() not in SUPPORTED_FORMATS:
-        raise ValueError(
-            f"Unsupported format: {source.suffix}. Supported: {', '.join(SUPPORTED_FORMATS.keys())}"
-        )
+        raise ValueError(f"Unsupported format: {source.suffix}. Supported: {_LOG_FORMATS}")
 
     supplied = _as_paths(database_file)
     database_paths = [resolve_database_file(p) for p in supplied or _configured_database_files()]
