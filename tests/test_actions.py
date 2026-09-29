@@ -312,6 +312,7 @@ class TestConfigFormHooks:
 
         assert actions.list_interfaces() == {
             "status": "success",
+            "os": "linux",
             "choices": [
                 {"value": "can0", "detail": "up, gs_usb"},
                 {"value": "can1", "detail": "down, gs_usb"},
@@ -320,11 +321,23 @@ class TestConfigFormHooks:
         }
 
     def test_list_interfaces_is_empty_where_there_is_no_socketcan(self, monkeypatch, tmp_path):
-        """macOS/Windows: an empty list, not an error — nothing to enumerate."""
-        monkeypatch.setattr(actions.sys, "platform", "darwin")
+        """macOS/Windows: an empty list, not an error, and the agent's own OS.
+
+        The setup form reorders the Interface dropdown from `os`. An empty list
+        cannot tell a Mac from a Windows machine, or from a Linux machine whose
+        CAN interface is not up yet.
+        """
         monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
 
-        assert actions.list_interfaces() == {"status": "success", "choices": []}
+        monkeypatch.setattr(actions.sys, "platform", "darwin")
+        assert actions.list_interfaces() == {"status": "success", "os": "darwin", "choices": []}
+
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        assert actions.list_interfaces() == {"status": "success", "os": "win32", "choices": []}
+
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "absent")
+        assert actions.list_interfaces() == {"status": "success", "os": "linux", "choices": []}
 
     def test_auto_config_builds_one_native_bus_per_interface(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "linux")
@@ -362,7 +375,8 @@ class TestConfigFormHooks:
         schema = json.loads((Path(__file__).parents[1] / "config.schema.json").read_text())
         branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
         channels = [b["properties"].get("channel", {}) for b in branches]
-        named = {schema["ui:options"]["autoconfig"]} | {
+        interface = schema["properties"]["buses"]["items"]["properties"]["interface"]
+        named = {schema["ui:options"]["autoconfig"], interface["ui:options"]["orderByAgentOs"]} | {
             ch["ui:options"]["action"] for ch in channels if "action" in ch.get("ui:options", {})
         }
 

@@ -510,15 +510,22 @@ def _local_can_interfaces() -> list[dict[str, str]]:
     "List CAN Interfaces",
     "SocketCAN interfaces on the machine running the agent, as choices for a "
     "bus's Channel field, which also accepts a name typed by hand. Empty on "
-    "macOS/Windows, which have no SocketCAN.",
+    "macOS/Windows, which have no SocketCAN. Also returns this agent's own "
+    "operating system, which the setup form uses to order the Interface list.",
     # Reading sysfs opens no socket and needs no privileges, and the config form
     # wants the list before the extension has ever run.
     standalone=True,
 )
 def list_interfaces() -> dict[str, Any]:
-    """The app's `action-choices` contract: `choices` in the order to show."""
+    """The app's `action-choices` contract: `choices` in the order to show.
+
+    `os` is this agent's own platform (`sys.platform`). The setup form reorders
+    the Interface dropdown from it. An empty `choices` cannot say which
+    operating system this is.
+    """
     return {
         "status": "success",
+        "os": sys.platform,
         "choices": [_interface_choice(iface) for iface in _local_can_interfaces()],
     }
 
