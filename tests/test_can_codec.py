@@ -1,9 +1,11 @@
 """Essential unit tests for CAN codec."""
 
+import asyncio
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import can
 import pytest
 import zelos_sdk
 
@@ -834,3 +836,27 @@ class TestMultiBusSupport:
         }
         with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
             _create_codecs(config_same_channel, Path(test_dbc_path))
+
+
+def test_stop_joins_reader_before_bus_shutdown(codec):
+    """A python-can reader left running reads a shut-down bus (slcan: EBADF traceback)."""
+
+    async def run():
+        codec.start()
+        task = asyncio.create_task(codec._run_async())
+        await asyncio.sleep(0.1)
+        readers = [t for n in can.Notifier.find_instances(codec.bus) for t in n._readers]
+        shutdown, alive = codec.bus.shutdown, []
+
+        def record():
+            alive.append(any(t.is_alive() for t in readers))
+            shutdown()
+
+        codec.bus.shutdown = record
+        codec.stop()
+        task.cancel()  # as the signal path does; _run_async swallows it
+        await task
+        return readers, alive
+
+    readers, alive = asyncio.run(run())
+    assert readers and alive == [False]
