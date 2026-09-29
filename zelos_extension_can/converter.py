@@ -26,6 +26,28 @@ SUPPORTED_FORMATS = {
     ".mf4": "MF4Reader",
 }
 
+# The layout python-can's CSVWriter writes. CSVReader skips the header unread,
+# so any other CSV fails mid-file with a bare unpack or parse error.
+CSV_COLUMNS = ("timestamp", "arbitration_id", "extended", "remote", "error", "dlc", "data")
+
+
+def _check_csv_header(input_file: Path) -> None:
+    """Raise ValueError unless the CSV's header is python-can's `CSV_COLUMNS`."""
+    with input_file.open(encoding="utf-8-sig", errors="replace") as f:
+        header = f.readline(4096)
+    if not header:
+        return  # An empty file converts to an empty trace, as before.
+    found = [column.strip() for column in header.strip().split(",")]
+    if [column.lower() for column in found] == list(CSV_COLUMNS):
+        return
+    raise ValueError(
+        f"{input_file.name} is not in python-can's CSV layout. "
+        f"Expected header: {','.join(CSV_COLUMNS)} (timestamp in seconds, "
+        "arbitration_id in hex, extended/remote/error as 0 or 1, dlc as an integer, "
+        f"data base64-encoded). Found columns: {','.join(found)[:200]}. "
+        "Convert the log to .asc, .blf, .trc or candump .log, or rewrite it in this layout."
+    )
+
 
 class ConversionStats:
     """Statistics from conversion process."""
@@ -61,7 +83,7 @@ def _get_reader_config(input_file: Path) -> tuple[type, dict[str, Any]]:
         Tuple of (reader_class, reader_kwargs)
 
     Raises:
-        ValueError: If file format is unsupported
+        ValueError: If file format is unsupported, or a .csv is not python-can's layout
         ImportError: If required python-can reader is not available
     """
     suffix = input_file.suffix.lower()
@@ -85,6 +107,8 @@ def _get_reader_config(input_file: Path) -> tuple[type, dict[str, Any]]:
         # Don't drop time information (python-can's default is relative_timestamp=True)
         # Setting to False preserves absolute timestamps from the file
         reader_kwargs["relative_timestamp"] = False
+    elif suffix == ".csv":
+        _check_csv_header(input_file)
 
     return reader_class, reader_kwargs
 
@@ -233,7 +257,7 @@ def convert_can_trace(
 
     Raises:
         FileNotFoundError: If input or database file doesn't exist
-        ValueError: If file format is unsupported
+        ValueError: If file format is unsupported, or a .csv is not python-can's layout
         ImportError: If required python-can reader is not available
     """
     # Validate inputs
