@@ -195,6 +195,62 @@ class TestStandaloneConvert:
             actions.convert(input_file=str(src), database_file=str(DBC_PATH), output_file=str(dest))
 
 
+class TestCsvHeader:
+    """python-can's CSVReader skips the header unread, so a CSV from another
+    tool must be rejected before conversion, not mid-file."""
+
+    FOREIGN_HEADER = "Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2\n"
+
+    def _foreign_csv(self, tmp_path: Path) -> Path:
+        src = tmp_path / "savvycan.csv"
+        src.write_text(self.FOREIGN_HEADER + "166064,00000064,false,Rx,0,2,01,02\n")
+        return src
+
+    def _assert_names_both_layouts(self, err: pytest.ExceptionInfo) -> None:
+        message = str(err.value)
+        assert "timestamp,arbitration_id,extended,remote,error,dlc,data" in message
+        assert "arbitration_id in hex" in message
+        assert "base64" in message
+        assert "Found columns: Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2." in message
+
+    def test_action_rejects_a_foreign_header(self, tmp_path):
+        src = self._foreign_csv(tmp_path)
+        with pytest.raises(ValueError) as err:
+            actions.convert(input_file=str(src), database_file=str(DBC_PATH))
+        self._assert_names_both_layouts(err)
+        assert not src.with_suffix(".trz").exists()
+
+    def test_cli_path_rejects_a_foreign_header(self, tmp_path):
+        from zelos_extension_can.converter import _convert_with_progress
+
+        src = self._foreign_csv(tmp_path)
+        output = tmp_path / "out.trz"
+        with pytest.raises(ValueError) as err:
+            _convert_with_progress(src, [DBC_PATH], output, verbose=False)
+        self._assert_names_both_layouts(err)
+        assert not output.exists()
+
+    def test_python_can_csv_converts(self, tmp_path):
+        import can
+
+        src = tmp_path / "capture.csv"
+        with can.CSVWriter(str(src)) as writer:
+            for i in range(3):
+                writer.on_message_received(
+                    can.Message(
+                        timestamp=1704067200.0 + i,
+                        arbitration_id=0x64,
+                        is_extended_id=False,
+                        data=bytes(8),
+                    )
+                )
+
+        result = actions.convert(input_file=str(src), database_file=str(DBC_PATH))
+
+        assert result["messages_converted"] == 3
+        assert Path(result["output_file"]).is_file()
+
+
 class TestOpenInApp:
     """`_open_in_app`'s opener contract.
 
