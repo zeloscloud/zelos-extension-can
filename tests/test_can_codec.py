@@ -358,13 +358,16 @@ class TestTimestampHandling:
     def _corrected_at(out, start):
         return next(i for i in range(start, len(out)) if abs(out[i] - (1000.0 + i)) < 1.0)
 
-    def test_auto_in_sync_is_interface(self, mock_config):
+    def test_auto_within_floor_is_interface_verbatim(self, mock_config):
+        """5 s ahead is left alone: coherent with that machine's own logs."""
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            out = self._run(codec, 30, lambda t: t + 0.2)
+            out = self._run(codec, 120, lambda t: t + 5.0)
             assert codec.clock_state == ClockState.INTERFACE
-            assert out[0] == 1000.2
+            assert out[0] == 1005.0
+            assert out[119] == 1124.0
             assert codec.metrics.clock_steps == 0
+            assert codec.metrics.clock_deviation_windows == 0
 
     def test_auto_boot_relative_is_relative(self, mock_config):
         with patch("zelos_sdk.TraceSource"):
@@ -390,7 +393,7 @@ class TestTimestampHandling:
             assert 60 <= self._corrected_at(out, 20) - 20 <= 91
             assert 60 <= self._corrected_at(out, 170) - 170 <= 91
             assert codec.metrics.clock_steps == 2
-            assert codec.clock_state == ClockState.INTERFACE
+            assert codec.clock_state == ClockState.RELATIVE
             assert codec.hw_timestamp_offset == 0.0
 
     def test_auto_small_offset_is_left_alone(self, mock_config):

@@ -153,7 +153,8 @@ loopback, so every transmit is traced exactly once.
   timing but re-anchors to this machine when the two disagree by 10 s or
   more for a full minute, so an edge whose clock steps (NTP sync, RTC-less
   boot) is corrected within ~90 s of continuous traffic and logged; smaller
-  disagreements and link delay are left alone. `interface` and
+  disagreements and link delay are left alone, so a bus on a machine that is
+  a few seconds off stays coherent with that machine's own logs. `interface` and
   `relative` never correct. Details and examples: [docs/timestamps.md](docs/timestamps.md).
 
 ## Actions

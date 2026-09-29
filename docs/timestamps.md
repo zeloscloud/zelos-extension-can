@@ -20,10 +20,9 @@ Frames without a stamp use host time in every mode.
 stateDiagram-v2
     [*] --> start
     start --> host: first frame has no stamp
-    start --> interface: |host − stamp| < 1 s
+    start --> interface: |host − stamp| < 10 s, offset = 0
     start --> relative: otherwise, offset = host − stamp
-    interface --> relative: step, |new offset| ≥ 1 s
-    relative --> interface: step, |new offset| < 1 s (offset snaps to 0)
+    interface --> relative: step
     relative --> relative: step
     host --> host: terminal
 ```
@@ -43,14 +42,13 @@ verdict    OFF  if min(r) > +10 s  or  max(r) < −10 s      (STEP_MIN_S)
 
 persist    1st OFF window  → log "interface clock ±N s vs host, pending", count it
            2nd OFF in a row (STEP_PERSIST) with |min₂ − min₁| < 1 s → STEP:
-               offset += min₂   (the least-delay sample, either direction)
-               |offset| < 1 s → interface (snap to 0), else relative
+               offset += min₂   (the least-delay sample, either direction) → relative
 ```
 
 | Constant | Value | Why |
 |---|---|---|
-| `ENTRY_BAND_S` | 1 s | the first frame has no backlog yet; decides verbatim vs offset only |
-| `STEP_MIN_S` | 10 s | 3 s of real link delay fooled a 1 s floor in testing; 10 s sustained excess delay is a dead link, not congestion; adapter drift at 50 ppm needs ~55 h to reach it |
+| `STEP_MIN_S` | 10 s | below this the interface clock is left alone, at entry and forever after, so a bus on a machine that is a few seconds off stays coherent with that machine's own logs; 3 s of real link delay fooled a 1 s floor in testing; 10 s sustained excess delay is a dead link, not congestion; adapter drift at 50 ppm needs ~55 h to reach it |
+| `STEP_AGREE_S` | 1 s | two OFF windows must estimate the same step within this: a plateau, not a ramp still draining |
 | `STEP_WINDOW_S` | 30 s | TCP recovery after a delay change was turbulent for ~20 s when measured |
 | `STEP_PERSIST` | 2 | a false step needs ≥10 s of constant excess delay, stable to ±1 s, for a full 60 s |
 
@@ -75,9 +73,10 @@ Host clock is right; one frame per second.
 | Interface clock | `auto` does | Trace error |
 |---|---|---|
 | in sync | `interface` | 0 |
+| 5 s ahead from the start | `interface`, verbatim | 5 s, by design: coherent with that machine's logs |
 | 2 min ahead from the start | `relative`, offset −120 s | ~first-frame delay |
 | in sync, then steps +2 min at t=20 | `interface` → `relative` at t≈80–110 | 120 s for 60–90 s, then 0 |
-| 5 min behind (no RTC), NTP fixes it at t=20 | `relative` (+300) → `interface` at t≈80–110 | 300 s for 60–90 s, then 0 |
+| 5 min behind (no RTC), NTP fixes it at t=20 | `relative` (+300) → `relative` (≈0) at t≈80–110 | 300 s for 60–90 s, then 0 |
 | in sync, then steps +3 s | stays `interface` | 3 s, by design (below `STEP_MIN_S`) |
 | stamps missing (vcan over ssh with `-H`) | `host` | transport delay |
 | in sync, delivery stalls 5 s then bursts | stays `interface` | 0 (stamps were right) |

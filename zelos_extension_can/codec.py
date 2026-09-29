@@ -486,10 +486,12 @@ class Metrics:
 
 # Same constants as zelos_can's Rust handler; the machine is drawn in
 # docs/timestamps.md. Residual = host receive time minus resolved stamp.
-ENTRY_BAND_S = 1.0  # first-frame verbatim band; re-anchor snap-to-0 band
-STEP_MIN_S = 10.0  # a window is OFF only when every residual is beyond this
+STEP_MIN_S = (
+    10.0  # below this the interface clock is left alone (verbatim at entry, never corrected)
+)
+STEP_AGREE_S = 1.0  # two OFF windows must estimate the same step within this
 STEP_WINDOW_S = 30.0  # host time accumulated (min/max only) per window
-STEP_PERSIST = 2  # OFF windows in a row, agreeing within ENTRY_BAND_S
+STEP_PERSIST = 2  # OFF windows in a row before the offset moves
 
 # Native clock metrics before start, or from a zelos-can without clock tracking.
 _NATIVE_CLOCK_METRICS_UNSET = {
@@ -820,11 +822,11 @@ class CanCodec(can.Listener):
             return None
         if self.clock_state == ClockState.START:
             diff = now - hw_timestamp
-            if abs(diff) < ENTRY_BAND_S:
-                self._transition(ClockState.INTERFACE, "stamp within entry band of host")
+            if abs(diff) < STEP_MIN_S:
+                self._transition(ClockState.INTERFACE, "stamp within step floor of host")
             else:
                 self.hw_timestamp_offset = diff
-                self._transition(ClockState.RELATIVE, "stamp beyond entry band of host")
+                self._transition(ClockState.RELATIVE, "stamp beyond step floor of host")
         resolved = hw_timestamp + self.hw_timestamp_offset
         self._observe_residual(now - resolved, now)
         return int(resolved * 1e9)
@@ -847,7 +849,7 @@ class CanCodec(can.Listener):
         # The window minimum is the least-delay sample in either direction.
         estimate = self._clock_window_min
         self.metrics.clock_deviation_windows += 1
-        agrees = abs(estimate - self._clock_last_estimate) < ENTRY_BAND_S
+        agrees = abs(estimate - self._clock_last_estimate) < STEP_AGREE_S
         self._clock_off_windows = self._clock_off_windows + 1 if agrees else 1
         self._clock_last_estimate = estimate
         if self._clock_off_windows < STEP_PERSIST:
@@ -863,11 +865,7 @@ class CanCodec(can.Listener):
         self._clock_off_windows = 0
         self.hw_timestamp_offset += estimate
         self.metrics.clock_steps += 1
-        if abs(self.hw_timestamp_offset) < ENTRY_BAND_S:
-            self.hw_timestamp_offset = 0.0
-            self._transition(ClockState.INTERFACE, "re-anchored within entry band")
-        else:
-            self._transition(ClockState.RELATIVE, "re-anchored")
+        self._transition(ClockState.RELATIVE, "re-anchored")
 
     def _transition(self, to: ClockState, why: str) -> None:
         frm, self.clock_state = self.clock_state, to
