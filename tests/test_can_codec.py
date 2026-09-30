@@ -931,3 +931,44 @@ class TestBusInitRetry:
             pytest.raises(can.CanInitializationError, match="driver missing"),
         ):
             codec.start()
+
+
+def _supervise(codec, monkeypatch, on_tick):
+    """Run the python-can supervisor, calling on_tick(n) after each 5 s sleep."""
+    real_sleep, ticks = asyncio.sleep, []
+
+    async def sleep(s):
+        if s == 5.0:
+            ticks.append(s)
+            on_tick(len(ticks))
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    asyncio.run(codec._run_async())
+
+
+def test_reconnect_rearms_periodic_on_new_bus(codec, monkeypatch):
+    codec.start()
+    tid = codec.start_periodic_raw("0x123", "01 02", period_ms=10)["task_id"]
+    listed = lambda: codec.get_tx_state()["bus"]["periodics"]  # noqa: E731
+    before, old_bus, seen = listed(), codec.bus, []
+    monkeypatch.setattr(codec, "_check_bus_health", lambda: len(seen) > 0)
+    real_shutdown = old_bus.shutdown
+
+    def unplugged():  # a vanished serial adapter fails its own shutdown
+        real_shutdown()
+        raise can.CanOperationError("Could not write to serial device")
+
+    old_bus.shutdown = unplugged
+
+    def tick(n):
+        if n == 1:
+            return  # unhealthy: reconnect
+        seen.append((codec.running, codec.bus, listed()))
+        raise asyncio.CancelledError
+
+    _supervise(codec, monkeypatch, tick)
+    running, bus, after = seen[0]
+    assert running and bus is not old_bus and after == before
+    assert codec._periodic_tasks[tid] in bus._periodic_tasks
+    codec.stop()

@@ -127,14 +127,21 @@ def trace(
         config, bus_name=bus_name, source=zelos_sdk.TraceSource(prefix) if prefix else None
     )
 
-    setup_shutdown_handler(codec)
+    setup_shutdown_handler()
 
     # Run with optional trace writer
     logger.info("Starting CAN trace...")
+    # The only place the codec is stopped: before the trace writer closes.
     if output_file:
         with zelos_sdk.TraceWriter(str(output_file)):
+            try:
+                codec.start()
+                codec.run()
+            finally:
+                codec.stop()
+    else:
+        try:
             codec.start()
             codec.run()
-    else:
-        codec.start()
-        codec.run()
+        finally:
+            codec.stop()
