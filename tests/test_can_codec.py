@@ -860,3 +860,74 @@ def test_stop_joins_reader_before_bus_shutdown(codec):
 
     readers, alive = asyncio.run(run())
     assert readers and alive == [False]
+
+
+class TestBusInitRetry:
+    """What a failed bus open leaves behind, and what the next attempt finds."""
+
+    @staticmethod
+    def _codec(interface: str, channel: str) -> CanCodec:
+        with patch("zelos_sdk.TraceSource"):
+            return CanCodec({"interface": interface, "channel": channel, "bitrate": 500000})
+
+    def test_a_pcan_channel_left_initialized_is_released_before_the_retry(self):
+        """PCAN_ERROR_CAUTION: the driver still holds the bitrate of a killed previous user."""
+        from can.interfaces.pcan.basic import PCAN_CHANNEL_NAMES
+
+        codec = self._codec("pcan", "PCAN_USBBUS1")
+        caution = can.CanInitializationError(
+            "An operation was successfully carried out, but irregularities were registered"
+        )
+        pcan = MagicMock()
+        with (
+            patch("can.Bus", side_effect=[caution, MagicMock()]) as bus,
+            patch("can.interfaces.pcan.basic.PCANBasic", return_value=pcan),
+            patch("zelos_extension_can.codec.time.sleep"),
+        ):
+            codec.start()
+
+        assert bus.call_count == 2
+        pcan.Uninitialize.assert_called_once_with(PCAN_CHANNEL_NAMES["PCAN_USBBUS1"])
+        assert codec.running
+
+    def test_every_failed_pcan_attempt_is_released_and_the_last_error_raised(self):
+        codec = self._codec("pcan", "PCAN_USBBUS2")
+        pcan = MagicMock()
+        with (
+            patch("can.Bus", side_effect=can.CanInitializationError("no")),
+            patch("can.interfaces.pcan.basic.PCANBasic", return_value=pcan),
+            patch("zelos_extension_can.codec.time.sleep"),
+            pytest.raises(can.CanInitializationError),
+        ):
+            codec.start()
+
+        assert pcan.Uninitialize.call_count == 3
+        assert not codec.running
+
+    @pytest.mark.parametrize(
+        ("interface", "channel"), [("slcan", "COM3"), ("kvaser", "0"), ("pcan", "PCAN_NOSUCHBUS")]
+    )
+    def test_nothing_is_released_for_another_interface_or_an_unknown_channel(
+        self, interface, channel
+    ):
+        codec = self._codec(interface, channel)
+        pcan = MagicMock()
+        with (
+            patch("can.Bus", side_effect=[can.CanInitializationError("no"), MagicMock()]),
+            patch("can.interfaces.pcan.basic.PCANBasic", return_value=pcan),
+            patch("zelos_extension_can.codec.time.sleep"),
+        ):
+            codec.start()
+
+        pcan.Uninitialize.assert_not_called()
+        assert codec.running
+
+    def test_a_missing_pcan_library_does_not_hide_the_open_error(self):
+        codec = self._codec("pcan", "PCAN_USBBUS1")
+        with (
+            patch("can.Bus", side_effect=can.CanInitializationError("driver missing")),
+            patch("can.interfaces.pcan.basic.PCANBasic", side_effect=OSError("PCANBasic.dll")),
+            patch("zelos_extension_can.codec.time.sleep"),
+            pytest.raises(can.CanInitializationError, match="driver missing"),
+        ):
+            codec.start()
