@@ -438,8 +438,7 @@ def export_trace_to_log(
 #
 # Both answer the app's schema hooks in `config.schema.json`: the root
 # `ui:options.autoconfig` button, and the `action-choices` widget on a
-# socketcan channel. They read sysfs only — no privileges, no python-can, and
-# nothing that needs the extension to be running.
+# socketcan channel. Neither needs privileges or the extension to be running.
 
 #: Where Linux publishes its network interfaces. A CAN interface is a netdev
 #: like any other, told apart by its ARPHRD type.
@@ -506,11 +505,83 @@ def _local_can_interfaces() -> list[dict[str, str]]:
     return sorted(found, key=_interface_rank)
 
 
+#: Vendor backends that list their own adapters, named as the Interface enum names them.
+#: Linux is left out: there the kernel drivers present these adapters as SocketCAN.
+_VENDOR_INTERFACES = ("pcan", "kvaser", "vector")
+
+#: USB IDs of serial adapters that speak slcan: the CANable's slcan firmware and the LAWICEL CANUSB.
+_SLCAN_USB_IDS = frozenset({(0x16D0, 0x117E), (0x0403, 0xFFA8)})
+
+#: python-can's loggers that warn when a vendor library is absent, which is the usual case.
+#: Only these: in a live extension the running bus logs through its own logger meanwhile.
+_MISSING_LIBRARY_LOGGERS = ("can.kvaser", "can.interfaces.vector.canlib")
+
+#: What a found adapter's bus starts at. The bus's real bitrate cannot be read off the adapter.
+_ADAPTER_BITRATE = 500_000
+
+
+def _vendor_adapters() -> list[dict[str, str]]:
+    """PCAN, Kvaser and Vector channels whose driver library is installed and finds them."""
+    if sys.platform == "linux":
+        return []
+    import can  # deferred: the Linux path and the demo never need it
+
+    quiet = [logging.getLogger(name) for name in _MISSING_LIBRARY_LOGGERS]
+    levels = [quiet_logger.level for quiet_logger in quiet]
+    for quiet_logger in quiet:
+        quiet_logger.setLevel(logging.ERROR)
+    found = []
+    try:
+        for interface in _VENDOR_INTERFACES:
+            try:
+                configs = can.detect_available_configs(interfaces=[interface])
+            except Exception:  # a broken vendor driver hides its adapters, not the others
+                logger.debug("Adapter detection failed for %s", interface, exc_info=True)
+                continue
+            found += [
+                {
+                    "interface": interface,
+                    "channel": str(config["channel"]),
+                    "name": str(config.get("device_name") or interface),
+                }
+                for config in configs
+            ]
+    finally:
+        for quiet_logger, level in zip(quiet, levels, strict=True):
+            quiet_logger.setLevel(level)
+    return found
+
+
+def _running_adapter_bitrates() -> dict[tuple[str, str], int]:
+    """The adapter buses this extension is running, by (interface, channel), with their bitrate.
+
+    Empty in a standalone run, where the extension is stopped and holds no channel.
+    """
+    running = {}
+    for codec in CAN_CODECS.values():
+        interface = codec.config.get("interface")
+        if interface in (*_VENDOR_INTERFACES, "slcan") and "bitrate" in codec.config:
+            running[(interface, str(codec.config["channel"]))] = int(codec.config["bitrate"])
+    return running
+
+
+def _slcan_adapters() -> list[dict[str, str]]:
+    """Serial ports whose USB ID belongs to an slcan adapter."""
+    from serial.tools import list_ports
+
+    return [
+        {"interface": "slcan", "channel": port.device, "name": port.description or "slcan adapter"}
+        for port in list_ports.comports()
+        if (port.vid, port.pid) in _SLCAN_USB_IDS
+    ]
+
+
 @action(
     "List CAN Interfaces",
     "SocketCAN interfaces on the machine running the agent, as choices for a "
     "bus's Channel field, which also accepts a name typed by hand. Empty on "
-    "macOS/Windows, which have no SocketCAN.",
+    "macOS/Windows, which have no SocketCAN; Auto-configure finds PCAN, Kvaser, "
+    "Vector and slcan adapters there.",
     # Reading sysfs opens no socket and needs no privileges, and the config form
     # wants the list before the extension has ever run.
     standalone=True,
@@ -525,43 +596,71 @@ def list_interfaces() -> dict[str, Any]:
 
 @action(
     "Auto-configure",
-    "One socketcan bus per SocketCAN interface on the machine running the "
-    "agent, or a demo bus where there is none (macOS/Windows), for the config "
-    "form's Auto-configure button. Review it, then save and start.",
+    "One bus per CAN adapter on the machine running the agent: SocketCAN "
+    "interfaces on Linux, and PCAN, Kvaser, Vector and slcan adapters on any OS. "
+    "A demo bus where there is none. For the config form's Auto-configure "
+    "button. Review it, then save and start.",
     standalone=True,
 )
 def auto_config() -> dict[str, Any]:
     """The app's auto-configure contract: the keys of `config` replace the form's.
 
     Only `buses` is returned, so whatever is set under Advanced survives. Never
-    an ssh-socketcan bus: there is no remote host to guess. No SocketCAN
-    interface (always the case on macOS/Windows) yields one demo bus, with a
-    `message` the form shows in its confirmation toast (older apps ignore it).
+    an ssh-socketcan bus: there is no remote host to guess. No adapter at all
+    yields one demo bus. `message` is shown in the form's confirmation toast
+    (older apps ignore it).
     """
     interfaces = _local_can_interfaces()
-    if not interfaces:
+    # An slcan adapter slcand already attached is a SocketCAN interface, and slcand holds its port.
+    attached = any(iface["name"].startswith("slcan") for iface in interfaces)
+    adapters = _vendor_adapters() + ([] if attached else _slcan_adapters())
+    # A channel this extension holds can drop out of detection (PCAN on macOS lists free
+    # channels only), and a running bus keeps the bitrate it runs at.
+    running = _running_adapter_bitrates()
+    detected = {(a["interface"], a["channel"]) for a in adapters}
+    adapters += [
+        {"interface": interface, "channel": channel, "name": interface}
+        for interface, channel in running
+        if (interface, channel) not in detected
+    ]
+    if not interfaces and not adapters:
         return {
             "status": "success",
             "config": {"buses": [{"name": "demo", "interface": "demo"}]},
             "message": (
-                "No SocketCAN interface on this machine, so a demo bus was added. For "
-                "hardware, set its interface: pcan/kvaser/vector/slcan, or ssh-socketcan "
-                "for a remote device."
+                "No CAN adapter found on this machine, so a demo bus was added. Plug in "
+                "the adapter and install its driver, or set its interface by hand: "
+                "pcan/kvaser/vector/slcan, or ssh-socketcan for a remote device."
             ),
         }
     # socketcan, not socketcan-py: the Rust bus is the native local path.
     # No `name`, so each bus is named after its channel. A down interface is
     # configured as it is, with no note: the button surfaces only an error
     # message, and the Channel picker already labels it `down`.
-    return {
-        "status": "success",
-        "config": {
-            "buses": [
-                {"interface": "socketcan", "channel": iface["name"], "database_files": []}
-                for iface in interfaces
-            ]
-        },
-    }
+    buses: list[dict[str, Any]] = [
+        {"interface": "socketcan", "channel": iface["name"], "database_files": []}
+        for iface in interfaces
+    ]
+    buses += [
+        {
+            "interface": adapter["interface"],
+            "channel": adapter["channel"],
+            "bitrate": running.get((adapter["interface"], adapter["channel"]), _ADAPTER_BITRATE),
+            "database_files": [],
+        }
+        for adapter in adapters
+    ]
+    result: dict[str, Any] = {"status": "success", "config": {"buses": buses}}
+    if adapters:
+        found = ", ".join(f"{a['name']} on {a['channel']}" for a in adapters)
+        rate = f"{_ADAPTER_BITRATE // 1000} kbit/s"
+        setting = (
+            f"Running buses keep their bitrate; new ones are set to {rate}."
+            if running
+            else f"Each is set to {rate}."
+        )
+        result["message"] = f"Found {found}. {setting} Change Bitrate to match your bus."
+    return result
 
 
 # ─── Standalone (runs with the extension stopped) ───────────────────────────

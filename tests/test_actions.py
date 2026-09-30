@@ -8,7 +8,9 @@ discovery action) is its own thing and worth covering directly.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -303,8 +305,31 @@ def _sys_class_net(root: Path) -> Path:
     return net
 
 
+def _port(device: str, vid: int | None, pid: int | None, description: str = "") -> SimpleNamespace:
+    """A pyserial ListPortInfo, reduced to the fields detection reads."""
+    return SimpleNamespace(device=device, vid=vid, pid=pid, description=description)
+
+
+#: A PCAN-USB Pro FD as python-can 4.6.1 reports it on Windows: two CAN channels.
+_PCAN_PRO_FD = [
+    {
+        "interface": "pcan",
+        "channel": f"PCAN_USBBUS{n}",
+        "supports_fd": True,
+        "device_name": "PCAN-USB Pro FD",
+    }
+    for n in (1, 2)
+]
+
+
 class TestConfigFormHooks:
     """The two schema hooks the app calls on a form that has never started."""
+
+    @pytest.fixture(autouse=True)
+    def _no_adapters(self, monkeypatch):
+        """Hide this machine's own adapters and serial ports; a test adds the ones it needs."""
+        monkeypatch.setattr(actions, "_vendor_adapters", list)
+        monkeypatch.setattr(actions, "_slcan_adapters", list)
 
     def test_list_interfaces_offers_can_devices_only_hardware_first(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "linux")
@@ -354,6 +379,151 @@ class TestConfigFormHooks:
         assert result["config"] == {"buses": [{"name": "demo", "interface": "demo"}]}
         assert "ssh-socketcan" in result["message"]  # the way out on a laptop
 
+    def test_auto_config_adds_one_bus_per_adapter_channel(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+        monkeypatch.setattr(
+            actions,
+            "_vendor_adapters",
+            lambda: [
+                {"interface": "pcan", "channel": c["channel"], "name": c["device_name"]}
+                for c in _PCAN_PRO_FD
+            ],
+        )
+
+        assert actions.auto_config() == {
+            "status": "success",
+            "config": {
+                "buses": [
+                    {
+                        "interface": "pcan",
+                        "channel": "PCAN_USBBUS1",
+                        "bitrate": 500_000,
+                        "database_files": [],
+                    },
+                    {
+                        "interface": "pcan",
+                        "channel": "PCAN_USBBUS2",
+                        "bitrate": 500_000,
+                        "database_files": [],
+                    },
+                ]
+            },
+            "message": (
+                "Found PCAN-USB Pro FD on PCAN_USBBUS1, PCAN-USB Pro FD on PCAN_USBBUS2. "
+                "Each is set to 500 kbit/s. Change Bitrate to match your bus."
+            ),
+        }
+
+    def test_auto_config_keeps_a_running_bus_detection_cannot_see(self, monkeypatch, tmp_path):
+        """PCAN on macOS lists only free channels, so the one this extension holds drops out."""
+        monkeypatch.setattr(actions.sys, "platform", "darwin")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+        monkeypatch.setattr(
+            actions,
+            "_vendor_adapters",
+            lambda: [{"interface": "pcan", "channel": "PCAN_USBBUS2", "name": "pcan"}],
+        )
+        running = SimpleNamespace(
+            config={"interface": "pcan", "channel": "PCAN_USBBUS1", "bitrate": 250_000}
+        )
+        monkeypatch.setitem(actions.CAN_CODECS, "PCAN_USBBUS1", running)
+
+        result = actions.auto_config()
+
+        assert result["config"]["buses"] == [
+            {
+                "interface": "pcan",
+                "channel": "PCAN_USBBUS2",
+                "bitrate": 500_000,
+                "database_files": [],
+            },
+            {
+                "interface": "pcan",
+                "channel": "PCAN_USBBUS1",
+                "bitrate": 250_000,
+                "database_files": [],
+            },
+        ]
+        assert result["message"] == (
+            "Found pcan on PCAN_USBBUS2, pcan on PCAN_USBBUS1. Running buses keep their "
+            "bitrate; new ones are set to 500 kbit/s. Change Bitrate to match your bus."
+        )
+
+    def test_auto_config_keeps_the_bitrate_of_a_detected_running_bus(self, monkeypatch, tmp_path):
+        """Windows lists an occupied PCAN channel too; its bitrate must not reset to 500k."""
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+        monkeypatch.setattr(
+            actions,
+            "_vendor_adapters",
+            lambda: [{"interface": "pcan", "channel": "PCAN_USBBUS1", "name": "PCAN-USB"}],
+        )
+        running = SimpleNamespace(
+            config={"interface": "pcan", "channel": "PCAN_USBBUS1", "bitrate": 1_000_000}
+        )
+        monkeypatch.setitem(actions.CAN_CODECS, "PCAN_USBBUS1", running)
+
+        buses = actions.auto_config()["config"]["buses"]
+
+        assert buses == [
+            {
+                "interface": "pcan",
+                "channel": "PCAN_USBBUS1",
+                "bitrate": 1_000_000,
+                "database_files": [],
+            }
+        ]
+
+    def test_a_running_socketcan_or_demo_bus_adds_no_adapter(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+        monkeypatch.setitem(
+            actions.CAN_CODECS,
+            "demo",
+            SimpleNamespace(config={"interface": "demo", "name": "demo"}),
+        )
+
+        assert actions.auto_config()["config"] == {"buses": [{"name": "demo", "interface": "demo"}]}
+
+    def test_auto_config_buses_are_valid_config(self, monkeypatch, tmp_path):
+        """What the button writes must pass the schema the form saves against."""
+        jsonschema = pytest.importorskip("jsonschema")
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+        monkeypatch.setattr(
+            actions,
+            "_vendor_adapters",
+            lambda: [{"interface": "kvaser", "channel": "0", "name": "Kvaser"}],
+        )
+        monkeypatch.setattr(
+            actions,
+            "_slcan_adapters",
+            lambda: [{"interface": "slcan", "channel": "COM3", "name": "CANable"}],
+        )
+        schema = json.loads((Path(__file__).parents[1] / "config.schema.json").read_text())
+
+        jsonschema.Draft7Validator(schema).validate(actions.auto_config()["config"])
+
+    def test_auto_config_skips_serial_ports_slcand_already_attached(self, monkeypatch, tmp_path):
+        net = _sys_class_net(tmp_path)
+        slcan0 = net / "slcan0"
+        slcan0.mkdir()
+        (slcan0 / "type").write_text("280\n")
+        (slcan0 / "operstate").write_text("up\n")
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", net)
+        monkeypatch.setattr(
+            actions,
+            "_slcan_adapters",
+            lambda: [{"interface": "slcan", "channel": "/dev/ttyACM0", "name": "CANable"}],
+        )
+
+        buses = actions.auto_config()["config"]["buses"]
+
+        assert {bus["interface"] for bus in buses} == {"socketcan"}
+        assert "slcan0" in {bus["channel"] for bus in buses}
+
     def test_schema_hooks_name_actions_that_exist(self):
         """Both hooks wire the form to an action by name, so a rename breaks the
         form silently. `get_standalone_actions` is the same index the packaged
@@ -368,3 +538,81 @@ class TestConfigFormHooks:
 
         assert named == {f"{ACTION_PREFIX}/auto_config", f"{ACTION_PREFIX}/list_interfaces"}
         assert {n.split("/", 1)[1] for n in named} <= set(get_standalone_actions())
+
+
+class TestAdapterDetection:
+    """What each detection source reports, with the vendor libraries and serial ports stubbed."""
+
+    def test_vendor_adapters_list_each_channel_as_the_interface_enum_names_it(self, monkeypatch):
+        answers = {
+            "pcan": _PCAN_PRO_FD,
+            "kvaser": [{"interface": "kvaser", "channel": 0}],
+            "vector": [],
+        }
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+
+        with patch(
+            "can.detect_available_configs", side_effect=lambda interfaces: answers[interfaces[0]]
+        ):
+            found = actions._vendor_adapters()
+
+        assert found == [
+            {"interface": "pcan", "channel": "PCAN_USBBUS1", "name": "PCAN-USB Pro FD"},
+            {"interface": "pcan", "channel": "PCAN_USBBUS2", "name": "PCAN-USB Pro FD"},
+            {"interface": "kvaser", "channel": "0", "name": "kvaser"},
+        ]
+
+    def test_a_failing_vendor_library_hides_only_its_own_adapters(self, monkeypatch):
+        def detect(interfaces):
+            if interfaces == ["kvaser"]:
+                raise OSError("canlib32.dll is broken")
+            return _PCAN_PRO_FD if interfaces == ["pcan"] else []
+
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        with patch("can.detect_available_configs", side_effect=detect):
+            found = actions._vendor_adapters()
+
+        assert [a["channel"] for a in found] == ["PCAN_USBBUS1", "PCAN_USBBUS2"]
+
+    def test_detection_mutes_only_missing_library_warnings(self, monkeypatch, caplog):
+        """A live extension's bus keeps logging while Auto-configure runs in its process."""
+
+        def detect(interfaces):
+            logging.getLogger("can.kvaser").warning("Kvaser canlib is unavailable.")
+            logging.getLogger("can.interfaces.vector.canlib").warning("Could not import vxlapi")
+            logging.getLogger("can.pcan").warning("Bus error on the running bus")
+            return []
+
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        levels = {n: logging.getLogger(n).level for n in actions._MISSING_LIBRARY_LOGGERS}
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("can.detect_available_configs", side_effect=detect),
+        ):
+            actions._vendor_adapters()
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert messages.count("Bus error on the running bus") == 3
+        assert not any("Kvaser" in m or "vxlapi" in m for m in messages)
+        assert {n: logging.getLogger(n).level for n in levels} == levels
+
+    def test_linux_leaves_vendor_adapters_to_socketcan(self, monkeypatch):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        with patch("can.detect_available_configs") as detect:
+            assert actions._vendor_adapters() == []
+        detect.assert_not_called()
+
+    def test_slcan_adapters_are_serial_ports_with_an_slcan_usb_id(self):
+        ports = [
+            _port("COM1", None, None, "Communications Port (COM1)"),
+            _port("COM3", 0x16D0, 0x117E, "CANable"),
+            _port("COM4", 0x0403, 0xFFA8, "CANUSB"),
+            _port("COM5", 0x0403, 0x6001, "USB Serial Port"),
+        ]
+        with patch("serial.tools.list_ports.comports", return_value=ports):
+            found = actions._slcan_adapters()
+
+        assert found == [
+            {"interface": "slcan", "channel": "COM3", "name": "CANable"},
+            {"interface": "slcan", "channel": "COM4", "name": "CANUSB"},
+        ]
