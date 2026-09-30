@@ -343,8 +343,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         for codec, codec_name in codec_pairs:
             can_actions.CAN_CODECS[codec_name] = codec
 
-        for codec in codecs:
-            setup_shutdown_handler(codec)
+        setup_shutdown_handler()
 
         bus_count = len(codecs)
         logger.info(f"Starting CAN extension with {bus_count} bus{'es' if bus_count > 1 else ''}")

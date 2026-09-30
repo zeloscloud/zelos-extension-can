@@ -8,11 +8,8 @@ from types import FrameType
 logger = logging.getLogger(__name__)
 
 
-def setup_shutdown_handler(codec) -> None:
-    """Setup signal handlers for graceful shutdown.
-
-    :param codec: CAN codec instance to stop on shutdown
-    """
+def setup_shutdown_handler() -> None:
+    """Exit on SIGINT/SIGTERM; each entry point stops its codecs in a finally."""
 
     def shutdown_handler(signum: int, frame: FrameType | None) -> None:
         """Handle graceful shutdown.
@@ -21,7 +18,6 @@ def setup_shutdown_handler(codec) -> None:
         :param frame: Current stack frame
         """
         logger.info("Shutting down CAN extension...")
-        codec.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, shutdown_handler)

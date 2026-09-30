@@ -741,6 +741,8 @@ class CanCodec(can.Listener):
         # Slot metadata so get_tx_state can reconstruct what each task is
         # sending without poking the task object's internals.
         self._periodic_slots: dict[str, dict[str, Any]] = {}
+        # (message, period_s, mode) per task, to re-arm on a python-can reconnect.
+        self._periodic_specs: dict[str, tuple[can.Message, float, str]] = {}
 
     def _message_key(self, frame_id: int, is_extended: bool) -> tuple[int, bool]:
         """Build a stable message lookup key from CAN ID and frame format."""
@@ -1018,6 +1020,7 @@ class CanCodec(can.Listener):
             task.stop()
         self._periodic_tasks.clear()
         self._periodic_slots.clear()
+        self._periodic_specs.clear()
 
         if self._native is not None:
             # Snapshot RX + TX counters before tearing down — the native handle
@@ -1095,14 +1098,23 @@ class CanCodec(can.Listener):
         try:
             if self.bus:
                 logger.debug("[%s] Shutting down existing bus object...", self.bus_name)
-                self.bus.shutdown()
-                self.bus = None
+                bus, self.bus = self.bus, None
+                # A vanished device fails its own shutdown; that must not block reopening.
+                try:
+                    bus.shutdown()
+                except Exception as e:
+                    logger.warning("[%s] Old bus shutdown failed: %s", self.bus_name, e)
 
             logger.debug("[%s] Waiting 1 second before reinitializing bus...", self.bus_name)
             await asyncio.sleep(1)
 
             logger.debug("[%s] Reinitializing bus...", self.bus_name)
             self.start()
+            # shutdown() stopped the periodics with the old bus; a failed start
+            # leaves them pending for the next attempt.
+            for tid, (msg, period_s, mode) in list(self._periodic_specs.items()):
+                self._spawn_periodic(tid, msg, period_s, mode)
+                logger.info("[%s] re-armed periodic %s", self.bus_name, tid)
             return True
         except Exception as e:
             logger.error("[%s] Bus reconnection failed: %s", self.bus_name, e)
@@ -1240,14 +1252,16 @@ class CanCodec(can.Listener):
                 self.bus_name,
             )
 
-    def _stop_notifier(self) -> None:
-        """Stop and join the python-can reader, if any.
+    def _start_notifier(self) -> None:
+        # A bare callback: Notifier.stop() calls stop() on Listener objects,
+        # which would stop the codec (and its periodics) on every reconnect.
+        self._notifier = can.Notifier(self.bus, [self.on_message_received])
 
-        Detached first: Notifier.stop() calls listener.stop(), i.e. stop().
-        """
-        notifier, self._notifier = self._notifier, None
-        if notifier is not None:
-            notifier.stop()
+    def _stop_notifier(self) -> None:
+        """Stop and join the python-can reader, if any."""
+        if self._notifier is not None:
+            self._notifier.stop()
+            self._notifier = None
 
     async def _handle_reconnection(self) -> None:
         """Handle bus reconnection and notifier recreation."""
@@ -1255,7 +1269,7 @@ class CanCodec(can.Listener):
         self._stop_notifier()
 
         if await self._reconnect_bus():
-            self._notifier = can.Notifier(self.bus, [self])
+            self._start_notifier()
         else:
             logger.error(
                 "[%s] Reconnection failed - bus remains uninitialized, will retry in 5 seconds",
@@ -1340,7 +1354,7 @@ class CanCodec(can.Listener):
             logger.error("[%s] Bus not initialized, call start() first", self.bus_name)
             return
 
-        self._notifier = can.Notifier(self.bus, [self])
+        self._start_notifier()
 
         if self.demo_mode:
             self.demo_task = asyncio.create_task(
@@ -1364,7 +1378,7 @@ class CanCodec(can.Listener):
         except Exception as e:
             logger.exception("[%s] Error in CAN reception loop: %s", self.bus_name, e)
         finally:
-            self._stop_notifier()
+            # The reader is stopped by stop(), after the periodics, so none go untraced.
             logger.info("[%s] CAN reception stopped", self.bus_name)
 
     def _update_receive_metrics(self, msg: can.Message) -> None:
@@ -2042,11 +2056,13 @@ class CanCodec(can.Listener):
     def _spawn_periodic(self, tid: str, msg: can.Message, period_s: float, mode: str) -> None:
         task = self.bus.send_periodic(msg, period_s, autostart=True)
         self._periodic_tasks[tid] = task
+        self._periodic_specs[tid] = (msg, period_s, mode)
         logger.info("started periodic %s mode=%s period=%.3fs", tid, mode, period_s)
 
     def _stop_slot_if_present(self, tid: str) -> bool:
         task = self._periodic_tasks.pop(tid, None)
         self._periodic_slots.pop(tid, None)
+        self._periodic_specs.pop(tid, None)
         if task is None:
             return False
         task.stop()
