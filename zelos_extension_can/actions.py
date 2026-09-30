@@ -81,6 +81,7 @@ def _clear_destination(destination: Path, overwrite: bool) -> None:
     "List Codecs",
     "Names of all CAN codecs (buses) currently registered on this extension. "
     "Consumers use this to discover what `codec` values the other actions accept.",
+    read_only=True,
 )
 def list_codecs() -> dict[str, Any]:
     return {"codecs": _available_codecs()}
@@ -92,6 +93,7 @@ def list_codecs() -> dict[str, Any]:
 @action(
     "Get TX State",
     "Stateless snapshot of one bus: its periodics and bus-health metrics.",
+    read_only=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 def get_tx_state(codec: str) -> dict[str, Any]:
@@ -105,6 +107,7 @@ def get_tx_state(codec: str) -> dict[str, Any]:
     "trace event name), which is what the transmit actions address. Use "
     "describe_message to fetch a specific message's full signal detail on "
     "demand.",
+    read_only=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 def list_messages(codec: str) -> dict[str, Any]:
@@ -117,6 +120,7 @@ def list_messages(codec: str) -> dict[str, Any]:
     "value tables, mux structure). "
     "`message` is a key from list_messages, or a name only one "
     "definition carries.",
+    read_only=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.text("message", title="DBC message key or name")
@@ -190,6 +194,7 @@ def send_message(codec: str, message: str, signals_json: str, mux: str = "") -> 
     "send_message would emit. "
     "`message` is a key from list_messages, or a name only one "
     "definition carries.",
+    read_only=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.text("message", title="DBC message key or name")
