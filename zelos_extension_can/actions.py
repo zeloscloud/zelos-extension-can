@@ -588,6 +588,7 @@ def _slcan_adapters() -> list[dict[str, str]]:
     # Reading sysfs opens no socket and needs no privileges, and the config form
     # wants the list before the extension has ever run.
     standalone=True,
+    read_only=True,
 )
 def list_interfaces() -> dict[str, Any]:
     """The app's `action-choices` contract: `choices` in the order to show."""
@@ -604,6 +605,9 @@ def list_interfaces() -> dict[str, Any]:
     "A demo bus where there is none. For the config form's Auto-configure "
     "button. Review it, then save and start.",
     standalone=True,
+    # Detection enumerates adapters and opens none; the config it returns is a
+    # proposal the form applies only when saved.
+    read_only=True,
 )
 def auto_config() -> dict[str, Any]:
     """The app's auto-configure contract: the keys of `config` replace the form's.
