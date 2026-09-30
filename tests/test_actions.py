@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from zelos_sdk.actions import Action
 from zelos_sdk.extensions.actions import get_standalone_actions
 
 from zelos_extension_can import ACTION_PREFIX, actions
@@ -538,6 +539,19 @@ class TestConfigFormHooks:
 
         assert named == {f"{ACTION_PREFIX}/auto_config", f"{ACTION_PREFIX}/list_interfaces"}
         assert {n.split("/", 1)[1] for n in named} <= set(get_standalone_actions())
+
+
+def test_only_detection_is_declared_read_only():
+    """Zelos AI runs a read-only action without asking, so the set is pinned: each
+    declaration is a deliberate choice. Detection enumerates adapters and opens none."""
+    if "read_only" not in Action.__slots__:
+        pytest.skip("this zelos-sdk predates read_only and ignores the declaration")
+    declared = {
+        name
+        for name, obj in vars(actions).items()
+        if callable(obj) and hasattr(obj, "_action") and obj._action.read_only
+    }
+    assert declared == {"auto_config", "list_interfaces"}
 
 
 class TestAdapterDetection:
