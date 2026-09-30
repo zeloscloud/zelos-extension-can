@@ -36,12 +36,11 @@ All configuration is managed through the Zelos App settings interface.
 ### Filling in the form
 
 Both hooks read the machine running the agent, need no privileges, and work
-before the extension has ever started. Neither finds anything on macOS/Windows,
-which have no SocketCAN.
+before the extension has ever started.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One `socketcan` bus per SocketCAN interface on that machine, hardware before `vcan`, a down interface included as it is. With no SocketCAN interface (always so on macOS/Windows), one `demo` bus. Review it, save, then start. Advanced settings are left as they are. |
+| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one `socketcan` bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one `pcan`, `kvaser` or `vector` bus per channel whose vendor driver finds it. On any OS, one `slcan` bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one `demo` bus. Review it, save, then start. Advanced settings are left as they are. |
 | **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `socketcan-py` bus. You can still type a name. |
 
 ### Required Settings
