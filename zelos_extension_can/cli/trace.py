@@ -7,7 +7,8 @@ from pathlib import Path
 import rich_click as click
 import zelos_sdk
 
-from ..codec import DEFAULT_PREFIX, CanCodec, name_error
+from ..codec import CanCodec
+from ..naming import DEFAULT_PREFIX, name_error
 from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)

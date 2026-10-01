@@ -24,21 +24,22 @@ import can
 import cantools
 import pytest
 
-from zelos_extension_can.codec import (
-    CanCodec,
-    _derive_bus_status,
-    _describe_dbc_signal,
-    _encode_dbc,
-    _hash_dbc_file,
-    _parse_can_id,
-    _parse_data_hex,
-    _parse_mux,
-    _parse_signals_json,
-    _raw_slot,
-    _scale_precision,
-    _task_id,
-    _validate_id_range,
-    _value_table_for_trace,
+from zelos_extension_can.codec import CanCodec, _derive_bus_status
+from zelos_extension_can.dbc import (
+    describe_dbc_signal,
+    encode_dbc,
+    hash_dbc_file,
+    scale_precision,
+    value_table_for_trace,
+)
+from zelos_extension_can.params import (
+    parse_can_id,
+    parse_data_hex,
+    parse_mux,
+    parse_signals_json,
+    periodic_task_id,
+    raw_slot,
+    validate_id_range,
 )
 
 DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
@@ -82,48 +83,48 @@ def codec_b():
 
 class TestPureHelpers:
     def test_parse_can_id_accepts_0x_and_bare_hex(self):
-        assert _parse_can_id("0x100") == 0x100
-        assert _parse_can_id("0X1FF") == 0x1FF
-        assert _parse_can_id("100") == 0x100
-        assert _parse_can_id("  0x7ff  ") == 0x7FF
+        assert parse_can_id("0x100") == 0x100
+        assert parse_can_id("0X1FF") == 0x1FF
+        assert parse_can_id("100") == 0x100
+        assert parse_can_id("  0x7ff  ") == 0x7FF
 
     def test_parse_data_hex_tolerates_spaces_and_commas(self):
-        assert _parse_data_hex("01 02 03 04") == b"\x01\x02\x03\x04"
-        assert _parse_data_hex("01,02,03") == b"\x01\x02\x03"
-        assert _parse_data_hex("") == b""
+        assert parse_data_hex("01 02 03 04") == b"\x01\x02\x03\x04"
+        assert parse_data_hex("01,02,03") == b"\x01\x02\x03"
+        assert parse_data_hex("") == b""
 
     def test_validate_id_range_standard_vs_extended(self):
-        _validate_id_range(0x7FF, is_extended=False)
+        validate_id_range(0x7FF, is_extended=False)
         with pytest.raises(ValueError, match="out of range for standard"):
-            _validate_id_range(0x800, is_extended=False)
-        _validate_id_range(0x1FFFFFFF, is_extended=True)
+            validate_id_range(0x800, is_extended=False)
+        validate_id_range(0x1FFFFFFF, is_extended=True)
         with pytest.raises(ValueError, match="out of range for extended"):
-            _validate_id_range(0x20000000, is_extended=True)
+            validate_id_range(0x20000000, is_extended=True)
 
     def test_task_id_is_stable_across_payload_changes(self):
         # Same slot for the same CAN ID + frame kind on the same bus →
         # starting the periodic twice replaces the prior slot.
-        a = _task_id(_raw_slot(0x100, is_extended=False), mux="raw")
-        b = _task_id(_raw_slot(0x100, is_extended=False), mux="raw")
+        a = periodic_task_id(raw_slot(0x100, is_extended=False), mux="raw")
+        b = periodic_task_id(raw_slot(0x100, is_extended=False), mux="raw")
         assert a == b == "0x100:std:raw"
 
     def test_task_id_distinguishes_std_vs_ext(self):
         # Standard vs extended frames with the same numeric ID stay separate slots.
-        assert _raw_slot(0x100, False) != _raw_slot(0x100, True)
+        assert raw_slot(0x100, False) != raw_slot(0x100, True)
 
     def test_parse_mux_returns_none_int_or_label(self):
-        assert _parse_mux("") is None
-        assert _parse_mux("  ") is None
-        assert _parse_mux("3") == 3
-        assert _parse_mux("0x2") == 2
-        assert _parse_mux("Reverse") == "Reverse"
+        assert parse_mux("") is None
+        assert parse_mux("  ") is None
+        assert parse_mux("3") == 3
+        assert parse_mux("0x2") == 2
+        assert parse_mux("Reverse") == "Reverse"
 
     def test_parse_signals_json_rejects_non_object(self):
-        assert _parse_signals_json('{"Speed": 50}') == {"Speed": 50}
+        assert parse_signals_json('{"Speed": 50}') == {"Speed": 50}
         with pytest.raises(ValueError, match="JSON object"):
-            _parse_signals_json("[1, 2]")
+            parse_signals_json("[1, 2]")
         with pytest.raises(ValueError, match="not valid JSON"):
-            _parse_signals_json("{not json}")
+            parse_signals_json("{not json}")
 
 
 # ─── Action surface ─────────────────────────────────────────────────────────
@@ -231,9 +232,9 @@ class TestListMessages:
         dups = [m for m in messages if m["name"] == "Duplicate_Message"]
 
         assert [m["key"] for m in dups] == ["0190_Duplicate_Message", "01f4_Duplicate_Message"]
-        assert codec._resolve_dbc_message("0190_Duplicate_Message").frame_id == 400
+        assert codec.catalog.resolve("0190_Duplicate_Message").frame_id == 400
         with pytest.raises(ValueError, match="defined at several ids"):
-            codec._resolve_dbc_message("Duplicate_Message")
+            codec.catalog.resolve("Duplicate_Message")
 
 
 class TestDescribeMessage:
@@ -334,7 +335,7 @@ class TestDescribeDbcSignalValueTable:
     def test_integer_scaled_signal_keeps_int_keys(self, test_dbc):
         # DUT_Command.state_request is integer-scaled — keys stay as raw ints.
         sig = next(s for s in test_dbc.get_message_by_name("DUT_Command").signals if s.choices)
-        out = _describe_dbc_signal(sig)
+        out = describe_dbc_signal(sig)
         for k in out["value_table"]:
             assert k == str(int(k)), f"expected int key, got {k!r}"
 
@@ -349,7 +350,7 @@ class TestDescribeDbcSignalValueTable:
         )
         db = cantools.database.load_file(str(dbc))
         sig = next(s for s in db.get_message_by_name("Cell").signals if s.name == "voltage")
-        out = _describe_dbc_signal(sig)
+        out = describe_dbc_signal(sig)
         assert out["value_table"] == {"4.095": "SNA"}
 
     def test_offset_signal_uses_physical_keys(self, tmp_path):
@@ -363,7 +364,7 @@ class TestDescribeDbcSignalValueTable:
         )
         db = cantools.database.load_file(str(dbc))
         sig = next(s for s in db.get_message_by_name("Pack").signals if s.name == "temp")
-        out = _describe_dbc_signal(sig)
+        out = describe_dbc_signal(sig)
         assert out["value_table"] == {"175": "SNA"}
 
 
@@ -372,25 +373,25 @@ class TestScalePrecision:
     from decoded values so they string-match value_table keys."""
 
     def test_thousandths_scale(self):
-        assert _scale_precision(0.001) == 3
+        assert scale_precision(0.001) == 3
 
     def test_tenths_scale(self):
-        assert _scale_precision(0.1) == 1
+        assert scale_precision(0.1) == 1
 
     def test_unity_scale(self):
-        assert _scale_precision(1.0) == 0
+        assert scale_precision(1.0) == 0
 
     def test_integer_scale(self):
         # scale >= 1 has no fractional precision to preserve.
-        assert _scale_precision(10.0) == 0
-        assert _scale_precision(100.0) == 0
+        assert scale_precision(10.0) == 0
+        assert scale_precision(100.0) == 0
 
     def test_zero_or_negative_scale_defensive(self):
-        assert _scale_precision(0.0) == 0
-        assert _scale_precision(-0.1) == 0
+        assert scale_precision(0.0) == 0
+        assert scale_precision(-0.1) == 0
 
     def test_tiny_scale(self):
-        assert _scale_precision(1e-6) == 6
+        assert scale_precision(1e-6) == 6
 
 
 class TestConvertSignalsRounding:
@@ -403,7 +404,7 @@ class TestConvertSignalsRounding:
         msg = test_dbc.get_message_by_name("DUT_Logging")
         # Fabricate decoded dict with deliberate fp noise
         decoded = {"logging_mux": 0, "logging_signal0": 1.2340000000000002}
-        out = codec._convert_signals(msg, decoded, base_only=False, mux_value=0)
+        out = codec.decoder._convert_signals(msg, decoded, base_only=False, mux_value=0)
         # logging_signal0 has scale=1 in test.dbc → no rounding, value passes through
         assert out["logging_signal0"] == 1.2340000000000002
 
@@ -418,7 +419,7 @@ class TestConvertSignalsRounding:
         )
         msg = db.get_message_by_name("X")
         noisy = 1.2340000000000002
-        out = codec._convert_signals(msg, {"v": noisy}, base_only=False, mux_value=None)
+        out = codec.decoder._convert_signals(msg, {"v": noisy}, base_only=False, mux_value=None)
         # scale=0.001 → 3 decimal places → exact 1.234
         assert out["v"] == 1.234
 
@@ -473,7 +474,9 @@ class TestScaledSignalPrecisionEndToEnd:
         # the string-keyed value-table lookup in the UI succeeds.
         db = cantools.database.load_string(self.DBC_SOURCE)
         msg = db.get_message_by_name("X")
-        out = codec._convert_signals(msg, {"v": 4.094999999999999}, base_only=False, mux_value=None)
+        out = codec.decoder._convert_signals(
+            msg, {"v": 4.094999999999999}, base_only=False, mux_value=None
+        )
         assert out["v"] == 4.095
         # Round-trip-safe string representation.
         assert format(out["v"], ".10g") == "4.095"
@@ -502,7 +505,7 @@ class TestValueTableForTrace:
 
     def test_int_keyed_for_identity_conversion(self, test_dbc):
         sig = next(s for s in test_dbc.get_message_by_name("DUT_Command").signals if s.choices)
-        out = _value_table_for_trace(sig)
+        out = value_table_for_trace(sig)
         assert out is not None
         for k in out:
             assert isinstance(k, int), f"expected int key for identity-conv signal, got {type(k)}"
@@ -517,30 +520,30 @@ class TestValueTableForTrace:
         )
         db = cantools.database.load_file(str(dbc))
         sig = db.get_message_by_name("X").signals[0]
-        out = _value_table_for_trace(sig)
+        out = value_table_for_trace(sig)
         assert out == {4.095: "SNA"}
         # Float key must equal what the rounding path emits, so the SDK's
         # lookup succeeds. Both are the same fp64 representation.
-        from zelos_extension_can.codec import _scale_precision
+        from zelos_extension_can.dbc import scale_precision
 
-        precision = _scale_precision(0.001)
+        precision = scale_precision(0.001)
         emitted = round(4095 * 0.001, precision)
         assert emitted in out  # dict lookup uses float equality
 
 
 class TestHashDbcFile:
     def test_same_file_same_hash(self):
-        assert _hash_dbc_file(DBC_PATH) == _hash_dbc_file(DBC_PATH)
+        assert hash_dbc_file(DBC_PATH) == hash_dbc_file(DBC_PATH)
 
     def test_different_contents_different_hash(self, tmp_path):
         a = tmp_path / "a.dbc"
         b = tmp_path / "b.dbc"
         a.write_bytes(b'VERSION "a"\n')
         b.write_bytes(b'VERSION "b"\n')
-        assert _hash_dbc_file(a) != _hash_dbc_file(b)
+        assert hash_dbc_file(a) != hash_dbc_file(b)
 
     def test_returns_16_hex_chars(self):
-        h = _hash_dbc_file(DBC_PATH)
+        h = hash_dbc_file(DBC_PATH)
         assert len(h) == 16
         assert all(c in "0123456789abcdef" for c in h)
 
@@ -622,18 +625,18 @@ class TestEncodeHelper:
     def test_encode_dbc_returns_bytes_matching_cantools(self, test_dbc):
         msg = test_dbc.get_message_by_name("DUT_Command")
         signals = {"state_request": 3}
-        out = _encode_dbc(msg, signals, mux_value=None)
+        out = encode_dbc(msg, signals, mux_value=None)
         assert isinstance(out, bytes)
         assert out == bytes(msg.encode(signals))
 
     def test_encode_dbc_names_missing_signals(self, test_dbc):
         msg = test_dbc.get_message_by_name("DUT_Command")
         with pytest.raises(ValueError, match="needs signals: state_request"):
-            _encode_dbc(msg, {}, mux_value=None)
+            encode_dbc(msg, {}, mux_value=None)
 
     def test_encode_dbc_injects_mux_signal_when_not_in_payload(self, test_dbc):
         msg = test_dbc.get_message_by_name("DUT_Logging")
-        out = _encode_dbc(
+        out = encode_dbc(
             msg,
             {"logging_signal0": 1, "no_mux_logging_signal": 0},
             mux_value=0,

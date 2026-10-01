@@ -12,7 +12,7 @@ from typing import Any
 import can
 import zelos_sdk
 
-from .codec import DEFAULT_PREFIX, name_error, trace_layout
+from .naming import DEFAULT_PREFIX, name_error, trace_layout
 
 logger = logging.getLogger(__name__)
 

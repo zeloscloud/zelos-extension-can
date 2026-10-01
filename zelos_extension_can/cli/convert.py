@@ -6,7 +6,7 @@ from pathlib import Path
 
 import rich_click as click
 
-from ..codec import DEFAULT_PREFIX, name_error
+from ..naming import DEFAULT_PREFIX, name_error
 
 logger = logging.getLogger(__name__)
 
