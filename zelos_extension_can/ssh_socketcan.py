@@ -823,8 +823,8 @@ class CodecTxAdapter:
         modifier_callback=None,
     ):
         # Only the single-message, autostart-now path is supported; the codec's
-        # _spawn_periodic never asks for anything else. Fail loud rather than
-        # silently degrade.
+        # periodics (`Periodics.start`) never ask for anything else. Fail loud
+        # rather than silently degrade.
         if duration is not None or not autostart or modifier_callback is not None:
             raise can.exceptions.CanOperationError(
                 "send_periodic: only single-message autostart is supported on ssh-socketcan"
