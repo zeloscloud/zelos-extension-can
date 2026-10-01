@@ -974,5 +974,5 @@ def test_reconnect_rearms_periodic_on_new_bus(codec, monkeypatch):
     _supervise(codec, monkeypatch, tick)
     running, bus, after = seen[0]
     assert running and bus is not old_bus and after == before
-    assert codec._periodic_tasks[tid] in bus._periodic_tasks
+    assert codec.periodics.tasks[tid] in bus._periodic_tasks
     codec.stop()

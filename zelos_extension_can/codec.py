@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import can
+import cantools
 import zelos_sdk
 
 from .dbc import (
@@ -38,6 +39,7 @@ from .pcan import (
     pcan_fd_timing,
     release_pcan_channel,
 )
+from .periodics import Periodics
 from .socketcan import socketcan_health, socketcan_link
 
 logger = logging.getLogger(__name__)
@@ -56,10 +58,8 @@ class Metrics:
     # semantics are bus noise (malformed frames) that existing consumers rely on.
     emit_errors: int = 0
     unknown_messages: int = 0
-    # Counts CanError raised by the synchronous bus.send() in one-shot
-    # send_raw / send_message paths. Periodics go through python-can's
-    # CyclicSendTask which runs its own thread and swallows errors
-    # internally — tracking those is out of scope until we wrap the task.
+    # Every send that raised: one-shot send_raw / send_message, and each failed
+    # period of a periodic.
     tx_errors: int = 0
     # Reserved for future BCM queue-overflow tracking; currently always 0.
     # The shape is kept stable so the app's wire contract doesn't churn.
@@ -147,6 +147,8 @@ class CanCodec(can.Listener):
 
         # Metrics tracking
         self.metrics = Metrics()
+        # Failed sends are counted from every periodic's thread at once.
+        self._tx_failure_lock = threading.Lock()
         self.health = BusHealth(config.get("interface"))
 
         # Demo mode simulation
@@ -195,16 +197,7 @@ class CanCodec(can.Listener):
             logger.info("Raw CAN frame logging is DISABLED")
 
         self.bus: Any = None
-        # python-can's CyclicSendTask. Owns its own thread, exposes `.stop()`
-        # and `.modify_data()`; we don't manage an asyncio loop here because
-        # action dispatch happens in worker threads where `asyncio.create_task`
-        # raises "no running event loop".
-        self._periodic_tasks: dict[str, can.broadcastmanager.CyclicSendTaskABC] = {}
-        # Slot metadata so get_tx_state can reconstruct what each task is
-        # sending without poking the task object's internals.
-        self._periodic_slots: dict[str, dict[str, Any]] = {}
-        # (message, period_s, mode) per task, to re-arm on a python-can reconnect.
-        self._periodic_specs: dict[str, tuple[can.Message, float, str]] = {}
+        self.periodics = Periodics(bus_name, self._count_tx_failure)
 
     # Extension timestamp modes -> zelos_can.CanCodec modes. "absolute" maps to
     # "hardware" (kernel SO_TIMESTAMPNS, wall-clock on SocketCAN).
@@ -418,12 +411,7 @@ class CanCodec(can.Listener):
             self.demo_task.cancel()
             self.demo_task = None
 
-        for tid, task in list(self._periodic_tasks.items()):
-            logger.info("Stopping periodic task: %s", tid)
-            task.stop()
-        self._periodic_tasks.clear()
-        self._periodic_slots.clear()
-        self._periodic_specs.clear()
+        self.periodics.stop_all()
 
         if self._native is not None:
             # Snapshot RX + TX counters before tearing down — the native handle
@@ -507,6 +495,7 @@ class CanCodec(can.Listener):
                     bus.shutdown()
                 except Exception as e:
                     logger.warning("[%s] Old bus shutdown failed: %s", self.bus_name, e)
+            self.periodics.forget_tasks()
 
             logger.debug("[%s] Waiting 1 second before reinitializing bus...", self.bus_name)
             await asyncio.sleep(1)
@@ -515,9 +504,7 @@ class CanCodec(can.Listener):
             self.start()
             # shutdown() stopped the periodics with the old bus; a failed start
             # leaves them pending for the next attempt.
-            for tid, (msg, period_s, mode) in list(self._periodic_specs.items()):
-                self._spawn_periodic(tid, msg, period_s, mode)
-                logger.info("[%s] re-armed periodic %s", self.bus_name, tid)
+            self.periodics.rearm(self.bus)
             return True
         except Exception as e:
             logger.error("[%s] Bus reconnection failed: %s", self.bus_name, e)
@@ -890,7 +877,7 @@ class CanCodec(can.Listener):
                     "tx_overflows": tx_overflows,
                     **rx,
                 },
-                "periodics": [self._periodic_slots[tid] for tid in sorted(self._periodic_slots)],
+                "periodics": self.periodics.snapshot(),
             },
         }
 
@@ -942,12 +929,7 @@ class CanCodec(can.Listener):
         can_id_int = parse_can_id(can_id)
         validate_id_range(can_id_int, is_extended)
         data_bytes = parse_data_hex(data)
-        msg = can.Message(
-            arbitration_id=can_id_int,
-            data=data_bytes,
-            is_extended_id=is_extended,
-            is_fd=is_fd,
-        )
+        msg = self._frame(can_id_int, data_bytes, is_extended, is_fd)
         self._send_or_count(msg)
         return {
             "can_id": can_id_int,
@@ -970,16 +952,10 @@ class CanCodec(can.Listener):
         can_id_int = parse_can_id(can_id)
         validate_id_range(can_id_int, is_extended)
         data_bytes = parse_data_hex(data)
+        msg = self._frame(can_id_int, data_bytes, is_extended, is_fd)
         tid = periodic_task_id(raw_slot(can_id_int, is_extended), "raw")
-        replaced = self._stop_slot_if_present(tid)
-        msg = can.Message(
-            arbitration_id=can_id_int,
-            data=data_bytes,
-            is_extended_id=is_extended,
-            is_fd=is_fd,
-        )
-        self._spawn_periodic(tid, msg, period_ms / 1000.0, mode="raw")
-        self._periodic_slots[tid] = {
+        replaced = self._stop_periodic_slot(tid)
+        slot = {
             "task_id": tid,
             "can_id": can_id_int,
             "is_extended": is_extended,
@@ -990,6 +966,7 @@ class CanCodec(can.Listener):
             "mode": "raw",
             "is_active": True,
         }
+        self._start_periodic(tid, msg, period_ms / 1000.0, "raw", slot)
         return {"task_id": tid, "replaced": replaced}
 
     def send_message(self, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
@@ -998,11 +975,7 @@ class CanCodec(can.Listener):
         dbc_msg = self.catalog.resolve(message)
         mux_value = parse_mux(mux)
         data_bytes = encode_dbc(dbc_msg, signals, mux_value)
-        msg = can.Message(
-            arbitration_id=dbc_msg.frame_id,
-            data=data_bytes,
-            is_extended_id=dbc_msg.is_extended_frame,
-        )
+        msg = self._dbc_frame(dbc_msg, data_bytes)
         self._send_or_count(msg)
         return {
             "message": message,
@@ -1039,23 +1012,18 @@ class CanCodec(can.Listener):
         dbc_msg = self.catalog.resolve(message)
         mux_value = parse_mux(mux)
         data_bytes = encode_dbc(dbc_msg, signals, mux_value)
+        msg = self._dbc_frame(dbc_msg, data_bytes)
         mux_key = "dbc" if mux_value is None else f"mux={mux_value}"
         # Keyed per definition: two same-name messages at different ids each
         # hold their own slot.
         key = self.catalog.key_of(dbc_msg)
         tid = periodic_task_id(key, mux_key)
-        replaced = self._stop_slot_if_present(tid)
-        msg = can.Message(
-            arbitration_id=dbc_msg.frame_id,
-            data=data_bytes,
-            is_extended_id=dbc_msg.is_extended_frame,
-        )
-        self._spawn_periodic(tid, msg, period_ms / 1000.0, mode="dbc")
-        self._periodic_slots[tid] = {
+        replaced = self._stop_periodic_slot(tid)
+        slot = {
             "task_id": tid,
             "can_id": dbc_msg.frame_id,
             "is_extended": dbc_msg.is_extended_frame,
-            "is_fd": False,
+            "is_fd": msg.is_fd,
             "dlc": len(data_bytes),
             "data_hex": data_bytes.hex(),
             "period_ms": period_ms,
@@ -1063,45 +1031,62 @@ class CanCodec(can.Listener):
             "is_active": True,
             "message": {"name": message, "mux": mux_value, "signals": signals},
         }
+        self._start_periodic(tid, msg, period_ms / 1000.0, "dbc", slot)
         return {"task_id": tid, "replaced": replaced}
 
     def stop_periodic(self, task_id: str) -> dict[str, Any]:
-        stopped = self._stop_slot_if_present(task_id)
+        stopped = self._stop_periodic_slot(task_id)
         return {"task_id": task_id, "stopped": stopped}
 
     # ─── Internals shared by the action methods above ────────────────────
 
+    def _frame(self, can_id: int, data: bytes, is_extended: bool, is_fd: bool) -> can.Message:
+        """A frame this bus can carry. A driver fails one it cannot only when
+        it is sent, which for a periodic is every period."""
+        if is_fd and not self.fd_mode:
+            raise ValueError(
+                f"bus '{self.bus_name}' runs classic CAN; turn on CAN-FD Mode to send CAN FD frames"
+            )
+        return can.Message(
+            arbitration_id=can_id, data=data, is_extended_id=is_extended, is_fd=is_fd, check=True
+        )
+
+    def _dbc_frame(self, dbc_msg: cantools.database.can.Message, data: bytes) -> can.Message:
+        """``dbc_msg`` as a frame this bus can carry. A DBC marks a CAN FD message
+        with ``VFrameFormat``; on a bus without CAN-FD Mode, one that fits a
+        classic frame goes out as one."""
+        is_fd = dbc_msg.is_fd and (self.fd_mode or len(data) > 8)
+        return self._frame(dbc_msg.frame_id, data, dbc_msg.is_extended_frame, is_fd)
+
     def _require_running(self) -> None:
-        if not self.running or not self.bus:
+        if not self.running:
             raise RuntimeError(f"bus '{self.bus_name}' is not running")
+        if not self.bus:
+            raise RuntimeError(f"bus '{self.bus_name}' is reconnecting; try again shortly")
 
-    def _spawn_periodic(self, tid: str, msg: can.Message, period_s: float, mode: str) -> None:
-        task = self.bus.send_periodic(msg, period_s, autostart=True)
-        self._periodic_tasks[tid] = task
-        self._periodic_specs[tid] = (msg, period_s, mode)
-        logger.info("started periodic %s mode=%s period=%.3fs", tid, mode, period_s)
+    def _start_periodic(
+        self, tid: str, msg: can.Message, period_s: float, mode: str, slot: dict[str, Any]
+    ) -> None:
+        self.periodics.start(self.bus, tid, msg, period_s, mode, slot)
 
-    def _stop_slot_if_present(self, tid: str) -> bool:
-        task = self._periodic_tasks.pop(tid, None)
-        self._periodic_slots.pop(tid, None)
-        self._periodic_specs.pop(tid, None)
-        if task is None:
-            return False
-        task.stop()
-        logger.info("stopped periodic %s", tid)
-        return True
+    def _stop_periodic_slot(self, tid: str) -> bool:
+        return self.periodics.stop(tid)
 
     def _send_or_count(self, msg: can.Message) -> None:
         """Wrapper around bus.send() that counts CanError as tx_errors and
         re-raises with a friendlier message. Used by the one-shot send_raw /
-        send_message paths (periodics go through python-can's CyclicSendTask
-        which runs its own thread and doesn't surface errors back to us)."""
+        send_message paths; a periodic's failures reach `_count_tx_failure`
+        through its task."""
         try:
             self.bus.send(msg)
         except can.CanError as e:
-            self.metrics.tx_errors += 1
-            self.health.note_tx_failure(str(e))
+            self._count_tx_failure(e)
             raise RuntimeError(f"send failed on bus '{self.bus_name}': {e}") from e
+
+    def _count_tx_failure(self, exc: Exception) -> None:
+        with self._tx_failure_lock:
+            self.metrics.tx_errors += 1
+        self.health.note_tx_failure(str(exc))
 
     def _adapter_health(self) -> tuple[str | None, str | None, dict[str, int]]:
         """The error state the adapter itself reports, why, and its error

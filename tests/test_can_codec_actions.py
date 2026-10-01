@@ -23,6 +23,7 @@ from unittest.mock import patch
 import can
 import cantools
 import pytest
+from can.interfaces.virtual import VirtualBus
 
 from zelos_extension_can.codec import CanCodec
 from zelos_extension_can.dbc import (
@@ -1131,6 +1132,164 @@ class TestErrorFrames:
         assert codec.health._error_frame is None
 
 
+class _FlakyBus(VirtualBus):
+    """A virtual bus whose first sends fail the way a full PCAN queue does."""
+
+    def __init__(self, failures: int):
+        super().__init__(channel="flaky-periodic")
+        self.failures = failures
+        self.sent = 0
+
+    def send(self, msg, timeout=None):
+        if self.failures > 0:
+            self.failures -= 1
+            raise can.CanOperationError("Failed to send: The transmit queue is full")
+        self.sent += 1
+        super().send(msg, timeout)
+
+
+class TestPeriodicSurvivesFailedSends:
+    def test_a_periodic_keeps_sending_after_the_bus_recovers(self, codec):
+        import time as _time
+
+        mocked = codec.bus
+        flaky = _FlakyBus(failures=5)
+        codec.bus = flaky
+        try:
+            codec.start_periodic_raw(can_id="0x200", data="0102", period_ms=5)
+            deadline = _time.monotonic() + 5
+            while flaky.sent < 10 and _time.monotonic() < deadline:
+                _time.sleep(0.01)
+            assert flaky.sent >= 10, "the periodic died on its first failed send"
+            assert codec.get_tx_state()["bus"]["metrics"]["tx_errors"] == 5
+        finally:
+            for tid in list(codec.periodics.tasks):
+                codec.periodics.stop(tid)
+            codec.bus = mocked
+            flaky.shutdown()
+
+    def test_a_bus_that_starts_its_own_thread_task_still_gets_the_handler(self, codec):
+        class _OwnPeriodic(VirtualBus):
+            def _send_periodic_internal(self, *args, **kwargs):
+                return super()._send_periodic_internal(*args, **kwargs)
+
+        mocked = codec.bus
+        bus = _OwnPeriodic(channel="own-periodic")
+        codec.bus = bus
+        try:
+            codec.start_periodic_raw(can_id="0x201", data="01", period_ms=50)
+            (task,) = codec.periodics.tasks.values()
+            assert task.on_error(can.CanOperationError("The transmit queue is full")) is True
+        finally:
+            for tid in list(codec.periodics.tasks):
+                codec.periodics.stop(tid)
+            codec.bus = mocked
+            bus.shutdown()
+
+
+class TestFramesTheBusCanCarry:
+    """A frame a driver cannot carry is refused when asked for, not failed on
+    every period of a periodic."""
+
+    def test_more_than_eight_bytes_on_classic_can_is_refused(self, codec):
+        with pytest.raises(ValueError, match="should be <= 8"):
+            codec.start_periodic_raw(can_id="0x100", data="00" * 12, period_ms=10)
+        assert codec.periodics.tasks == {}
+        assert codec.periodics.slots == {}
+        codec.bus.send.assert_not_called()
+
+    def test_can_fd_on_a_classic_bus_is_refused(self, codec):
+        with pytest.raises(ValueError, match="turn on CAN-FD Mode"):
+            codec.send_raw(can_id="0x100", data="00" * 12, is_fd=True)
+        codec.bus.send.assert_not_called()
+
+    def test_an_fd_bus_takes_an_fd_frame(self, codec):
+        codec.fd_mode = True
+        codec.send_raw(can_id="0x100", data="00" * 12, is_fd=True)
+        (sent,) = codec.bus.send.call_args.args
+        assert (sent.is_fd, len(sent.data)) == (True, 12)
+
+    def test_a_dbc_message_goes_out_as_the_dbc_defines_it(self, codec, monkeypatch):
+        dbc_msg = codec.catalog.resolve("DUT_Command")
+        signals = json.dumps({s.name: 0 for s in dbc_msg.signals})
+        monkeypatch.setattr(dbc_msg, "is_fd", True)
+        codec.fd_mode = True
+        codec.send_message("DUT_Command", signals)
+        assert codec.bus.send.call_args.args[0].is_fd is True
+
+    def test_a_can_fd_dbc_message_that_fits_goes_out_classic_on_a_classic_bus(
+        self, codec, monkeypatch
+    ):
+        # A DBC that marks its messages CAN FD still drives a bus without
+        # CAN-FD Mode, as long as each message fits a classic frame.
+        dbc_msg = codec.catalog.resolve("DUT_Command")
+        signals = json.dumps({s.name: 0 for s in dbc_msg.signals})
+        monkeypatch.setattr(dbc_msg, "is_fd", True)
+        codec.send_message("DUT_Command", signals)
+        assert codec.bus.send.call_args.args[0].is_fd is False
+        tid = codec.start_periodic_message("DUT_Command", signals, period_ms=10)["task_id"]
+        assert codec.periodics.specs[tid][0].is_fd is False
+        assert codec.get_tx_state()["bus"]["periodics"][0]["is_fd"] is False
+
+    def test_a_can_fd_dbc_message_over_eight_bytes_needs_can_fd_mode(self, codec, monkeypatch):
+        dbc_msg = codec.catalog.resolve("CANFD_BulkData")
+        signals = json.dumps({s.name: 0 for s in dbc_msg.signals})
+        monkeypatch.setattr(dbc_msg, "is_fd", True)
+        with pytest.raises(ValueError, match="turn on CAN-FD Mode"):
+            codec.send_message("CANFD_BulkData", signals)
+        with pytest.raises(ValueError, match="turn on CAN-FD Mode"):
+            codec.start_periodic_message("CANFD_BulkData", signals, period_ms=10)
+        assert codec.periodics.tasks == {}
+        codec.bus.send.assert_not_called()
+
+
+class TestPeriodicSlots:
+    def test_a_periodic_that_fails_for_another_reason_ends_marked_inactive(self, codec):
+        import time as _time
+
+        class _Rejecting(VirtualBus):
+            def send(self, msg, timeout=None):
+                raise ValueError("invalid index")
+
+        mocked = codec.bus
+        bus = _Rejecting(channel="rejecting")
+        codec.bus = bus
+        try:
+            codec.start_periodic_raw(can_id="0x202", data="01", period_ms=5)
+            (task,) = codec.periodics.tasks.values()
+            deadline = _time.monotonic() + 3
+            while not task.stopped and _time.monotonic() < deadline:
+                _time.sleep(0.01)
+            assert task.stopped
+            (slot,) = codec.get_tx_state()["bus"]["periodics"]
+            assert slot["is_active"] is False
+            assert codec.metrics.tx_errors == 1
+        finally:
+            for tid in list(codec.periodics.tasks):
+                codec.periodics.stop(tid)
+            codec.bus = mocked
+            bus.shutdown()
+
+    def test_one_slot_holds_one_task(self, codec):
+        from unittest.mock import MagicMock
+
+        codec.bus.send_periodic.side_effect = lambda *_a, **_k: MagicMock()
+        msg = can.Message(arbitration_id=0x10, data=b"\x01")
+        codec.periodics.start(codec.bus, "t", msg, 0.1, "raw")
+        first = codec.periodics.tasks["t"]
+        codec.periodics.start(codec.bus, "t", msg, 0.1, "raw")
+        first.stop.assert_called_once()
+        assert codec.periodics.tasks["t"] is not first
+
+    def test_a_periodic_asked_for_while_reconnecting_says_so(self, codec):
+        mocked, codec.bus = codec.bus, None
+        try:
+            with pytest.raises(RuntimeError, match="reconnecting"):
+                codec.start_periodic_raw(can_id="0x10", data="01", period_ms=100)
+        finally:
+            codec.bus = mocked
+
+
 class TestPcanCanFd:
     """PCAN opens CAN FD only from explicit bit timing; the extension derives it."""
 
@@ -1196,3 +1355,37 @@ class TestPcanCanFd:
             codec.stop()
         assert bus.call_args.kwargs["data_bitrate"] == 2_000_000
         assert "timing" not in bus.call_args.kwargs
+
+
+class TestRepeatFilter:
+    @staticmethod
+    def _record(text: str):
+        import logging
+
+        return logging.LogRecord("can.bcm", logging.ERROR, __file__, 1, text, None, None)
+
+    def test_a_message_passes_once_per_window(self, monkeypatch):
+        from zelos_extension_can.periodics import RepeatFilter
+
+        clock = [0.0]
+        monkeypatch.setattr("zelos_extension_can.codec.time.monotonic", lambda: clock[0])
+        repeats = RepeatFilter(60.0)
+        full = self._record("Failed to send: The transmit queue is full")
+        assert repeats.filter(full)
+        clock[0] = 30.0
+        assert not repeats.filter(full)
+        assert repeats.filter(self._record("Failed to send: another reason"))
+        clock[0] = 61.0
+        assert repeats.filter(full)
+
+    def test_it_forgets_messages_past_the_window(self, monkeypatch):
+        from zelos_extension_can.periodics import RepeatFilter
+
+        clock = [0.0]
+        monkeypatch.setattr("zelos_extension_can.codec.time.monotonic", lambda: clock[0])
+        repeats = RepeatFilter(60.0)
+        for n in range(100):
+            repeats.filter(self._record(f"reason {n}"))
+        clock[0] = 61.0
+        repeats.filter(self._record("a new reason"))
+        assert len(repeats._last) == 1

@@ -244,7 +244,7 @@ def test_reconnect_rebuilds_only_transport(make_ssh_codec, stub_transports, capl
     # Arm a periodic in the Rust codec (slow period so it survives the rebuild
     # without flooding the undrained outlet).
     result = codec.start_periodic_raw("0x100", "01 02", period_ms=1000)
-    shim = codec._periodic_tasks[result["task_id"]]
+    shim = codec.periodics.tasks[result["task_id"]]
     assert shim.is_active is True
 
     old_transport.healthy = False  # simulate a dead ssh link
@@ -309,7 +309,7 @@ def test_reconnect_transport_build_failure_preserves_codec_then_recovers(
     old_transport = codec._transport
 
     result = codec.start_periodic_raw("0x100", "01 02", period_ms=1000)
-    shim = codec._periodic_tasks[result["task_id"]]
+    shim = codec.periodics.tasks[result["task_id"]]
     assert shim.is_active is True
 
     # First attempt: SshTransport construction fails; second onward: succeeds.
