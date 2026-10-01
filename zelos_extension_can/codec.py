@@ -30,7 +30,7 @@ from .params import (
     raw_slot,
     validate_id_range,
 )
-from .pcan import release_pcan_channel
+from .pcan import PCAN_DEFAULT_BITRATE, PCAN_TIMING_KEYS, pcan_fd_timing, release_pcan_channel
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +287,12 @@ class CanCodec(can.Listener):
             except json.JSONDecodeError as e:
                 logger.error("Failed to parse config_json: %s", e)
                 raise ValueError(f"Invalid config_json: {e}") from e
+
+        # PCAN opens CAN FD only from explicit bit timing, never from bitrates;
+        # timing set by hand under Advanced wins.
+        if self.fd_mode and interface == "pcan" and not PCAN_TIMING_KEYS & bus_config.keys():
+            nominal = bus_config.pop("bitrate", PCAN_DEFAULT_BITRATE)
+            bus_config["timing"] = pcan_fd_timing(nominal, bus_config.pop("data_bitrate", nominal))
 
         # PCAN's macOS library (PCBUSB) cannot echo TX frames, and python-can
         # fails the whole init on it.
