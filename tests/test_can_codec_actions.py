@@ -1732,14 +1732,39 @@ class TestReader:
         assert (errors, frames) == ([overrun], [frame])
 
     def test_failures_back_to_back_end_the_reader(self):
-        from zelos_extension_can.codec import _Reader
+        from zelos_extension_can.codec import _Reader, _ReaderEnded
 
         reader = _Reader(lambda _m: None, lambda _e: None)
         gone = can.CanOperationError("The value of a handle is invalid")
         for _ in range(_Reader.GIVE_UP_AFTER - 1):
             reader.on_error(gone)
-        with pytest.raises(can.CanOperationError):
+        with pytest.raises(_ReaderEnded) as ended:
             reader.on_error(gone)
+        assert ended.value.__cause__ is gone
+
+    def test_a_reader_that_gives_up_ends_its_thread_without_a_traceback(self, monkeypatch):
+        import threading
+        import time as _time
+
+        from zelos_extension_can.codec import _Notifier, _Reader
+
+        class _Gone(VirtualBus):
+            def recv(self, timeout=None):
+                raise can.CanOperationError("The value of a handle is invalid")
+
+        uncaught = []
+        monkeypatch.setattr(threading, "excepthook", uncaught.append)
+        bus = _Gone(channel="gone")
+        notifier = _Notifier(bus, [_Reader(lambda _m: None, lambda _e: None)], timeout=0.01)
+        try:
+            deadline = _time.monotonic() + 5
+            while any(t.is_alive() for t in notifier._readers) and _time.monotonic() < deadline:
+                _time.sleep(0.01)
+            assert not any(t.is_alive() for t in notifier._readers)
+            assert uncaught == []
+        finally:
+            notifier.stop()
+            bus.shutdown()
 
     def test_a_frame_between_failures_starts_the_count_over(self):
         from zelos_extension_can.codec import _Reader

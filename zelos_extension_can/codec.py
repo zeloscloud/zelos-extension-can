@@ -1,6 +1,7 @@
 """CAN bus codec with database decoding and transmission."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
@@ -73,6 +74,19 @@ class Metrics:
     rx_errors: int = 0
 
 
+class _ReaderEnded(can.CanOperationError):
+    """Raised by the codec's reader to give up on an adapter that is gone."""
+
+
+class _Notifier(can.Notifier):
+    """python-can's Notifier. Its reader thread ends only on an exception it lets
+    through, and the one the codec's reader raises to give up needs no traceback."""
+
+    def _rx_thread(self, bus: can.BusABC) -> None:
+        with contextlib.suppress(_ReaderEnded):
+            super()._rx_thread(bus)
+
+
 class _Reader:
     """The codec's listener on its Notifier. A failed read (a PCAN receive-queue
     overrun during an error flood, say) loses frames but leaves the bus usable,
@@ -106,7 +120,7 @@ class _Reader:
         self._failures = self._failures + 1 if back_to_back else 1
         self._last_failure = now
         if self._failures >= self.GIVE_UP_AFTER:
-            raise exc
+            raise _ReaderEnded(str(exc)) from exc
         self._on_error(exc)
 
 
@@ -759,7 +773,7 @@ class CanCodec(can.Listener):
             )
 
     def _start_notifier(self) -> None:
-        self._notifier = can.Notifier(
+        self._notifier = _Notifier(
             self.bus, [_Reader(self.on_message_received, self._on_receive_error)]
         )
 
