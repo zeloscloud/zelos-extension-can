@@ -156,7 +156,7 @@ loopback, so every transmit is traced exactly once.
 The extension provides several actions accessible from the Zelos App:
 
 - **List Codecs**: Names of every configured bus
-- **Get TX State**: One bus's periodics, DBC list, and bus-health metrics
+- **Get TX State**: One bus's periodics, DBC list, metrics, and health. `status` is `active`, `warning` (errors on the wire, error counters high, or frames lost on receive), `error` (error-passive, bus-off, adapter unreachable or down, or sends failing), `stopped`, or `unknown`; `health` gives the controller's state, why, and its error counters where the adapter reports them
 - **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key` (`0334_Merge_Moved`: its id and name, and the name of its trace event). The transmit actions take a key, or a name only one definition carries.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit

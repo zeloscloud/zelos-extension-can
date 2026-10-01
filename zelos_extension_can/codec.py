@@ -20,6 +20,7 @@ from .dbc import (
 )
 from .decode import FrameDecoder, TimestampMode
 from .demo.demo import run_demo_ev_simulation
+from .health import HEALTH_DETAIL, BusHealth
 from .naming import DEFAULT_PREFIX, trace_layout
 from .params import (
     parse_can_id,
@@ -30,31 +31,16 @@ from .params import (
     raw_slot,
     validate_id_range,
 )
-from .pcan import PCAN_DEFAULT_BITRATE, PCAN_TIMING_KEYS, pcan_fd_timing, release_pcan_channel
+from .pcan import (
+    PCAN_DEFAULT_BITRATE,
+    PCAN_TIMING_KEYS,
+    pcan_controller_state,
+    pcan_fd_timing,
+    release_pcan_channel,
+)
+from .socketcan import socketcan_health, socketcan_link
 
 logger = logging.getLogger(__name__)
-
-
-def _derive_bus_status(running: bool, bus: Any) -> str:
-    """Map (running, python-can BusState) to one of the four wire-contract
-    statuses the app expects: active / stopped / error / unknown.
-
-    Virtual / fake / file backends often raise on `bus.state` or don't
-    return a real `can.BusState` enum; on those we trust `running` and
-    fall back to "active"."""
-    if not running or bus is None:
-        return "stopped"
-    try:
-        state = bus.state
-    except Exception:
-        return "active"
-    if not isinstance(state, can.BusState):
-        return "active"
-    if state == can.BusState.ACTIVE:
-        return "active"
-    if state in {can.BusState.ERROR, can.BusState.PASSIVE}:
-        return "error"
-    return "unknown"
 
 
 @dataclass(slots=True)
@@ -78,6 +64,9 @@ class Metrics:
     # Reserved for future BCM queue-overflow tracking; currently always 0.
     # The shape is kept stable so the app's wire contract doesn't churn.
     tx_overflows: int = 0
+    # Error frames the adapter delivered. They report bus faults, not traffic,
+    # so they are counted here and never traced or decoded as data.
+    error_frames: int = 0
 
 
 class CanCodec(can.Listener):
@@ -158,6 +147,7 @@ class CanCodec(can.Listener):
 
         # Metrics tracking
         self.metrics = Metrics()
+        self.health = BusHealth(config.get("interface"))
 
         # Demo mode simulation
         self.demo_mode = config.get("demo_mode", False)
@@ -614,7 +604,11 @@ class CanCodec(can.Listener):
 
         :param message: Received CAN message
         """
-        self.decoder.handle(message)
+        if message.is_error_frame:
+            self.metrics.error_frames += 1
+            self.health.note_error_frame(message)
+        else:
+            self.decoder.handle(message)
         self.last_message_time = time.time()
 
     def _check_notifier_health(self, notifier: can.Notifier | None) -> bool:
@@ -865,14 +859,18 @@ class CanCodec(can.Listener):
                 "messages_received": self.metrics.messages_received,
                 "messages_decoded": self.metrics.messages_decoded,
                 "unknown_messages": self.metrics.unknown_messages,
+                "error_frames": self.metrics.error_frames,
             }
+        adapter = self._adapter_health() if self.running and self.bus is not None else None
+        status, health = self.health.report(self.running, self.bus, *(adapter or (None, None, {})))
         return {
             "captured_at_unix_ms": int(time.time() * 1000),
             "bus": {
                 "name": self.bus_name,
                 "interface": self.config.get("interface", "unknown"),
                 "channel": self.config.get("channel"),
-                "status": _derive_bus_status(self.running, self.bus),
+                "status": status,
+                "health": health,
                 # `dbc` is the legacy single-DBC view the tx webapp reads
                 # (first file, combined hash); `dbcs` is the full list.
                 "dbc": {
@@ -1102,4 +1100,18 @@ class CanCodec(can.Listener):
             self.bus.send(msg)
         except can.CanError as e:
             self.metrics.tx_errors += 1
+            self.health.note_tx_failure(str(e))
             raise RuntimeError(f"send failed on bus '{self.bus_name}': {e}") from e
+
+    def _adapter_health(self) -> tuple[str | None, str | None, dict[str, int]]:
+        """The error state the adapter itself reports, why, and its error
+        counters; None for a state it does not report."""
+        if self.config.get("interface") in ("socketcan", "socketcan-py"):
+            iface = str(self.config.get("channel"))
+            link = socketcan_link(iface)
+            if link is None:
+                return None, None, {}
+            state, detail = socketcan_health(iface, link, link.settings)
+            return state, detail, link.counters or {}
+        state = pcan_controller_state(self.bus)
+        return state, HEALTH_DETAIL.get(state) if state else None, {}
