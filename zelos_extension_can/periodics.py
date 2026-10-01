@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 class RepeatFilter(logging.Filter):
     """Pass a record once per window per message, so a periodic on a stalled bus
-    logs its failure once rather than every period."""
+    logs its failure once rather than every period. A CAN error is the bus
+    failing, not a bug, so it goes without its traceback."""
 
     def __init__(self, window_s: float) -> None:
         super().__init__()
@@ -33,7 +34,9 @@ class RepeatFilter(logging.Filter):
             if last is not None and now - last < self._window_s:
                 return False
             self._last[key] = now
-            return True
+        if record.exc_info and isinstance(record.exc_info[1], can.CanError):
+            record.exc_info = record.exc_text = None
+        return True
 
 
 logging.getLogger("can.bcm").addFilter(RepeatFilter(60.0))
