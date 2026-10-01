@@ -526,6 +526,9 @@ _MISSING_LIBRARY_LOGGERS = ("can.kvaser", "can.interfaces.vector.canlib")
 
 #: What a found adapter's bus starts at. The bus's real bitrate cannot be read off the adapter.
 _ADAPTER_BITRATE = 500_000
+# The PEAK adapters PCBUSB, the only macOS PCAN driver, supports. It opens only
+# the first channel of others, such as a PCAN-USB Pro FD.
+_PCBUSB_SUPPORTED = {"PCAN-USB", "PCAN-USB FD"}
 
 
 def _vendor_adapters() -> list[dict[str, str]]:
@@ -550,7 +553,7 @@ def _vendor_adapters() -> list[dict[str, str]]:
                 {
                     "interface": interface,
                     "channel": str(config["channel"]),
-                    "name": str(config.get("device_name") or interface),
+                    "name": _adapter_name(interface, config),
                 }
                 for config in configs
             ]
@@ -558,6 +561,32 @@ def _vendor_adapters() -> list[dict[str, str]]:
         for quiet_logger, level in zip(quiet, levels, strict=True):
             quiet_logger.setLevel(level)
     return found
+
+
+def _adapter_name(interface: str, config: dict[str, Any]) -> str:
+    """The adapter's product name, falling back to its interface."""
+    name = config.get("device_name")
+    if not name and interface == "pcan":
+        name = _pcan_hardware_name(str(config["channel"]))
+    return str(name or interface)
+
+
+def _pcan_hardware_name(channel: str) -> str | None:
+    """The adapter's product name, which python-can's macOS detection leaves out."""
+    try:
+        from can.interfaces.pcan.basic import (
+            PCAN_CHANNEL_NAMES,
+            PCAN_ERROR_OK,
+            PCAN_HARDWARE_NAME,
+            PCANBasic,
+        )
+
+        status, name = PCANBasic().GetValue(PCAN_CHANNEL_NAMES[channel], PCAN_HARDWARE_NAME)
+    except Exception:
+        return None
+    if status != PCAN_ERROR_OK:
+        return None
+    return name.decode(errors="replace").strip() or None
 
 
 def _running_adapter_bitrates() -> dict[tuple[str, str], int]:
@@ -631,7 +660,11 @@ def auto_config() -> dict[str, Any]:
     running = _running_adapter_bitrates()
     detected = {(a["interface"], a["channel"]) for a in adapters}
     adapters += [
-        {"interface": interface, "channel": channel, "name": interface}
+        {
+            "interface": interface,
+            "channel": channel,
+            "name": _adapter_name(interface, {"channel": channel}),
+        }
         for interface, channel in running
         if (interface, channel) not in detected
     ]
@@ -672,6 +705,17 @@ def auto_config() -> dict[str, Any]:
             else f"Each is set to {rate}."
         )
         result["message"] = f"Found {found}. {setting} Change Bitrate to match your bus."
+        limited = sorted(
+            {
+                a["name"]
+                for a in adapters
+                if a["interface"] == "pcan" and a["name"] not in {*_PCBUSB_SUPPORTED, "pcan"}
+            }
+        )
+        if sys.platform == "darwin" and limited:
+            result["message"] += (
+                f" On macOS only the first channel of a {' or '.join(limited)} is available."
+            )
     return result
 
 

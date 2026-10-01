@@ -473,13 +473,15 @@ class TestConfigFormHooks:
         }
 
     def test_auto_config_keeps_a_running_bus_detection_cannot_see(self, monkeypatch, tmp_path):
-        """PCAN on macOS lists only free channels, so the one this extension holds drops out."""
+        """PCAN on macOS lists only free channels, so the one this extension holds drops
+        out; it keeps its bitrate, and the driver still names it."""
         monkeypatch.setattr(actions.sys, "platform", "darwin")
         monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+        monkeypatch.setattr(actions, "_pcan_hardware_name", lambda channel: "PCAN-USB FD")
         monkeypatch.setattr(
             actions,
             "_vendor_adapters",
-            lambda: [{"interface": "pcan", "channel": "PCAN_USBBUS2", "name": "pcan"}],
+            lambda: [{"interface": "pcan", "channel": "PCAN_USBBUS2", "name": "PCAN-USB FD"}],
         )
         running = SimpleNamespace(
             config={"interface": "pcan", "channel": "PCAN_USBBUS1", "bitrate": 250_000}
@@ -503,8 +505,8 @@ class TestConfigFormHooks:
             },
         ]
         assert result["message"] == (
-            "Found pcan on PCAN_USBBUS2, pcan on PCAN_USBBUS1. Running buses keep their "
-            "bitrate; new ones are set to 500 kbit/s. Change Bitrate to match your bus."
+            "Found PCAN-USB FD on PCAN_USBBUS2, PCAN-USB FD on PCAN_USBBUS1. Running buses "
+            "keep their bitrate; new ones are set to 500 kbit/s. Change Bitrate to match your bus."
         )
 
     def test_auto_config_keeps_the_bitrate_of_a_detected_running_bus(self, monkeypatch, tmp_path):
@@ -641,6 +643,81 @@ class TestAdapterDetection:
             {"interface": "pcan", "channel": "PCAN_USBBUS2", "name": "PCAN-USB Pro FD"},
             {"interface": "kvaser", "channel": "0", "name": "kvaser"},
         ]
+
+    def test_a_pcan_channel_without_a_device_name_is_named_by_the_driver(self, monkeypatch):
+        """python-can's macOS detection returns no device name; the driver still knows it."""
+        monkeypatch.setattr(actions.sys, "platform", "darwin")
+        monkeypatch.setattr(actions, "_pcan_hardware_name", lambda channel: "PCAN-USB Pro FD")
+        pcan = [{"interface": "pcan", "channel": "PCAN_USBBUS1", "supports_fd": True}]
+        with patch(
+            "can.detect_available_configs",
+            side_effect=lambda interfaces: pcan if interfaces == ["pcan"] else [],
+        ):
+            found = actions._vendor_adapters()
+
+        assert [a["name"] for a in found] == ["PCAN-USB Pro FD"]
+
+    @pytest.mark.parametrize(
+        ("platform", "name", "note"),
+        [
+            ("darwin", "PCAN-USB Pro FD", " On macOS only the first channel of a PCAN-USB Pro FD"),
+            ("darwin", "PCAN-USB X6", " On macOS only the first channel of a PCAN-USB X6"),
+            ("darwin", "PCAN-USB FD", None),
+            ("darwin", "PCAN-USB", None),
+            ("darwin", "pcan", None),
+            ("win32", "PCAN-USB Pro FD", None),
+        ],
+    )
+    def test_macos_says_which_adapters_offer_only_their_first_channel(
+        self, monkeypatch, platform, name, note
+    ):
+        """PCBUSB supports PCAN-USB and PCAN-USB FD; it opens one channel of any other."""
+        monkeypatch.setattr(actions.sys, "platform", platform)
+        monkeypatch.setattr(actions, "_local_can_interfaces", lambda: [])
+        monkeypatch.setattr(actions, "_slcan_adapters", lambda: [])
+        monkeypatch.setattr(
+            actions,
+            "_vendor_adapters",
+            lambda: [{"interface": "pcan", "channel": "PCAN_USBBUS1", "name": name}],
+        )
+        message = actions.auto_config()["message"]
+        assert message.startswith(f"Found {name} on PCAN_USBBUS1.")
+        if note is None:
+            assert "first channel" not in message
+        else:
+            assert message.endswith(f"{note} is available.")
+
+    @pytest.mark.parametrize(
+        ("reply", "name"),
+        [
+            (("PCAN_ERROR_OK", b"PCAN-USB Pro FD"), "PCAN-USB Pro FD"),
+            (("PCAN_ERROR_OK", b"  "), None),
+            (("PCAN_ERROR_ILLHW", b"PCAN-USB"), None),
+        ],
+    )
+    def test_the_driver_names_the_hardware(self, monkeypatch, reply, name):
+        from can.interfaces.pcan import basic
+
+        code_name, raw = reply
+        asked = []
+
+        class FakeBasic:
+            def GetValue(self, channel, parameter):  # noqa: N802 - PCAN-Basic's name
+                asked.append((channel, parameter))
+                return getattr(basic, code_name), raw
+
+        monkeypatch.setattr(basic, "PCANBasic", FakeBasic)
+        assert actions._pcan_hardware_name("PCAN_USBBUS2") == name
+        assert asked == [(basic.PCAN_CHANNEL_NAMES["PCAN_USBBUS2"], basic.PCAN_HARDWARE_NAME)]
+
+    def test_a_driver_that_fails_to_load_names_nothing(self, monkeypatch):
+        from can.interfaces.pcan import basic
+
+        def missing():
+            raise OSError("libPCBUSB.dylib not found")
+
+        monkeypatch.setattr(basic, "PCANBasic", missing)
+        assert actions._pcan_hardware_name("PCAN_USBBUS1") is None
 
     def test_a_failing_vendor_library_hides_only_its_own_adapters(self, monkeypatch):
         def detect(interfaces):
