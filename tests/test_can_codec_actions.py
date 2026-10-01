@@ -842,10 +842,12 @@ class _Ip:
 def _as_socketcan(codec, interface="socketcan", channel="can0"):
     """Make a test codec read its health as a SocketCAN bus does."""
     from zelos_extension_can.health import BusHealth
+    from zelos_extension_can.socketcan import SocketcanSupervisor
 
     codec.config["interface"] = interface
     codec.config["channel"] = channel
     codec.health = BusHealth(interface)
+    codec._supervisor = SocketcanSupervisor(channel, codec.bus_name)
     return codec
 
 
@@ -864,7 +866,7 @@ class TestSocketcanLink:
 
         _ip_reply(monkeypatch, stdout=_link_json(kernel))
         link = socketcan_link("can0")
-        assert (link.exists, link.up, link.state) == (True, True, state)
+        assert (link.exists, link.ifindex, link.up, link.state) == (True, 4, True, state)
         assert link.counters == {"tx_error_count": 128, "rx_error_count": 3}
         assert link.settings == ["bitrate", "250000"]
 
@@ -911,6 +913,29 @@ class TestSocketcanLink:
         assert socketcan_link("can0") is None
 
 
+class TestCanAdminLinks:
+    @pytest.mark.parametrize(
+        ("cap_eff", "allowed"),
+        [
+            ("000001ffffffffff", True),  # root
+            ("0000000000001000", True),  # CAP_NET_ADMIN alone
+            ("0000000000000000", False),
+            ("00000000a80425fb", False),  # a container's default set, without it
+        ],
+    )
+    def test_reads_cap_net_admin(self, tmp_path, cap_eff, allowed):
+        from zelos_extension_can.socketcan import can_admin_links
+
+        status = tmp_path / "status"
+        status.write_text(f"Name:\tpython\nCapPrm:\t0\nCapEff:\t{cap_eff}\n")
+        assert can_admin_links(status) is allowed
+
+    def test_no_proc_means_no(self, tmp_path):
+        from zelos_extension_can.socketcan import can_admin_links
+
+        assert can_admin_links(tmp_path / "missing") is False
+
+
 class TestSocketcanHealth:
     def test_gone_says_check_usb(self):
         from zelos_extension_can.socketcan import SocketcanLink, socketcan_health
@@ -951,6 +976,326 @@ class TestSocketcanHealth:
 
         link = SocketcanLink(exists=True, up=True, state="bus_off", restart_ms=100)
         assert socketcan_health("can1", link, []) == ("bus_off", HEALTH_DETAIL["bus_off"])
+
+
+class TestSuperviseSocketcan:
+    """With CAP_NET_ADMIN a bus-off controller is restarted and a replugged
+    interface comes back as it was; nothing done to an interface by hand is undone."""
+
+    @pytest.fixture
+    def sock(self, monkeypatch):
+        from zelos_extension_can.socketcan import SocketcanSupervisor
+
+        monkeypatch.setattr("zelos_extension_can.socketcan.can_admin_links", lambda: True)
+        return SocketcanSupervisor("can0", "busA")
+
+    def test_a_bus_off_controller_is_restarted_every_look_and_logged_once_a_minute(
+        self, sock, monkeypatch, caplog
+    ):
+        import logging
+
+        clock = [1000.0]
+        monkeypatch.setattr("zelos_extension_can.codec.time.monotonic", lambda: clock[0])
+        ip = _Ip(monkeypatch, _link_json("BUS-OFF"))
+        with caplog.at_level(logging.INFO, logger="zelos_extension_can.codec"):
+            for second in (0, 5, 10, 61):
+                clock[0] = 1000.0 + second
+                assert sock.look() is False
+        assert ip.sets == [["type", "can", "restart"]] * 4
+        assert [r.getMessage() for r in caplog.records if "bus-off" in r.getMessage()] == [
+            "[busA] restarted can0 after bus-off",
+            "[busA] restarted can0 after bus-off (3 restarts since the last report)",
+        ]
+
+    def test_a_replugged_interface_comes_back_with_its_settings(self, sock, monkeypatch):
+        ip = _Ip(monkeypatch, _FD_LINK)
+        assert sock.look() is False
+        ip.link = None
+        assert sock.look() is False
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=9)
+        assert sock.look() is True
+        assert ip.sets == [["up", "type", "can", *_FD_SETTINGS]]
+
+    def test_a_replug_between_two_looks_is_still_caught(self, sock, monkeypatch):
+        """Unplugged and plugged back within one poll: never seen missing."""
+        ip = _Ip(monkeypatch, _link_json("ERROR-ACTIVE"))
+        sock.look()
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=7)
+        assert sock.look() is True
+        assert ip.sets == [["up", "type", "can", "bitrate", "250000"]]
+
+    def test_the_interface_is_known_from_the_moment_it_opens(self, sock, monkeypatch):
+        """Unplugged before the first poll: the interface and its settings were
+        recorded when the bus opened."""
+        ip = _Ip(monkeypatch, _link_json("ERROR-ACTIVE"))
+        sock.note_link()
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=6)
+        assert sock.look() is True
+        assert ip.sets == [["up", "type", "can", "bitrate", "250000"]]
+
+    def test_a_replugged_interface_already_up_is_reopened_as_it_is(self, sock, monkeypatch):
+        ip = _Ip(monkeypatch, _link_json("ERROR-ACTIVE"))
+        sock.look()
+        ip.link = _link_json("ERROR-ACTIVE", bitrate=500_000, ifindex=8)
+        assert sock.look() is True
+        assert ip.sets == []
+
+    def test_an_interface_taken_down_by_hand_stays_down(self, sock, monkeypatch):
+        ip = _Ip(monkeypatch, _link_json("ERROR-ACTIVE"))
+        sock.look()
+        ip.link = _link_json("STOPPED", flags=_DOWN)
+        assert sock.look() is False
+        assert ip.sets == []
+
+    def test_a_bitrate_changed_by_hand_is_kept_and_restored_after_a_replug(self, sock, monkeypatch):
+        ip = _Ip(monkeypatch, _link_json("ERROR-ACTIVE"))
+        sock.look()
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=500_000)
+        assert sock.look() is False
+        ip.link = _link_json("ERROR-ACTIVE", bitrate=500_000)
+        assert sock.look() is False
+        assert ip.sets == []
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=9)
+        assert sock.look() is True
+        assert ip.sets == [["up", "type", "can", "bitrate", "500000"]]
+
+    def test_a_failed_bring_up_is_retried_on_the_next_look(self, sock, monkeypatch):
+        ip = _Ip(monkeypatch, _link_json("ERROR-ACTIVE"), set_returncode=2)
+        sock.look()
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=9)
+        assert sock.look() is False
+        assert sock.look() is False
+        assert len(ip.sets) == 2
+
+    def test_a_bring_up_that_keeps_failing_is_logged_once_a_minute(self, sock, monkeypatch, caplog):
+        import logging
+
+        clock = [1000.0]
+        monkeypatch.setattr("zelos_extension_can.codec.time.monotonic", lambda: clock[0])
+        ip = _Ip(monkeypatch, _FD_LINK, set_returncode=2)
+        sock.look()
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=9)
+        with caplog.at_level(logging.WARNING, logger="zelos_extension_can.codec"):
+            for second in (0, 5, 10, 61):
+                clock[0] = 1000.0 + second
+                sock.look()
+        assert len(ip.sets) == 4
+        assert len([r for r in caplog.records if "Could not recover can0" in r.getMessage()]) == 2
+
+    def test_an_ip_that_hangs_does_not_raise(self, sock, monkeypatch):
+        import subprocess
+
+        hang = subprocess.TimeoutExpired(["ip"], 2.0)
+        ip = _Ip(monkeypatch, _link_json("BUS-OFF"), set_raises=hang)
+        assert sock.look() is False
+        assert ip.sets == [["type", "can", "restart"]]
+
+    def test_without_cap_net_admin_nothing_is_changed(self, sock, monkeypatch):
+        monkeypatch.setattr("zelos_extension_can.socketcan.can_admin_links", lambda: False)
+        ip = _Ip(monkeypatch, _link_json("BUS-OFF"))
+        sock.look()
+        ip.link = _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=9)
+        assert sock.look() is False
+        ip.link = _link_json("ERROR-ACTIVE", ifindex=9)
+        assert sock.look() is True, "brought up by hand: reopen"
+        assert ip.sets == []
+
+
+class TestReopenNative:
+    """Reopening the native codec on a replugged interface."""
+
+    @staticmethod
+    def _native(received: int):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        native = MagicMock()
+        native.metrics.return_value = SimpleNamespace(
+            messages_received=received,
+            messages_decoded=received - 10 if received > 10 else received,
+            unknown_messages=1,
+            tx_errors=2,
+            tx_overflows=0,
+        )
+        return native
+
+    def test_counts_never_drop_and_periodics_come_back(self, codec, monkeypatch):
+        from unittest.mock import MagicMock
+
+        old, new = self._native(40), self._native(5)
+        codec._native = old
+        codec.periodics.specs["t"] = (can.Message(arbitration_id=0x3AA, data=b"\xaa"), 0.1, "raw")
+        spawned, seen = [], []
+        monkeypatch.setattr(codec.periodics, "start", lambda _bus, tid, *a: spawned.append(tid))
+
+        def start_native():
+            seen.append(codec._native_rx_counts()["messages_received"])
+            codec._native, codec.bus = new, MagicMock()
+
+        monkeypatch.setattr(codec, "_start_native", start_native)
+        before = codec._native_rx_counts()["messages_received"]
+        codec._restart_native()
+        after = codec._native_rx_counts()["messages_received"]
+        assert old.stop.called
+        assert (before, seen, after) == (40, [40], 45)
+        assert codec._native_tx_counts() == {"tx_errors": 4, "tx_overflows": 0}
+        assert spawned == ["t"]
+
+    def test_a_failed_reopen_reads_reconnecting_and_retries(self, codec, monkeypatch):
+        from unittest.mock import MagicMock
+
+        codec._native = self._native(40)
+        attempts = []
+
+        def start_native():
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise can.CanOperationError("No such device")
+            codec._native, codec.bus = self._native(0), MagicMock()
+
+        monkeypatch.setattr(codec, "_start_native", start_native)
+        with pytest.raises(can.CanOperationError):
+            codec._restart_native()
+        assert (codec.running, codec.bus, codec._native) == (True, None, None)
+        bus = codec.get_tx_state()["bus"]
+        assert (bus["status"], bus["health"]["detail"]) == (
+            "error",
+            "The bus is down; reconnecting to the adapter.",
+        )
+        codec._restart_native()
+        assert codec.bus is not None
+        assert codec._native_rx_counts()["messages_received"] == 40
+
+    def test_stop_during_a_reopen_leaves_the_bus_stopped(self, codec, monkeypatch):
+        import threading
+        import time as _time
+        from unittest.mock import MagicMock
+
+        opening, release = threading.Event(), threading.Event()
+
+        def slow_start_native():
+            opening.set()
+            release.wait(5)
+            codec._native, codec.bus = self._native(0), MagicMock()
+            codec.running = True
+
+        monkeypatch.setattr(codec, "_start_native", slow_start_native)
+        reopen = threading.Thread(target=codec._restart_native)
+        reopen.start()
+        assert opening.wait(5)
+        stopper = threading.Thread(target=codec.stop)
+        stopper.start()
+        deadline = _time.monotonic() + 5
+        while codec.running and _time.monotonic() < deadline:
+            _time.sleep(0.001)
+        assert not codec.running, "stop() never began"
+        release.set()
+        reopen.join(5)
+        stopper.join(5)
+        assert (codec.running, codec.bus, codec._native) == (False, None, None)
+
+    def test_one_periodic_failing_to_restart_spares_the_rest(self, codec, monkeypatch):
+        for tid in ("a", "b", "c"):
+            codec.periodics.specs[tid] = (can.Message(arbitration_id=0x10), 0.1, "raw")
+        started = []
+
+        def spawn(_bus, tid, *_args):
+            if tid == "b":
+                raise can.CanOperationError("Failed to set up the periodic")
+            started.append(tid)
+
+        monkeypatch.setattr(codec.periodics, "start", spawn)
+        codec.periodics.rearm(codec.bus)
+        assert started == ["a", "c"]
+        assert "b" in codec.periodics.specs, "kept for the next reopen"
+
+    def test_a_replugged_interface_names_the_settings_it_last_had(self, codec, monkeypatch):
+        _Ip(monkeypatch, _link_json("STOPPED", flags=_DOWN, bitrate=None, ifindex=9))
+        _as_socketcan(codec)
+        codec._supervisor.settings = _FD_SETTINGS
+        detail = codec.get_tx_state()["bus"]["health"]["detail"]
+        assert detail == "can0 is down. Bring it up: sudo ip link set can0 up type can " + " ".join(
+            _FD_SETTINGS
+        )
+
+    def test_a_reopen_after_stop_opens_nothing(self, codec, monkeypatch):
+        opened = []
+        monkeypatch.setattr(codec, "_start_native", lambda: opened.append(1))
+        codec.stop()
+        codec._restart_native()
+        assert opened == []
+
+
+class TestSupervisionLoops:
+    """One bus failing to recover must not end the others: `_run_codecs_async`
+    stops every bus when any loop raises."""
+
+    @staticmethod
+    def _fast(monkeypatch):
+        import asyncio
+
+        real_sleep = asyncio.sleep
+
+        async def no_wait(_seconds):
+            await real_sleep(0)
+
+        monkeypatch.setattr("zelos_extension_can.codec.asyncio.sleep", no_wait)
+
+    @pytest.mark.parametrize("failing", ["supervise", "reopen"])
+    def test_the_native_loop_survives_a_failed_recovery(self, codec, monkeypatch, failing):
+        import asyncio
+        import subprocess
+        from types import SimpleNamespace
+
+        self._fast(monkeypatch)
+        codec._use_native = True
+        looks, reopens = [], []
+
+        def supervise():
+            looks.append(1)
+            if len(looks) == 3:
+                codec.running = False
+            if failing == "supervise" and len(looks) == 1:
+                raise subprocess.TimeoutExpired(["ip"], 1.0)
+            return True
+
+        def reopen():
+            reopens.append(1)
+            if failing == "reopen" and len(reopens) == 1:
+                raise can.CanOperationError("No such device")
+
+        monkeypatch.setattr(codec, "_supervisor", SimpleNamespace(look=supervise))
+        monkeypatch.setattr(codec, "_restart_native", reopen)
+        asyncio.run(codec._run_async())
+        assert len(looks) == 3
+        assert len(reopens) == (2 if failing == "supervise" else 3)
+
+    def test_the_socketcan_py_loop_survives_a_failed_look(self, codec, monkeypatch):
+        import asyncio
+        import subprocess
+        from types import SimpleNamespace
+
+        self._fast(monkeypatch)
+        _as_socketcan(codec, "socketcan-py")
+        looks, reconnects = [], []
+
+        def supervise():
+            looks.append(1)
+            if len(looks) == 1:
+                raise subprocess.TimeoutExpired(["ip"], 1.0)
+            codec.running = False
+            return True
+
+        async def reconnect():
+            reconnects.append(1)
+
+        monkeypatch.setattr(codec, "_supervisor", SimpleNamespace(look=supervise))
+        monkeypatch.setattr(codec, "_handle_reconnection", reconnect)
+        monkeypatch.setattr(codec, "_start_notifier", lambda: None)
+        monkeypatch.setattr(codec, "_check_notifier_health", lambda _n: True)
+        monkeypatch.setattr(codec, "_check_bus_health", lambda: True)
+        asyncio.run(codec._run_async())
+        assert (len(looks), len(reconnects)) == (2, 1)
 
 
 class TestSocketcanErrorFrame:
@@ -1477,6 +1822,19 @@ class TestReader:
             codec._stop_notifier()
             codec.bus = mocked
             bus.shutdown()
+
+
+class TestBusOffRecovery:
+    """A PCAN controller left bus-off never sends again; the health check restarts it."""
+
+    @pytest.mark.parametrize(
+        ("state", "healthy"), [("bus_off", False), ("warning", True), ("ok", True)]
+    )
+    def test_only_bus_off_restarts_the_bus(self, codec, monkeypatch, state, healthy):
+        codec.config["interface"] = "pcan"
+        codec.bus.state = can.BusState.ACTIVE
+        monkeypatch.setattr("zelos_extension_can.codec.pcan_controller_state", lambda _bus: state)
+        assert codec._check_bus_health() is healthy
 
 
 class TestRepeatFilter:

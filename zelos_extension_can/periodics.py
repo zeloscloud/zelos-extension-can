@@ -112,6 +112,12 @@ class Periodics:
         self.slots.clear()
         self.specs.clear()
 
+    def halt(self) -> None:
+        """Stop every task, keeping each spec to start it again."""
+        for task in self.tasks.values():
+            task.stop()
+        self.tasks.clear()
+
     def forget_tasks(self) -> None:
         """Drop the tasks a bus took down with it on shutdown, keeping each spec."""
         self.tasks.clear()
