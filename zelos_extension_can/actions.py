@@ -95,7 +95,10 @@ def list_codecs() -> dict[str, Any]:
 
 @action(
     "Get TX State",
-    "Stateless snapshot of one bus: its periodics and bus-health metrics.",
+    "Stateless snapshot of one bus: its periodics, metrics, and health. `status` is "
+    "active, warning (errors on the wire, error counters high, or frames lost on receive), "
+    "error (error-passive, bus-off, adapter unreachable or down, or sends failing), stopped, "
+    "or unknown; `health` says why.",
     read_only=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)

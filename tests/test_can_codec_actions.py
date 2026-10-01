@@ -24,7 +24,7 @@ import can
 import cantools
 import pytest
 
-from zelos_extension_can.codec import CanCodec, _derive_bus_status
+from zelos_extension_can.codec import CanCodec
 from zelos_extension_can.dbc import (
     describe_dbc_signal,
     encode_dbc,
@@ -32,6 +32,7 @@ from zelos_extension_can.dbc import (
     scale_precision,
     value_table_for_trace,
 )
+from zelos_extension_can.health import derive_bus_status
 from zelos_extension_can.params import (
     parse_can_id,
     parse_data_hex,
@@ -552,22 +553,22 @@ class TestDeriveBusStatus:
     """Tests the pure helper at its seam (memory: feedback_test_at_helper_seam)."""
 
     def test_returns_stopped_when_not_running(self):
-        assert _derive_bus_status(False, object()) == "stopped"
+        assert derive_bus_status(False, object()) == "stopped"
 
     def test_returns_stopped_when_bus_is_none(self):
-        assert _derive_bus_status(True, None) == "stopped"
+        assert derive_bus_status(True, None) == "stopped"
 
     def test_returns_active_for_real_active_state(self):
         class FakeBus:
             state = can.BusState.ACTIVE
 
-        assert _derive_bus_status(True, FakeBus()) == "active"
+        assert derive_bus_status(True, FakeBus()) == "active"
 
     def test_returns_error_for_error_state(self):
         class FakeBus:
             state = can.BusState.ERROR
 
-        assert _derive_bus_status(True, FakeBus()) == "error"
+        assert derive_bus_status(True, FakeBus()) == "error"
 
     def test_falls_back_to_active_when_state_raises(self):
         class FakeBus:
@@ -575,13 +576,13 @@ class TestDeriveBusStatus:
             def state(self):
                 raise NotImplementedError("virtual backend doesn't track state")
 
-        assert _derive_bus_status(True, FakeBus()) == "active"
+        assert derive_bus_status(True, FakeBus()) == "active"
 
     def test_falls_back_to_active_when_state_isnt_bus_state(self):
         class FakeBus:
             state = "not-an-enum"  # mocked / unusual backend
 
-        assert _derive_bus_status(True, FakeBus()) == "active"
+        assert derive_bus_status(True, FakeBus()) == "active"
 
 
 class TestSendErrorCounter:
@@ -644,6 +645,490 @@ class TestEncodeHelper:
         assert out == bytes(
             msg.encode({"logging_mux": 0, "logging_signal0": 1, "no_mux_logging_signal": 0})
         )
+
+
+# ─── Bus health: what the controller reports, not the mode the bus was opened in ──
+
+
+class _FakePcan:
+    """A PcanBus whose status() is fixed, without opening hardware."""
+
+    @staticmethod
+    def make(code: int | Exception):
+        from can.interfaces.pcan import PcanBus
+
+        class Fake(PcanBus):
+            def __init__(self):  # noqa: D401 - no hardware
+                pass
+
+            def status(self):
+                if isinstance(code, Exception):
+                    raise code
+                return code
+
+        return Fake()
+
+
+class TestPcanControllerState:
+    @pytest.mark.parametrize(
+        ("code_name", "state"),
+        [
+            ("PCAN_ERROR_OK", "ok"),
+            ("PCAN_ERROR_BUSLIGHT", "warning"),
+            ("PCAN_ERROR_BUSHEAVY", "warning"),
+            ("PCAN_ERROR_BUSPASSIVE", "passive"),
+            ("PCAN_ERROR_BUSOFF", "bus_off"),
+        ],
+    )
+    def test_maps_the_driver_status(self, code_name, state):
+        from can.interfaces.pcan import basic as pcan
+
+        from zelos_extension_can.pcan import pcan_controller_state
+
+        assert pcan_controller_state(_FakePcan.make(getattr(pcan, code_name))) == state
+
+    def test_a_full_transmit_queue_alongside_warning_still_reads_warning(self):
+        from can.interfaces.pcan import basic as pcan
+
+        from zelos_extension_can.pcan import pcan_controller_state
+
+        code = pcan.PCAN_ERROR_BUSHEAVY | pcan.PCAN_ERROR_QXMTFULL
+        assert pcan_controller_state(_FakePcan.make(code)) == "warning"
+
+    @pytest.mark.parametrize(
+        "code_name",
+        [
+            "PCAN_ERROR_ILLHW",
+            "PCAN_ERROR_ILLNET",
+            "PCAN_ERROR_ILLCLIENT",
+            "PCAN_ERROR_ILLHANDLE",
+            "PCAN_ERROR_NODRIVER",
+            "PCAN_ERROR_REGTEST",
+            "PCAN_ERROR_INITIALIZE",
+        ],
+    )
+    def test_a_vanished_adapter_is_unavailable_not_ok(self, code_name):
+        """Pulling the USB cable makes status() answer an invalid-handle code."""
+        from can.interfaces.pcan import basic as pcan
+
+        from zelos_extension_can.pcan import pcan_controller_state
+
+        assert pcan_controller_state(_FakePcan.make(getattr(pcan, code_name))) == "unavailable"
+
+    @pytest.mark.parametrize(
+        "code_name",
+        ["PCAN_ERROR_CAUTION", "PCAN_ERROR_ILLDATA", "PCAN_ERROR_UNKNOWN", "PCAN_ERROR_HWINUSE"],
+    )
+    def test_other_codes_leave_the_state_to_the_bus_bits(self, code_name):
+        """Only handle, driver and hardware codes mean the adapter is gone."""
+        from can.interfaces.pcan import basic as pcan
+
+        from zelos_extension_can.pcan import pcan_controller_state
+
+        code = getattr(pcan, code_name)
+        assert pcan_controller_state(_FakePcan.make(code)) == "ok"
+        assert pcan_controller_state(_FakePcan.make(code | pcan.PCAN_ERROR_BUSHEAVY)) == "warning"
+
+    def test_a_status_that_raises_is_unavailable(self):
+        from zelos_extension_can.pcan import pcan_controller_state
+
+        gone = can.CanOperationError("The value of a handle is invalid")
+        assert pcan_controller_state(_FakePcan.make(gone)) == "unavailable"
+
+    def test_any_other_bus_reports_nothing(self):
+        from zelos_extension_can.pcan import pcan_controller_state
+
+        assert pcan_controller_state(object()) is None
+
+
+def _ip_reply(monkeypatch, *, stdout="", stderr="", returncode=0, calls=None):
+    import subprocess
+
+    def run(args, **_kwargs):
+        if calls is not None:
+            calls.append(args)
+        return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr("zelos_extension_can.socketcan.subprocess.run", run)
+
+
+def _link_json(state, flags=("NOARP", "UP", "ECHO"), bitrate=250_000, restart_ms=0, ifindex=4):
+    info = {"state": state, "berr_counter": {"tx": 128, "rx": 3}, "restart_ms": restart_ms}
+    if bitrate:
+        info["bittiming"] = {"bitrate": bitrate}
+    return json.dumps(
+        [
+            {
+                "ifindex": ifindex,
+                "ifname": "can0",
+                "flags": list(flags),
+                "linkinfo": {"info_kind": "can", "info_data": info},
+            }
+        ]
+    )
+
+
+_DOWN = ("NOARP", "ECHO")
+
+#: `ip -details -json link show can2` on Linux 6.8 for a PCAN-USB Pro FD channel
+#: set up with `bitrate 500000 sample-point 0.8 dbitrate 2000000 dsample-point 0.75
+#: fd on listen-only on restart-ms 100`.
+_FD_LINK = json.dumps(
+    [
+        {
+            "ifindex": 5,
+            "ifname": "can2",
+            "flags": ["NOARP", "UP", "LOWER_UP", "ECHO"],
+            "linkinfo": {
+                "info_kind": "can",
+                "info_data": {
+                    "ctrlmode": ["LISTEN-ONLY", "FD"],
+                    "state": "ERROR-ACTIVE",
+                    "berr_counter": {"tx": 0, "rx": 0},
+                    "restart_ms": 100,
+                    "bittiming": {"bitrate": 500000, "sample_point": 0.8, "tq": 12},
+                    "data_bittiming": {"bitrate": 2000000, "sample_point": 0.75, "tq": 12},
+                    "clock": 80000000,
+                },
+            },
+        }
+    ]
+)
+_FD_SETTINGS = [
+    "bitrate",
+    "500000",
+    "sample-point",
+    "0.8",
+    "dbitrate",
+    "2000000",
+    "dsample-point",
+    "0.75",
+    "listen-only",
+    "on",
+    "fd",
+    "on",
+    "restart-ms",
+    "100",
+]
+
+
+class _Ip:
+    """A fake `ip`: `show` answers with `link` (None: the interface is gone),
+    and every `set` is recorded and answered as configured."""
+
+    def __init__(self, monkeypatch, link, *, set_returncode=0, set_raises=None):
+        self.link = link
+        self.set_returncode = set_returncode
+        self.set_raises = set_raises
+        self.sets: list[list[str]] = []
+        monkeypatch.setattr("zelos_extension_can.socketcan.subprocess.run", self.run)
+
+    def run(self, args, **_kwargs):
+        import subprocess
+
+        if args[:3] == ["ip", "link", "set"]:
+            self.sets.append(args[5:])
+            if self.set_raises is not None:
+                raise self.set_raises
+            stderr = "RTNETLINK answers: Operation not permitted" if self.set_returncode else ""
+            return subprocess.CompletedProcess(args, self.set_returncode, stdout="", stderr=stderr)
+        if self.link is None:
+            stderr = 'Device "can0" does not exist.'
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr=stderr)
+        return subprocess.CompletedProcess(args, 0, stdout=self.link, stderr="")
+
+
+def _as_socketcan(codec, interface="socketcan", channel="can0"):
+    """Make a test codec read its health as a SocketCAN bus does."""
+    from zelos_extension_can.health import BusHealth
+
+    codec.config["interface"] = interface
+    codec.config["channel"] = channel
+    codec.health = BusHealth(interface)
+    return codec
+
+
+class TestSocketcanLink:
+    @pytest.mark.parametrize(
+        ("kernel", "state"),
+        [
+            ("ERROR-ACTIVE", "ok"),
+            ("ERROR-WARNING", "warning"),
+            ("ERROR-PASSIVE", "passive"),
+            ("BUS-OFF", "bus_off"),
+        ],
+    )
+    def test_reads_state_counters_and_settings(self, monkeypatch, kernel, state):
+        from zelos_extension_can.socketcan import socketcan_link
+
+        _ip_reply(monkeypatch, stdout=_link_json(kernel))
+        link = socketcan_link("can0")
+        assert (link.exists, link.up, link.state) == (True, True, state)
+        assert link.counters == {"tx_error_count": 128, "rx_error_count": 3}
+        assert link.settings == ["bitrate", "250000"]
+
+    def test_reads_an_fd_controllers_settings(self, monkeypatch):
+        from zelos_extension_can.socketcan import socketcan_link
+
+        _ip_reply(monkeypatch, stdout=_FD_LINK)
+        assert socketcan_link("can2").settings == _FD_SETTINGS
+
+    def test_switchable_termination_is_kept(self, monkeypatch):
+        from zelos_extension_can.socketcan import socketcan_settings
+
+        info = {"bittiming": {"bitrate": 500000}, "termination": 120}
+        assert socketcan_settings(info) == ["bitrate", "500000", "termination", "120"]
+
+    def test_a_freshly_plugged_adapter_has_no_settings(self, monkeypatch):
+        from zelos_extension_can.socketcan import socketcan_link
+
+        _ip_reply(monkeypatch, stdout=_link_json("STOPPED", flags=_DOWN, bitrate=None))
+        link = socketcan_link("can0")
+        assert (link.up, link.settings) == (False, [])
+
+    def test_a_vanished_interface_does_not_exist(self, monkeypatch):
+        from zelos_extension_can.socketcan import socketcan_link
+
+        _ip_reply(monkeypatch, returncode=1, stderr='Device "can0" does not exist.')
+        assert socketcan_link("can0").exists is False
+
+    def test_vcan_reports_no_state(self, monkeypatch):
+        from zelos_extension_can.socketcan import socketcan_link
+
+        vcan = [{"ifname": "vcan0", "flags": ["UP"], "linkinfo": {"info_kind": "vcan"}}]
+        _ip_reply(monkeypatch, stdout=json.dumps(vcan))
+        link = socketcan_link("vcan0")
+        assert (link.state, link.settings) == (None, [])
+
+    def test_a_missing_ip_reports_nothing(self, monkeypatch):
+        from zelos_extension_can.socketcan import socketcan_link
+
+        def run(*_args, **_kwargs):
+            raise FileNotFoundError("ip")
+
+        monkeypatch.setattr("zelos_extension_can.socketcan.subprocess.run", run)
+        assert socketcan_link("can0") is None
+
+
+class TestSocketcanHealth:
+    def test_gone_says_check_usb(self):
+        from zelos_extension_can.socketcan import SocketcanLink, socketcan_health
+
+        assert socketcan_health("can0", SocketcanLink(exists=False), []) == (
+            "unavailable",
+            "can0 is gone. Check its USB connection.",
+        )
+
+    def test_down_names_the_command_with_the_saved_settings(self):
+        from zelos_extension_can.socketcan import SocketcanLink, socketcan_health
+
+        settings = ["bitrate", "500000", "dbitrate", "2000000", "fd", "on"]
+        link = SocketcanLink(exists=True, up=False)
+        state, detail = socketcan_health("can0", link, settings)
+        assert state == "unavailable"
+        assert detail.endswith(
+            "sudo ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on"
+        )
+
+    def test_down_with_nothing_known_names_a_placeholder(self):
+        from zelos_extension_can.socketcan import SocketcanLink, socketcan_health
+
+        _, detail = socketcan_health("can0", SocketcanLink(exists=True, up=False), [])
+        assert detail.endswith("sudo ip link set can0 up type can bitrate BITRATE")
+
+    def test_bus_off_without_restart_names_the_fix(self):
+        from zelos_extension_can.socketcan import SocketcanLink, socketcan_health
+
+        link = SocketcanLink(exists=True, up=True, state="bus_off", restart_ms=0)
+        state, detail = socketcan_health("can1", link, [])
+        assert state == "bus_off"
+        assert "sudo ip link set can1 type can restart-ms 100" in detail
+
+    def test_bus_off_the_kernel_will_restart_needs_no_fix(self):
+        from zelos_extension_can.health import HEALTH_DETAIL
+        from zelos_extension_can.socketcan import SocketcanLink, socketcan_health
+
+        link = SocketcanLink(exists=True, up=True, state="bus_off", restart_ms=100)
+        assert socketcan_health("can1", link, []) == ("bus_off", HEALTH_DETAIL["bus_off"])
+
+
+class TestSocketcanErrorFrame:
+    @pytest.mark.parametrize(
+        ("error_class", "controller", "state", "says"),
+        [
+            (0x20, 0, "warning", "No node acknowledged"),
+            (0x24, 0x20, "passive", "No node acknowledged"),
+            (0x04, 0x20, "passive", "most frames are failing"),
+            (0x204, 0x08, "warning", "error counters are high"),
+            (0x40, 0, "bus_off", "sends nothing"),
+            (0x08, 0, "warning", "saw errors on the wire"),
+            (0x80, 0, "warning", "saw errors on the wire"),
+            (0x04, 0x01, "warning", "buffer overflowed"),
+            (0x204, 0x40, "ok", None),
+            (0x100, 0, "ok", None),
+        ],
+    )
+    def test_reads_linux_error_classes(self, error_class, controller, state, says):
+        from zelos_extension_can.health import socketcan_error_frame
+
+        frame = can.Message(
+            arbitration_id=error_class,
+            is_error_frame=True,
+            data=bytes([0, controller, 0, 0, 0, 0, 0, 0]),
+        )
+        got_state, detail = socketcan_error_frame(frame)
+        assert got_state == state
+        assert detail is None if says is None else says in detail
+
+    @pytest.mark.parametrize("error_class", [0x02, 0x200], ids=["lost_arbitration", "counters"])
+    def test_frames_that_say_nothing_of_health_are_ignored(self, error_class):
+        from zelos_extension_can.health import socketcan_error_frame
+
+        frame = can.Message(arbitration_id=error_class, is_error_frame=True, data=bytes(8))
+        assert socketcan_error_frame(frame) is None
+
+
+class TestBusHealthInSnapshot:
+    def test_a_healthy_bus_is_active(self, codec):
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "active"
+        assert bus["health"] == {"state": "unknown", "detail": None}
+
+    def test_high_error_counters_read_warning_with_why(self, codec, monkeypatch):
+        monkeypatch.setattr(
+            "zelos_extension_can.codec.pcan_controller_state", lambda _bus: "warning"
+        )
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "warning"
+        assert bus["health"]["state"] == "warning"
+        assert "frames have been failing on the wire" in bus["health"]["detail"]
+
+    @pytest.mark.parametrize("state", ["passive", "bus_off"])
+    def test_passive_or_bus_off_is_an_error(self, codec, monkeypatch, state):
+        monkeypatch.setattr("zelos_extension_can.codec.pcan_controller_state", lambda _bus: state)
+        assert codec.get_tx_state()["bus"]["status"] == "error"
+
+    def test_a_failed_send_is_an_error_until_it_ages_out(self, codec, monkeypatch):
+        codec.bus.send.side_effect = can.CanError("The transmit queue is full")
+        with pytest.raises(RuntimeError):
+            codec.send_raw(can_id="0x100", data="01")
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "error"
+        assert bus["health"]["detail"] == "Frames could not be sent: The transmit queue is full."
+
+        monkeypatch.setattr("zelos_extension_can.health.RECENT_S", 0.0)
+        assert codec.get_tx_state()["bus"]["status"] == "active"
+
+    def test_an_unavailable_adapter_is_an_error(self, codec, monkeypatch):
+        monkeypatch.setattr(
+            "zelos_extension_can.codec.pcan_controller_state", lambda _bus: "unavailable"
+        )
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "error"
+        assert "Check its USB connection" in bus["health"]["detail"]
+
+    def test_a_bus_being_reconnected_is_an_error_not_stopped(self, codec):
+        mocked, codec.bus = codec.bus, None
+        try:
+            bus = codec.get_tx_state()["bus"]
+        finally:
+            codec.bus = mocked
+        assert bus["status"] == "error"
+        assert bus["health"] == {
+            "state": "unavailable",
+            "detail": "The bus is down; reconnecting to the adapter.",
+        }
+
+    def test_the_reason_names_what_happened_then_why(self, codec, monkeypatch):
+        monkeypatch.setattr(
+            "zelos_extension_can.codec.pcan_controller_state", lambda _bus: "warning"
+        )
+        codec.bus.send.side_effect = can.CanError("The transmit queue is full")
+        with pytest.raises(RuntimeError):
+            codec.send_raw(can_id="0x100", data="01")
+        detail = codec.get_tx_state()["bus"]["health"]["detail"]
+        assert detail.startswith("Frames could not be sent: The transmit queue is full. ")
+        assert detail.endswith(
+            "Check the wiring, termination, and that another node runs at this bitrate."
+        )
+
+    def test_a_gone_interface_is_an_error_not_active(self, codec, monkeypatch):
+        _Ip(monkeypatch, None)
+        _as_socketcan(codec)
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "error"
+        assert bus["health"]["detail"] == "can0 is gone. Check its USB connection."
+
+    def test_a_down_interface_names_the_command_that_brings_it_back(self, codec, monkeypatch):
+        _Ip(monkeypatch, _link_json("STOPPED", flags=_DOWN))
+        _as_socketcan(codec)
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "error"
+        assert bus["health"]["detail"] == (
+            "can0 is down. Bring it up: sudo ip link set can0 up type can bitrate 250000"
+        )
+
+    def test_a_recent_error_frame_never_overrides_the_kernels_live_state(self, codec, monkeypatch):
+        import time as _time
+
+        from zelos_extension_can.health import HEALTH_DETAIL
+
+        _Ip(monkeypatch, _link_json("ERROR-ACTIVE"))
+        _as_socketcan(codec, "socketcan-py")
+        codec.health._error_frame = (_time.monotonic(), "bus_off", HEALTH_DETAIL["bus_off"])
+        bus = codec.get_tx_state()["bus"]
+        assert (bus["status"], bus["health"]["state"]) == ("active", "ok")
+
+    def test_an_error_frame_refines_the_reason_for_the_same_state(self, codec, monkeypatch):
+        _Ip(monkeypatch, _link_json("ERROR-PASSIVE"))
+        _as_socketcan(codec, "socketcan-py")
+        no_ack = can.Message(arbitration_id=0x24, is_error_frame=True, data=bytes([0, 0x20]))
+        codec.on_message_received(no_ack)
+        health = codec.get_tx_state()["bus"]["health"]
+        assert health["state"] == "passive"
+        assert health["detail"].startswith("No node acknowledged")
+
+    def test_pcan_status_outranks_a_recent_error_frame(self, codec, monkeypatch):
+        monkeypatch.setattr("zelos_extension_can.codec.pcan_controller_state", lambda _bus: "ok")
+        codec.on_message_received(can.Message(arbitration_id=0, is_error_frame=True))
+        bus = codec.get_tx_state()["bus"]
+        assert (bus["status"], bus["health"]["state"]) == ("active", "ok")
+        assert codec.metrics.error_frames == 1
+
+    def test_a_stopped_bus_is_stopped_whatever_it_last_saw(self, codec):
+        codec.bus.send.side_effect = can.CanError("down")
+        with pytest.raises(RuntimeError):
+            codec.send_raw(can_id="0x100", data="01")
+        codec.stop()
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "stopped"
+        assert bus["health"]["state"] == "unknown"
+
+
+class TestErrorFrames:
+    def test_an_error_frame_is_counted_not_traced_or_decoded(self, codec):
+        frame = can.Message(arbitration_id=0x20, is_error_frame=True, data=bytes(8))
+        with patch.object(codec.decoder, "handle") as decode:
+            codec.on_message_received(frame)
+        decode.assert_not_called()
+        metrics = codec.get_tx_state()["bus"]["metrics"]
+        assert metrics["error_frames"] == 1
+        assert metrics["messages_received"] == 0
+
+    def test_error_frames_mark_the_bus(self, codec):
+        codec.on_message_received(can.Message(arbitration_id=0, is_error_frame=True))
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "warning"
+        assert bus["health"]["state"] == "warning"
+        assert "saw errors on the wire" in bus["health"]["detail"]
+
+    def test_lost_arbitration_is_counted_but_marks_nothing(self, codec):
+        _as_socketcan(codec, "socketcan-py")
+        codec.on_message_received(
+            can.Message(arbitration_id=0x02, is_error_frame=True, data=bytes(8))
+        )
+        assert codec.metrics.error_frames == 1
+        assert codec.health._error_frame is None
 
 
 class TestPcanCanFd:
