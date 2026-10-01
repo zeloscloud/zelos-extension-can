@@ -1587,6 +1587,21 @@ class TestFramesTheBusCanCarry:
         assert codec.periodics.tasks == {}
         codec.bus.send.assert_not_called()
 
+    def test_a_dbc_message_over_eight_bytes_not_marked_can_fd_says_why(self, codec):
+        # The test DBC defines CANFD_BulkData as 64 bytes without VFrameFormat.
+        dbc_msg = codec.catalog.resolve("CANFD_BulkData")
+        assert (dbc_msg.is_fd, dbc_msg.length) == (False, 64)
+        signals = json.dumps({s.name: 0 for s in dbc_msg.signals})
+        why = "CANFD_BulkData is 64 bytes, but its DBC doesn't mark it CAN FD"
+        for fd_mode in (False, True):
+            codec.fd_mode = fd_mode
+            with pytest.raises(ValueError, match=why):
+                codec.send_message("CANFD_BulkData", signals)
+            with pytest.raises(ValueError, match=why):
+                codec.start_periodic_message("CANFD_BulkData", signals, period_ms=10)
+        assert codec.periodics.tasks == {}
+        codec.bus.send.assert_not_called()
+
 
 class TestPeriodicSlots:
     def test_a_periodic_that_fails_for_another_reason_ends_marked_inactive(self, codec):

@@ -1152,7 +1152,13 @@ class CanCodec(can.Listener):
     def _dbc_frame(self, dbc_msg: cantools.database.can.Message, data: bytes) -> can.Message:
         """``dbc_msg`` as a frame this bus can carry. A DBC marks a CAN FD message
         with ``VFrameFormat``; on a bus without CAN-FD Mode, one that fits a
-        classic frame goes out as one."""
+        classic frame goes out as one. Without the mark, one over 8 bytes fits
+        no frame."""
+        if not dbc_msg.is_fd and len(data) > 8:
+            raise ValueError(
+                f"{dbc_msg.name} is {len(data)} bytes, but its DBC doesn't mark it CAN FD "
+                "(VFrameFormat), and a classic CAN frame carries at most 8"
+            )
         is_fd = dbc_msg.is_fd and (self.fd_mode or len(data) > 8)
         return self._frame(dbc_msg.frame_id, data, dbc_msg.is_extended_frame, is_fd)
 
