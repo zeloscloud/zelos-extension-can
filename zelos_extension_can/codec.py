@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import math
 import sys
 import threading
 import time
@@ -67,6 +68,46 @@ class Metrics:
     # Error frames the adapter delivered. They report bus faults, not traffic,
     # so they are counted here and never traced or decoded as data.
     error_frames: int = 0
+    # Reads that raised and were survived, such as a PCAN receive-queue overrun:
+    # frames were lost, but the bus still works (see `_Reader`).
+    rx_errors: int = 0
+
+
+class _Reader:
+    """The codec's listener on its Notifier. A failed read (a PCAN receive-queue
+    overrun during an error flood, say) loses frames but leaves the bus usable,
+    so it is reported and reading goes on, where python-can would end the reader
+    and force a full reconnect. Failures that keep coming with no frame between,
+    as from an unplugged adapter, still end it.
+
+    It has no `stop()`: Notifier.stop() calls it on listeners, and the codec's
+    own would stop the codec and its periodics on every reconnect."""
+
+    # Back-to-back failed reads that mean the adapter itself is gone.
+    GIVE_UP_AFTER = 50
+    # Failures further apart than a read's timeout are separate incidents.
+    BACK_TO_BACK_S = 1.0
+
+    def __init__(self, on_message: Any, on_error: Any) -> None:
+        self._on_message = on_message
+        self._on_error = on_error
+        self._failures = 0
+        self._last_failure = -math.inf
+
+    def __call__(self, msg: can.Message) -> None:
+        self._failures = 0
+        self._on_message(msg)
+
+    def on_error(self, exc: Exception) -> None:
+        if not isinstance(exc, can.CanOperationError):
+            raise exc
+        now = time.monotonic()
+        back_to_back = now - self._last_failure < self.BACK_TO_BACK_S
+        self._failures = self._failures + 1 if back_to_back else 1
+        self._last_failure = now
+        if self._failures >= self.GIVE_UP_AFTER:
+            raise exc
+        self._on_error(exc)
 
 
 class CanCodec(can.Listener):
@@ -149,6 +190,7 @@ class CanCodec(can.Listener):
         self.metrics = Metrics()
         # Failed sends are counted from every periodic's thread at once.
         self._tx_failure_lock = threading.Lock()
+        self._rx_failure_logged_at = -math.inf
         self.health = BusHealth(config.get("interface"))
 
         # Demo mode simulation
@@ -647,9 +689,9 @@ class CanCodec(can.Listener):
             )
 
     def _start_notifier(self) -> None:
-        # A bare callback: Notifier.stop() calls stop() on Listener objects,
-        # which would stop the codec (and its periodics) on every reconnect.
-        self._notifier = can.Notifier(self.bus, [self.on_message_received])
+        self._notifier = can.Notifier(
+            self.bus, [_Reader(self.on_message_received, self._on_receive_error)]
+        )
 
     def _stop_notifier(self) -> None:
         """Stop and join the python-can reader, if any."""
@@ -847,6 +889,7 @@ class CanCodec(can.Listener):
                 "messages_decoded": self.metrics.messages_decoded,
                 "unknown_messages": self.metrics.unknown_messages,
                 "error_frames": self.metrics.error_frames,
+                "rx_errors": self.metrics.rx_errors,
             }
         adapter = self._adapter_health() if self.running and self.bus is not None else None
         status, health = self.health.report(self.running, self.bus, *(adapter or (None, None, {})))
@@ -1087,6 +1130,15 @@ class CanCodec(can.Listener):
         with self._tx_failure_lock:
             self.metrics.tx_errors += 1
         self.health.note_tx_failure(str(exc))
+
+    def _on_receive_error(self, exc: Exception) -> None:
+        """Count a failed read the reader survived; it marks the bus's health."""
+        now = time.monotonic()
+        self.metrics.rx_errors += 1
+        self.health.note_rx_failure(str(exc))
+        if now - self._rx_failure_logged_at >= 60.0:
+            self._rx_failure_logged_at = now
+            logger.warning("[%s] Frames were lost on receive: %s", self.bus_name, exc)
 
     def _adapter_health(self) -> tuple[str | None, str | None, dict[str, int]]:
         """The error state the adapter itself reports, why, and its error
