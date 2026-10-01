@@ -644,3 +644,70 @@ class TestEncodeHelper:
         assert out == bytes(
             msg.encode({"logging_mux": 0, "logging_signal0": 1, "no_mux_logging_signal": 0})
         )
+
+
+class TestPcanCanFd:
+    """PCAN opens CAN FD only from explicit bit timing; the extension derives it."""
+
+    @staticmethod
+    def _bus_kwargs(**config) -> dict:
+        cfg = {"interface": "pcan", "channel": "PCAN_USBBUS1", "fd_mode": True, **config}
+        with patch("zelos_sdk.TraceSource"), patch("can.Bus") as bus:
+            codec = CanCodec(cfg, bus_name="fd")
+            try:
+                codec.start()
+                return bus.call_args.kwargs
+            finally:
+                codec.stop()
+
+    def test_fd_gets_timing_from_both_bitrates(self):
+        kwargs = self._bus_kwargs(bitrate=500_000, data_bitrate=2_000_000)
+        timing = kwargs["timing"]
+        assert isinstance(timing, can.BitTimingFd)
+        assert (timing.f_clock, timing.nom_bitrate, timing.data_bitrate) == (
+            80_000_000,
+            500_000,
+            2_000_000,
+        )
+        assert "bitrate" not in kwargs
+        assert "data_bitrate" not in kwargs
+
+    @pytest.mark.parametrize("nominal", [125_000, 250_000, 500_000, 1_000_000])
+    @pytest.mark.parametrize("data", [1_000_000, 2_000_000, 4_000_000, 8_000_000])
+    def test_every_bitrate_the_form_offers_has_a_timing(self, nominal, data):
+        from zelos_extension_can.pcan import pcan_fd_timing
+
+        timing = pcan_fd_timing(nominal, data)
+        assert (timing.nom_bitrate, timing.data_bitrate) == (nominal, data)
+
+    def test_a_data_bitrate_below_the_nominal_one_says_what_to_change(self):
+        from zelos_extension_can.pcan import pcan_fd_timing
+
+        with pytest.raises(ValueError, match="Data Bitrate \\(500000\\) is below Bitrate"):
+            pcan_fd_timing(1_000_000, 500_000)
+
+    def test_timing_set_under_advanced_wins(self):
+        advanced = json.dumps({"f_clock_mhz": 40, "nom_brp": 5})
+        kwargs = self._bus_kwargs(bitrate=500_000, data_bitrate=2_000_000, config_json=advanced)
+        assert "timing" not in kwargs
+        assert kwargs["f_clock_mhz"] == 40
+
+    def test_classic_pcan_keeps_its_bitrate(self):
+        kwargs = self._bus_kwargs(bitrate=250_000, fd_mode=False)
+        assert kwargs["bitrate"] == 250_000
+        assert "timing" not in kwargs
+
+    def test_other_fd_adapters_keep_their_bitrates(self):
+        cfg = {
+            "interface": "kvaser",
+            "channel": "0",
+            "fd_mode": True,
+            "bitrate": 500_000,
+            "data_bitrate": 2_000_000,
+        }
+        with patch("zelos_sdk.TraceSource"), patch("can.Bus") as bus:
+            codec = CanCodec(cfg, bus_name="kv")
+            codec.start()
+            codec.stop()
+        assert bus.call_args.kwargs["data_bitrate"] == 2_000_000
+        assert "timing" not in bus.call_args.kwargs
