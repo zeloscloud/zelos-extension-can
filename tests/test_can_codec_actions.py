@@ -1898,6 +1898,28 @@ class TestRepeatFilter:
         clock[0] = 61.0
         assert repeats.filter(full)
 
+    def test_a_can_error_logs_in_one_line_and_any_other_with_its_traceback(self):
+        import logging
+        import sys
+
+        from zelos_extension_can.periodics import RepeatFilter
+
+        def failed(exc):
+            try:
+                raise exc
+            except Exception:
+                return logging.LogRecord(
+                    "can.bcm", logging.ERROR, __file__, 1, str(exc), None, sys.exc_info()
+                )
+
+        repeats = RepeatFilter(60.0)
+        bus_failing = failed(can.CanOperationError("Could not write to serial device"))
+        assert repeats.filter(bus_failing)
+        assert bus_failing.exc_info is None
+        a_bug = failed(TypeError("unsupported operand"))
+        assert repeats.filter(a_bug)
+        assert a_bug.exc_info is not None
+
     def test_it_forgets_messages_past_the_window(self, monkeypatch):
         from zelos_extension_can.periodics import RepeatFilter
 
