@@ -25,8 +25,9 @@ from zelos_extension_can.cli.app import (
     _validate_name,
     resolve_advanced,
 )
-from zelos_extension_can.codec import CanCodec, _merge_dbcs
+from zelos_extension_can.codec import CanCodec
 from zelos_extension_can.converter import convert_can_trace
+from zelos_extension_can.dbc import _merge_dbcs
 
 FILES = Path(__file__).parent / "files"
 DBC_A = FILES / "merge_a.dbc"
@@ -60,7 +61,7 @@ def test_merge_dedupes_overlaps_and_reports_the_conflict(caplog):
         codec = CanCodec(_merged_config(), bus_name="busA")
 
     # File order, not id order: merge_a's 0x352 precedes merge_b's 0x310.
-    assert [(m.name, m.frame_id) for m in codec.messages] == [
+    assert [(m.name, m.frame_id) for m in codec.catalog.messages] == [
         ("Merge_A", 768),
         ("Merge_Same", 769),
         ("Merge_Conflict_A", 770),
@@ -72,14 +73,14 @@ def test_merge_dedupes_overlaps_and_reports_the_conflict(caplog):
         ("Merge_C", 800),
     ]
     # An overlapping id carries every definition, in definition order.
-    assert [m.name for m in codec.messages_by_id[(770, False)]] == [
+    assert [m.name for m in codec.catalog.messages_by_id[(770, False)]] == [
         "Merge_Conflict_A",
         "Merge_Conflict_B",
     ]
     # A name at two ids resolves to neither; each definition has its own key.
-    assert codec._resolve_dbc_message("0352_Merge_Moved").frame_id == 850
+    assert codec.catalog.resolve("0352_Merge_Moved").frame_id == 850
     # Same id AND same name, different layout: the only conflict shape left.
-    assert codec.dbc_conflicts == [
+    assert codec.catalog.dbc_conflicts == [
         {
             "frame_id": 771,
             "is_extended": False,
@@ -87,8 +88,8 @@ def test_merge_dedupes_overlaps_and_reports_the_conflict(caplog):
             "dropped": {"file": "merge_a.dbc", "name": "Merge_Dup"},
         }
     ]
-    assert codec.message_origin[(768, False, "Merge_A")] == DBC_A
-    assert codec.message_origin[(771, False, "Merge_Dup")] == DBC_B
+    assert codec.catalog.message_origin[(768, False, "Merge_A")] == DBC_A
+    assert codec.catalog.message_origin[(771, False, "Merge_Dup")] == DBC_B
 
     # The conflict warns, naming both files and the winner; the overlap is INFO,
     # naming the id and both definitions.
@@ -259,14 +260,14 @@ def test_get_tx_state_keeps_the_single_dbc_view_and_adds_the_list(merged_codec):
     assert bus["dbc"] == {
         "path": str(DBC_A),
         "name": "merge_a.dbc",
-        "hash": merged_codec.dbc_hash,
+        "hash": merged_codec.catalog.dbc_hash,
         "message_count": 9,
     }
     assert [d["name"] for d in bus["dbcs"]] == ["merge_a.dbc", "merge_b.dbc", "merge_c.dbc"]
     assert [d["message_count"] for d in bus["dbcs"]] == [5, 5, 1]
     assert {d["path"] for d in bus["dbcs"]} == {str(p) for p in MERGE_SET}
     assert all(len(d["hash"]) == 16 for d in bus["dbcs"])
-    assert bus["dbc_conflicts"] == merged_codec.dbc_conflicts
+    assert bus["dbc_conflicts"] == merged_codec.catalog.dbc_conflicts
     assert bus["dbc_overlaps"] == [
         {
             "frame_id": 770,
@@ -339,7 +340,7 @@ def test_bus_without_a_database_logs_raw_only():
         codec = CanCodec(config, bus_name="raw_only")
         codec.start()
     try:
-        assert codec.messages == []
+        assert codec.catalog.messages == []
         assert codec.list_messages()["messages"] == []
         assert codec.list_messages()["dbc_name"] is None
         assert codec.get_tx_state()["bus"]["dbc"]["path"] is None
@@ -348,11 +349,11 @@ def test_bus_without_a_database_logs_raw_only():
             codec.send_message("Anything", "{}")
 
         # A frame still counts as received, decodes nothing, and is raw-logged.
-        codec._handle_message(can.Message(arbitration_id=0x300, data=b"\x01"))
+        codec.decoder.handle(can.Message(arbitration_id=0x300, data=b"\x01"))
         assert codec.metrics.messages_received == 1
         assert codec.metrics.messages_decoded == 0
         assert codec.metrics.unknown_messages == 1
-        assert codec.raw_event.log_at.call_count == 1
+        assert codec.decoder.raw_event.log_at.call_count == 1
     finally:
         codec.stop()
 

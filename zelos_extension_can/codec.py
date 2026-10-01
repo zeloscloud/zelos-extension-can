@@ -1,361 +1,38 @@
 """CAN bus codec with database decoding and transmission."""
 
 import asyncio
-import hashlib
 import json
 import logging
-import math
 import sys
 import threading
 import time
-from collections.abc import Collection, Sequence
-from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
-from enum import IntEnum
-from pathlib import Path
 from typing import Any
 
 import can
-import cantools
 import zelos_sdk
 
+from .dbc import (
+    DbcCatalog,
+    describe_dbc_message,
+    describe_dbc_message_summary,
+    encode_dbc,
+)
+from .decode import FrameDecoder, TimestampMode
 from .demo.demo import run_demo_ev_simulation
-from .utils.file_utils import resolve_database_file
-from .utils.schema_utils import cantools_signal_to_trace_metadata
+from .naming import DEFAULT_PREFIX, trace_layout
+from .params import (
+    parse_can_id,
+    parse_data_hex,
+    parse_mux,
+    parse_signals_json,
+    periodic_task_id,
+    raw_slot,
+    validate_id_range,
+)
+from .pcan import release_pcan_channel
 
 logger = logging.getLogger(__name__)
-
-
-# ─── Action-input parsers (module-level so tests hit them at the helper seam) ──
-
-
-def _parse_can_id(can_id: str) -> int:
-    """Accept `0x100`, `100`, or hex without prefix; always parse as hex."""
-    return int(can_id.strip(), 16)
-
-
-def _parse_data_hex(data: str) -> bytes:
-    return bytes.fromhex(data.replace(" ", "").replace(",", ""))
-
-
-def _validate_id_range(can_id: int, is_extended: bool) -> None:
-    max_id = 0x1FFFFFFF if is_extended else 0x7FF
-    if can_id < 0 or can_id > max_id:
-        kind = "extended" if is_extended else "standard"
-        raise ValueError(f"can_id 0x{can_id:x} out of range for {kind} ID (max 0x{max_id:x})")
-
-
-def _raw_slot(can_id: int, is_extended: bool) -> str:
-    """Slot a raw periodic occupies: arbitration ID + frame kind."""
-    return f"0x{can_id:x}:{'ext' if is_extended else 'std'}"
-
-
-def _task_id(slot: str, mux: str = "raw") -> str:
-    """Stable taskId within a single codec — the message key (DBC) or
-    `_raw_slot` (raw), plus a discriminator.
-
-    Starting a periodic with the same key replaces the existing slot and signals
-    `replaced: True` to the caller. Matches the SocketCAN BCM kernel behavior
-    (TX_SETUP on the same can_id replaces the existing slot).
-    """
-    return f"{slot}:{mux}"
-
-
-def _parse_signals_json(raw: str) -> dict[str, Any]:
-    if not raw.strip():
-        raise ValueError("signals_json must be a JSON object string")
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"signals_json is not valid JSON: {e}") from e
-    if not isinstance(parsed, dict):
-        raise ValueError("signals_json must decode to a JSON object")
-    return parsed
-
-
-def _parse_mux(mux: str) -> int | str | None:
-    s = mux.strip()
-    if not s:
-        return None
-    try:
-        return int(s, 0)
-    except ValueError:
-        return s
-
-
-def _encode_dbc(
-    dbc_msg: cantools.database.can.Message,
-    signals: dict[str, Any],
-    mux_value: int | str | None,
-) -> bytes:
-    # cantools encode_message picks the right mux variant when the multiplexer
-    # signal is present in the input. If the caller passed a standalone `mux`
-    # field, inject it under the multiplexer signal name.
-    payload = dict(signals)
-    mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
-    if mux_value is not None and mux_signal is not None and mux_signal.name not in payload:
-        payload[mux_signal.name] = mux_value
-    # strict=False lets authors send sentinel / SNA values that fall outside
-    # the DBC's declared [min|max] but still fit the signal's bit field
-    # (common pattern: raw 0xFF on an 8-bit field to mark "signal not
-    # available"). The bit-field range itself is still enforced by cantools;
-    # the webapp does an additional pre-flight check against the bit-field
-    # range so out-of-bits values are caught before they reach us.
-    try:
-        return bytes(dbc_msg.encode(payload, strict=False))
-    except KeyError as e:
-        # cantools raises a bare KeyError naming the first missing signal; name
-        # every one, and for a mux only the selected variant's plus the base.
-        selected = payload.get(mux_signal.name) if mux_signal is not None else None
-        missing = [
-            sig.name
-            for sig in dbc_msg.signals
-            if sig.name not in payload
-            and (sig.multiplexer_ids is None or selected in sig.multiplexer_ids)
-        ]
-        raise ValueError(
-            f"message '{dbc_msg.name}' needs signals: {', '.join(missing) or e}"
-        ) from e
-
-
-def _describe_dbc_message_summary(msg: cantools.database.can.Message) -> dict[str, Any]:
-    """Lightweight identifier-only shape returned by list_messages. Drops the
-    signal array so the catalog fetch stays cheap even on multi-thousand-
-    message DBCs. The webapp fetches per-message detail via describe_message
-    when a specific message is picked."""
-    return {
-        "name": msg.name,
-        "can_id": int(msg.frame_id),
-        "is_extended": bool(msg.is_extended_frame),
-        "dlc": int(msg.length),
-        "cycle_time_ms": msg.cycle_time,
-    }
-
-
-def _describe_dbc_message(msg: cantools.database.can.Message) -> dict[str, Any]:
-    return {
-        **_describe_dbc_message_summary(msg),
-        "signals": [_describe_dbc_signal(sig) for sig in msg.signals],
-    }
-
-
-def _hash_dbc_file(path: Path) -> str:
-    """Cache-busting fingerprint for one DBC — SHA1 of its bytes, truncated to
-    16 hex chars. Collision risk is irrelevant: the field is purely a
-    same-vs-different signal the webapp keys its React Query by."""
-    return hashlib.sha1(path.read_bytes()).hexdigest()[:16]
-
-
-#: Default leading trace-source name. One constant for every entry point:
-#: the app's `advanced.prefix`, the `trace` and `convert` CLI commands.
-DEFAULT_PREFIX = "CAN"
-
-#: Trace name the extension's own logs take: the source when the prefix is
-#: cleared, the event segment under it when set. Reserved as a bus name.
-LOG_SOURCE_NAME = "can_log"
-
-#: Event type stamped on every decoded message table, base and mux, matching
-#: what the Rust codec emits. A family type: the fields are the DBC message's
-#: own, so it only marks the table as a CAN decode.
-DECODED_EVENT_TYPE = "zelos.can.message.v1"
-
-
-def trace_layout(prefix: str, bus: str) -> tuple[str, str | None, str]:
-    """The one trace-naming rule, shared by every entry point.
-
-    With a prefix, a single source carries every bus and each bus's events nest
-    under it. Cleared, the bus owns the source and its events are unprefixed.
-
-    :return: (source name, event prefix or None, raw-frame event name)
-    """
-    if prefix:
-        return prefix, bus, f"{bus}/Frame"
-    return bus, None, "Frame"
-
-
-def name_error(value: str, label: str, reserved: Collection[str] = ()) -> str | None:
-    """Why `value` is not usable as a trace name, or None if it is.
-
-    Trace names are an allow-list — letters, digits, space, `_`, `-`. A prefix
-    or bus name is user-typed and becomes a source name or an event segment, so
-    a catalog separator (`/ . @ :`) in it would silently re-nest the tree. The
-    SDK's sanitizer is the allow-list; anything it rewrites is rejected here
-    rather than quietly renamed.
-    """
-    if not value:
-        return None  # cleared prefix / unset bus name; the caller decides
-    if value in reserved:
-        return f"Invalid {label} {value!r}: reserved for the extension's own log source."
-    clean = zelos_sdk.sanitize_name(value, kind="source")
-    if clean == value:
-        return None
-    offender = next((c for c, ok in zip(value, clean, strict=False) if c != ok), value[-1])
-    return (
-        f"Invalid {label} {value!r}: {offender!r} is not allowed. "
-        "Use letters, digits, space, '_' or '-'."
-    )
-
-
-def bus_database_files(bus_config: dict[str, Any]) -> list[str]:
-    """A bus config's DBC list, in precedence order.
-
-    A pre-list config carries one `database_file`; it takes precedence, so it
-    is prepended to any list.
-    """
-    files = [str(p) for p in (bus_config.get("database_files") or [])]
-    legacy = bus_config.get("database_file")
-    return [str(legacy), *files] if legacy else files
-
-
-def _definition_key(msg: cantools.database.can.Message) -> tuple[int, bool, str]:
-    """Identity of ONE surviving definition. Several DBCs may define a single
-    frame id under different names; each keeps its own table, schema cache slot
-    and error blocklist entry."""
-    return (msg.frame_id, msg.is_extended_frame, msg.name)
-
-
-def _report_unpaired(
-    defined: dict[tuple[int, bool, str], Path],
-    survivors: AbstractSet[tuple[int, bool, str]],
-) -> None:
-    """Log every definition the two parsers failed to pair, and keep going.
-
-    Pairing is by (id, extended, name), so a definition the two parsers name
-    differently matches nothing — a DBC-attribute rename cantools applies and
-    the Rust parser does not (`SystemMessageLongSymbol` was one) does exactly
-    that. Such a definition decodes under the decoder's name but is absent
-    from TX and describe, so say so on both sides rather than drop it
-    silently. A conflict or an identical duplicate shares its key with its
-    winner and is NOT reported here. Nothing fails the bus.
-    """
-    for frame_id, is_extended, name in sorted(defined.keys() - survivors):
-        logger.error(
-            "DBC definition 0x%x (extended=%s) '%s' from %s pairs with no decoder definition "
-            "of that name; it will not be addressable for transmit or describe",
-            frame_id,
-            is_extended,
-            name,
-            defined[(frame_id, is_extended, name)],
-        )
-    for frame_id, is_extended, name in sorted(survivors - defined.keys()):
-        at_id = ", ".join(
-            f"'{n}' in {p.name}"
-            for (i, e, n), p in defined.items()
-            if (i, e) == (frame_id, is_extended)
-        )
-        logger.error(
-            "decoder definition 0x%x (extended=%s) '%s' pairs with no DBC definition of that "
-            "name (the files define %s at that id); it decodes but cannot be addressed by name",
-            frame_id,
-            is_extended,
-            name,
-            at_id or "nothing",
-        )
-
-
-def _merge_dbcs(
-    files: Sequence[Path],
-    databases: Sequence[cantools.database.can.Database],
-) -> tuple[
-    list[cantools.database.can.Message],
-    dict[tuple[int, bool, str], Path],
-    dict[tuple[int, bool, str], str],
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-    list[int],
-]:
-    """Merge an ordered DBC list, deferring to the Rust decoder's rule.
-
-    A bus-less `zelos_can.CanDecoder` parses exactly the list the Rust codec
-    would — no socket, no trace — and reports which definitions survived. The
-    rule lives there and nowhere else: a hand-mirrored copy here only bought
-    two ways to disagree about what `dbc_conflicts` means.
-
-    Two definitions of one frame id under DIFFERENT names both survive (an
-    overlap) and a matching frame decodes under each. Only the same id under the
-    same name, laid out differently, is a conflict; the later file wins it.
-
-    :return: (surviving cantools messages, origin file per definition, message
-        key per definition, conflict records, overlap records, per-file message
-        counts)
-    """
-    import zelos_can
-
-    decoder = zelos_can.CanDecoder(database_file=[str(p) for p in files] or None)
-
-    # The decoder names survivors, not objects; pair each back to the cantools
-    # Message the encode / describe paths need. Event names are
-    # `{frame_id:0{4,8}x}_{name}`, one per surviving definition, and both sides
-    # read the name verbatim off the same `BO_` line, so the match is exact.
-    # That event name IS the message key: taken from here, never re-derived.
-    survivors = {
-        (frame_id, is_extended, event_name.split("_", 1)[1]): event_name
-        for frame_id, is_extended, event_name in decoder.message_keys()
-    }
-
-    # Walk the files in list order, each in definition order. A redefinition
-    # keeps the position it first appeared at, so the list stays stable as files
-    # are appended.
-    kept: dict[tuple[int, bool, str], cantools.database.can.Message] = {}
-    origin: dict[tuple[int, bool, str], Path] = {}
-    defined: dict[tuple[int, bool, str], Path] = {}
-    for path, db in zip(files, databases, strict=True):
-        for msg in db.messages:
-            key = _definition_key(msg)
-            defined[key] = path
-            if key not in survivors:
-                continue
-            kept[key] = msg
-            origin[key] = path
-
-    messages = list(kept.values())
-    keys = {key: survivors[key] for key in kept}
-    _report_unpaired(defined, survivors.keys())
-
-    conflicts: list[dict[str, Any]] = []
-    for record in decoder.dbc_conflicts():
-        winner, dropped = record["kept"], record["dropped"]
-        logger.warning(
-            "conflicting definitions of CAN id 0x%x (extended=%s): '%s' from %s vs '%s' from %s "
-            "- keeping '%s'",
-            record["frame_id"],
-            record["is_extended"],
-            dropped["name"],
-            dropped["source"],
-            winner["name"],
-            winner["source"],
-            winner["name"],
-        )
-        conflicts.append(
-            {
-                "frame_id": record["frame_id"],
-                "is_extended": record["is_extended"],
-                "kept": {"file": Path(winner["source"]).name, "name": winner["name"]},
-                "dropped": {"file": Path(dropped["source"]).name, "name": dropped["name"]},
-            }
-        )
-
-    overlaps: list[dict[str, Any]] = []
-    for record in decoder.dbc_overlaps():
-        logger.info(
-            "CAN id 0x%x (extended=%s) is defined %d times, each decoded into its own table: %s",
-            record["frame_id"],
-            record["is_extended"],
-            len(record["names"]),
-            ", ".join(f"'{n['name']}' from {n['source']}" for n in record["names"]),
-        )
-        overlaps.append(
-            {
-                "frame_id": record["frame_id"],
-                "is_extended": record["is_extended"],
-                "names": [
-                    {"file": Path(n["source"]).name, "name": n["name"]} for n in record["names"]
-                ],
-            }
-        )
-
-    counts = [db["message_count"] for db in decoder.databases()]
-    return messages, origin, keys, conflicts, overlaps, counts
 
 
 def _derive_bus_status(running: bool, bus: Any) -> str:
@@ -380,81 +57,6 @@ def _derive_bus_status(running: bool, bus: Any) -> str:
     return "unknown"
 
 
-def _describe_dbc_signal(sig: cantools.database.can.Signal) -> dict[str, Any]:
-    # JSON requires string dict keys, and the wire encoder rejects Decimal —
-    # coerce scale/offset/min/max to float and value_table keys to str.
-    scale = float(sig.scale) if sig.scale is not None else 1.0
-    offset = float(sig.offset) if sig.offset is not None else 0.0
-    return {
-        "name": sig.name,
-        "start_bit": int(sig.start),
-        "length": int(sig.length),
-        "byte_order": "little" if sig.byte_order == "little_endian" else "big",
-        "is_signed": bool(sig.is_signed),
-        "scale": scale,
-        "offset": offset,
-        "min": float(sig.minimum) if sig.minimum is not None else None,
-        "max": float(sig.maximum) if sig.maximum is not None else None,
-        "unit": sig.unit,
-        "value_table": _physical_value_table(sig, scale, offset),
-        "mux_indicator": bool(sig.is_multiplexer),
-        "mux_value": int(sig.multiplexer_ids[0]) if sig.multiplexer_ids else None,
-    }
-
-
-def _scale_precision(scale: float) -> int:
-    """Decimal places implied by a signal's scale. scale=0.001 → 3,
-    scale=0.1 → 1, scale=1 → 0, scale=10 → 0 (no fractional precision).
-    Used to trim fp64 noise out of decoded physical values so they
-    string-match the value_table keys produced by `_physical_value_table`
-    and so the trace shows the same precision the wire actually carries."""
-    if not scale or scale <= 0 or scale >= 1:
-        return 0
-    return max(0, -math.floor(math.log10(scale)))
-
-
-def _physical_value_table(
-    sig: cantools.database.can.Signal, scale: float, offset: float
-) -> dict[str, str] | None:
-    """JSON-wire form of the physical value table, used by describe_message.
-
-    See `_value_table_for_trace` for the in-process float/int dict form used
-    by zelos-sdk's `add_value_table`. Both must agree on the physical key so
-    a value emitted to the trace matches the value-table entry exactly."""
-    numeric = _value_table_for_trace(sig)
-    if numeric is None:
-        return None
-    return {format(k, ".10g") if isinstance(k, float) else str(k): v for k, v in numeric.items()}
-
-
-def _value_table_for_trace(
-    sig: cantools.database.can.Signal,
-) -> dict[int | float, str] | None:
-    """Build a value table keyed on the physical (scaled+offset) value, so
-    trace consumers' lookups match the values we actually emit.
-
-    DBC `VAL_` entries map RAW integer values to labels by convention. For
-    enum signals (scale=1, offset=0) the raw int IS the physical value, so
-    we use int keys. For scaled signals (e.g. cell_voltage with scale 0.001)
-    the physical value is float; we convert and round to the scale's
-    precision so the key matches the value `_convert_signals` will emit
-    (which is also `round(decoded, precision)`)."""
-    if not sig.choices:
-        return None
-    scale = float(sig.scale) if sig.scale is not None else 1.0
-    offset = float(sig.offset) if sig.offset is not None else 0.0
-    precision = _scale_precision(scale)
-    out: dict[int | float, str] = {}
-    for raw_int, label in sig.choices.items():
-        if scale == 1.0 and offset == 0.0:
-            out[int(raw_int)] = str(label)
-        else:
-            physical = int(raw_int) * scale + offset
-            key = round(physical, precision) if precision > 0 else physical
-            out[key] = str(label)
-    return out
-
-
 @dataclass(slots=True)
 class Metrics:
     """Performance metrics for CAN codec operations."""
@@ -476,33 +78,6 @@ class Metrics:
     # Reserved for future BCM queue-overflow tracking; currently always 0.
     # The shape is kept stable so the app's wire contract doesn't churn.
     tx_overflows: int = 0
-
-
-class TimestampMode(IntEnum):
-    """Timestamp handling modes for efficient comparison."""
-
-    IGNORE = 0
-    ABSOLUTE = 1
-    AUTO = 2
-
-
-def _release_pcan_channel(channel: str) -> None:
-    """Release a PCAN channel a failed open left initialized.
-
-    For a few seconds after its previous user is killed, the driver keeps the
-    channel at that user's bitrate, and opening it at another one returns
-    PCAN_ERROR_CAUTION. python-can raises on it but leaves the channel
-    initialized, so every retry fails as "not initialized" until it is released.
-    """
-    from can.interfaces.pcan.basic import PCAN_CHANNEL_NAMES, PCANBasic
-
-    handle = PCAN_CHANNEL_NAMES.get(channel)
-    if handle is None:
-        return
-    try:
-        PCANBasic().Uninitialize(handle)
-    except Exception:  # no PCAN library: nothing was initialized to release
-        logger.debug("Could not release PCAN channel %s", channel, exc_info=True)
 
 
 class CanCodec(can.Listener):
@@ -574,11 +149,7 @@ class CanCodec(can.Listener):
         # reported total never goes backwards across a rebuild.
         self._ssh_tx_errors_retired = 0
 
-        # Timestamp handling - use enum for fast comparison
-        timestamp_mode_str = config.get("timestamp_mode", "auto").upper()
-        self.timestamp_mode = TimestampMode[timestamp_mode_str]
-        self.hw_timestamp_offset: float | None = None  # Offset to convert HW time to wall-clock
-        self.first_hw_timestamp: float | None = None  # First HW timestamp seen
+        self.timestamp_mode = TimestampMode[config.get("timestamp_mode", "auto").upper()]
 
         # Cache frequently accessed config values as booleans to avoid repeated string hashing
         self.log_raw_frames = config.get("log_raw_frames", False)
@@ -588,17 +159,6 @@ class CanCodec(can.Listener):
         # Metrics tracking
         self.metrics = Metrics()
 
-        # Definitions whose decode -> emit path raised an unexpected exception
-        # (e.g. a schema that cannot be registered). Such faults are
-        # deterministic: without this set a 100 Hz message would raise, and log,
-        # 100 times a second forever.
-        #
-        # LOG-VOLUME INVARIANT (extension logs persist to disk, unwatched):
-        # at most ONE log record per distinct failing definition per process
-        # lifetime, and ZERO records on the short-circuit path once a key is in
-        # this set. Worst case is therefore one ERROR per DBC message, ever.
-        self._failed_messages: set[tuple[int, bool, str]] = set()
-
         # Demo mode simulation
         self.demo_mode = config.get("demo_mode", False)
         self.demo_task: asyncio.Task | None = None
@@ -607,57 +167,7 @@ class CanCodec(can.Listener):
         # shutting its bus down.
         self._notifier: can.Notifier | None = None
 
-        # Load the DBC list. Order is precedence; zero files is a legal
-        # raw-only bus (nothing decodes, raw frames still land).
-        self.database_files: list[Path] = [
-            resolve_database_file(p) for p in (config.get("database_files") or [])
-        ]
-
-        # Each file is loaded on its own (never `add_dbc_file`) so the merge
-        # below owns precedence and reports what it did.
-        self.databases: list[cantools.database.can.Database] = []
-        for path in self.database_files:
-            logger.info("Loading CAN database file: %s", path)
-            try:
-                self.databases.append(cantools.database.load_file(str(path)))
-            except Exception as e:
-                raise ValueError(f"Failed to load database file: {e}") from e
-
-        (
-            self.messages,
-            self.message_origin,
-            self.message_keys,
-            self.dbc_conflicts,
-            self.dbc_overlaps,
-            counts,
-        ) = _merge_dbcs(self.database_files, self.databases)
-        # Every definition the merge dropped was either an identical duplicate
-        # or a reported conflict; an overlap drops nothing.
-        logger.info(
-            "DBC merge: %d files, %d messages, %d identical duplicates deduped, %d conflicts, "
-            "%d overlaps",
-            len(self.database_files),
-            len(self.messages),
-            sum(counts) - len(self.messages) - len(self.dbc_conflicts),
-            len(self.dbc_conflicts),
-            len(self.dbc_overlaps),
-        )
-
-        # Hashed once: `get_tx_state` polls at 1 Hz and must not re-read DBCs.
-        self.dbc_entries: list[dict[str, Any]] = [
-            {
-                "path": str(path),
-                "name": path.name,
-                "hash": _hash_dbc_file(path),
-                "message_count": count,
-            }
-            for path, count in zip(self.database_files, counts, strict=True)
-        ]
-        # Fingerprint of the list: the per-file digests in order, so reordering
-        # the list flips it.
-        self.dbc_hash = hashlib.sha1(
-            "".join(entry["hash"] for entry in self.dbc_entries).encode()
-        ).hexdigest()[:16]
+        self.catalog = DbcCatalog(config.get("database_files") or [])
 
         # Trace layout. A shared source means a prefix is configured and the
         # caller already named that source after it, so `source_name` is only
@@ -665,8 +175,6 @@ class CanCodec(can.Listener):
         source_name, self.event_prefix, self.raw_event_name = trace_layout(
             DEFAULT_PREFIX if source is not None else "", self.bus_name
         )
-        # The same nesting spelled for python-can event names.
-        self._event_prefix = f"{self.event_prefix}/" if self.event_prefix else ""
         if source is not None:
             self.source = source
         else:
@@ -676,55 +184,19 @@ class CanCodec(can.Listener):
                 else zelos_sdk.TraceSource(source_name)
             )
 
-        # On the Rust paths (socketcan / ssh-socketcan) the Rust codec
-        # owns the raw-frame schema and emit (driven by `raw_event_name`), so
-        # don't register an event here.
-        self.raw_event = (
-            self.source.add_event(self.raw_event_name, zelos_sdk.schemas.CanFrame)
-            if self.log_raw_frames and not self._use_rust
-            else None
+        # On the Rust paths (socketcan / ssh-socketcan) the Rust codec owns
+        # decode, the schemas (gated by its own emit_schemas_on_init) and the
+        # raw-frame event (driven by `raw_event_name`).
+        python_rx = not self._use_rust
+        self.decoder = FrameDecoder(
+            self.catalog,
+            self.source,
+            self.metrics,
+            event_prefix=self.event_prefix,
+            raw_event_name=self.raw_event_name if self.log_raw_frames and python_rx else None,
+            timestamp_mode=self.timestamp_mode,
+            emit_schemas_on_init=self.emit_schemas_on_init and python_rx,
         )
-
-        # Message lookup tables. An id carries every definition of it, in
-        # definition order, because a frame decodes under all of them.
-        # `messages_by_key` is the addressing table: one entry per definition,
-        # keyed by the trace event name. `messages_by_name` is a last-wins name
-        # index the demo simulation reads; TX never resolves through it.
-        self.messages_by_id: dict[tuple[int, bool], list[cantools.database.can.Message]] = {}
-        self.messages_by_key: dict[str, cantools.database.can.Message] = {}
-        self.messages_by_name: dict[str, cantools.database.can.Message] = {}
-        self._keys_by_name: dict[str, list[str]] = {}
-
-        # Keyed per definition, plus the mux value for a subtable.
-        self._events: dict[tuple[int, bool, str] | tuple[int, bool, str, int], Any] = {}
-
-        for msg in self.messages:
-            id_key = self._message_key(msg.frame_id, msg.is_extended_frame)
-            self.messages_by_id.setdefault(id_key, []).append(msg)
-            key = self._key_of(msg)
-            self.messages_by_key[key] = msg
-            self.messages_by_name[msg.name] = msg
-            self._keys_by_name.setdefault(msg.name, []).append(key)
-
-        for name, keys in self._keys_by_name.items():
-            if len(keys) > 1:
-                logger.warning(
-                    "Message name '%s' is defined at %d ids (%s); address each one by its key",
-                    name,
-                    len(keys),
-                    ", ".join(sorted(keys)),
-                )
-
-        # On the Rust paths (socketcan / ssh-socketcan) the Rust codec
-        # generates/emits schemas itself (gated by its own emit_schemas_on_init);
-        # don't double-register here.
-        if self.emit_schemas_on_init and not self._use_rust:
-            self._generate_all_schemas()
-            logger.info("Generated %d event schemas from database", len(self._events))
-        else:
-            logger.info(
-                "Schema generation deferred - will emit schemas as messages are encountered"
-            )
 
         # Log raw frame configuration
         if self.log_raw_frames:
@@ -744,71 +216,6 @@ class CanCodec(can.Listener):
         # (message, period_s, mode) per task, to re-arm on a python-can reconnect.
         self._periodic_specs: dict[str, tuple[can.Message, float, str]] = {}
 
-    def _message_key(self, frame_id: int, is_extended: bool) -> tuple[int, bool]:
-        """Build a stable message lookup key from CAN ID and frame format."""
-        return (frame_id, is_extended)
-
-    def _key_of(self, msg: cantools.database.can.Message) -> str:
-        """This definition's message key: `{frame_id:04x}_{name}` (8 hex digits
-        for an extended id), as the decoder spelled it."""
-        return self.message_keys[_definition_key(msg)]
-
-    def _get_event_name(self, msg: cantools.database.can.Message) -> str:
-        """Trace event name for a message: its key under the bus prefix."""
-        return f"{self._event_prefix}{self._key_of(msg)}"
-
-    def get_timestamp(self, hw_timestamp: float | None) -> int | None:
-        """Get timestamp in nanoseconds for logging, handling boot-relative timestamps.
-
-        This method handles different timestamp modes:
-        - AUTO: Detects boot-relative timestamps (starting near zero) and converts
-                them to wall-clock time by tracking the offset between hardware
-                time and system time at first message.
-        - ABSOLUTE: Uses hardware timestamp as-is (assumes it's already wall-clock time)
-        - IGNORE: Returns None to use system time
-
-        :param hw_timestamp: Hardware timestamp in seconds (can be None)
-        :return: Timestamp in nanoseconds, or None to use system time
-        """
-        if hw_timestamp is None or self.timestamp_mode == TimestampMode.IGNORE:
-            return None
-
-        if self.timestamp_mode == TimestampMode.ABSOLUTE:
-            return int(hw_timestamp * 1e9)
-
-        # Auto mode: detect timestamp type and calculate offset if needed
-        if self.hw_timestamp_offset is None:
-            self.first_hw_timestamp = hw_timestamp
-            wall_clock_time = time.time()
-
-            # If timestamp is within 15 seconds of current time, treat as absolute wall-clock
-            # Otherwise treat as monotonic timestamp needing adjustment to current time
-            time_diff = abs(wall_clock_time - hw_timestamp)
-
-            if time_diff < 15.0:
-                self.hw_timestamp_offset = 0.0
-                logger.info(
-                    "Detected absolute timestamps (first=%.3f s). Using hardware timestamps as-is.",
-                    hw_timestamp,
-                )
-            else:
-                # Hardware timestamp is monotonic but not aligned with wall-clock time
-                # This could be: boot-relative (dongle timer starts at 0), or
-                # fixed-offset (PCAN-style timer started at arbitrary past time)
-                # Either way, apply constant offset to map to current wall-clock time
-                self.hw_timestamp_offset = wall_clock_time - hw_timestamp
-                logger.info(
-                    "Detected monotonic timestamps with offset (first=%.3f s, offset=%.3f s). "
-                    "Mapping to wall-clock time while preserving relative timing.",
-                    hw_timestamp,
-                    self.hw_timestamp_offset,
-                )
-
-        # Apply offset to map monotonic timestamps to wall-clock time
-        # The offset is constant, so relative timing between messages is preserved
-        wall_clock_timestamp = hw_timestamp + self.hw_timestamp_offset
-        return int(wall_clock_timestamp * 1e9)
-
     # Extension timestamp modes -> zelos_can.CanCodec modes. "absolute" maps to
     # "hardware" (kernel SO_TIMESTAMPNS, wall-clock on SocketCAN).
     _NATIVE_TIMESTAMP_MODE = {"AUTO": "auto", "ABSOLUTE": "hardware", "IGNORE": "ignore"}
@@ -821,7 +228,7 @@ class CanCodec(can.Listener):
         directly under the bus's own source.
         """
         kwargs: dict[str, Any] = {
-            "database_file": [str(p) for p in self.database_files] or None,
+            "database_file": [str(p) for p in self.catalog.database_files] or None,
             "source": self.source,
             "event_prefix": self.event_prefix,
         }
@@ -900,7 +307,7 @@ class CanCodec(can.Listener):
                 return
             except can.CanError as e:
                 if bus_config["interface"] == "pcan":
-                    _release_pcan_channel(str(bus_config["channel"]))
+                    release_pcan_channel(str(bus_config["channel"]))
                 if attempt == max_retries - 1:
                     logger.error("Failed to initialize CAN bus after %d attempts", max_retries)
                     raise
@@ -1201,7 +608,7 @@ class CanCodec(can.Listener):
 
         :param message: Received CAN message
         """
-        self._handle_message(message)
+        self.decoder.handle(message)
         self.last_message_time = time.time()
 
     def _check_notifier_health(self, notifier: can.Notifier | None) -> bool:
@@ -1358,7 +765,7 @@ class CanCodec(can.Listener):
 
         if self.demo_mode:
             self.demo_task = asyncio.create_task(
-                run_demo_ev_simulation(self.bus, self.messages_by_name, self)
+                run_demo_ev_simulation(self.bus, self.catalog.messages_by_name, self)
             )
             logger.info("[%s] Started EV simulation task for demo mode", self.bus_name)
 
@@ -1380,366 +787,6 @@ class CanCodec(can.Listener):
         finally:
             # The reader is stopped by stop(), after the periodics, so none go untraced.
             logger.info("[%s] CAN reception stopped", self.bus_name)
-
-    def _update_receive_metrics(self, msg: can.Message) -> None:
-        """Update metrics for received message.
-
-        :param msg: Received CAN message
-        """
-        self.metrics.messages_received += 1
-
-    def _emit_raw_frame(self, msg: can.Message, timestamp_ns: int | None) -> None:
-        """Emit raw CAN frame to trace if logging is enabled.
-
-        :param msg: CAN message
-        :param timestamp_ns: Timestamp in nanoseconds
-        """
-        if not self.log_raw_frames:
-            return
-
-        if timestamp_ns is None:
-            self.raw_event.log(
-                arbitration_id=msg.arbitration_id,
-                is_extended=msg.is_extended_id,
-                is_fd=msg.is_fd,
-                is_rx=msg.is_rx,
-                dlc=msg.dlc,
-                data=msg.data,
-            )
-        else:
-            self.raw_event.log_at(
-                timestamp_ns,
-                arbitration_id=msg.arbitration_id,
-                is_extended=msg.is_extended_id,
-                is_fd=msg.is_fd,
-                is_rx=msg.is_rx,
-                dlc=msg.dlc,
-                data=msg.data,
-            )
-
-    def _decode_and_emit_message(self, msg: can.Message, timestamp_ns: int | None) -> None:
-        """Decode a CAN frame under EVERY definition of its id and emit each
-        into its own trace table.
-
-        :param msg: CAN message
-        :param timestamp_ns: Timestamp in nanoseconds
-        """
-        id_key = self._message_key(msg.arbitration_id, msg.is_extended_id)
-        dbc_msgs = self.messages_by_id.get(id_key)
-        if not dbc_msgs:
-            logger.debug(
-                "Unknown message ID: %04x (extended=%s)", msg.arbitration_id, msg.is_extended_id
-            )
-            self.metrics.unknown_messages += 1
-            return
-
-        for dbc_msg in dbc_msgs:
-            self._decode_one_definition(dbc_msg, msg, timestamp_ns)
-
-    def _decode_one_definition(
-        self,
-        dbc_msg: cantools.database.can.Message,
-        msg: can.Message,
-        timestamp_ns: int | None,
-    ) -> None:
-        """Decode a frame under one definition. Counters and the failure
-        blocklist are per definition, so a broken definition of an overlapping
-        id never silences the others.
-
-        :param dbc_msg: DBC message definition
-        :param msg: CAN message
-        :param timestamp_ns: Timestamp in nanoseconds
-        """
-        # Resolved before the try so the failure handler below always has a key
-        # to blocklist — that is what bounds the log volume.
-        key = _definition_key(dbc_msg)
-
-        # This definition already failed with an unexpected error, which is
-        # deterministic, so skip the work. Silent by contract: the log-volume
-        # invariant on self._failed_messages allows ZERO records here.
-        if key in self._failed_messages:
-            self.metrics.emit_errors += 1
-            return
-
-        try:
-            # decode_choices=False so a value-table hit doesn't replace the
-            # scaled physical value with a NamedSignalValue wrapper that
-            # carries the raw int. The trace consistently sees the physical
-            # value (e.g. 4.095 V for a raw 4095 / scale 0.001 SNA reading);
-            # value-table label lookup is a UI concern, served by
-            # describe_message's physical-keyed value_table.
-            decoded = dbc_msg.decode(msg.data, decode_choices=False)
-            self.metrics.messages_decoded += 1
-
-            # Emit base signals (non-multiplexed signals + multiplexer signal if present)
-            self._emit_base_signals(dbc_msg, decoded, timestamp_ns)
-            if dbc_msg.is_multiplexed():
-                self._emit_multiplexed_signals(dbc_msg, decoded, timestamp_ns)
-
-        except KeyError:
-            logger.debug("Message ID %04x not in database", msg.arbitration_id)
-            self.metrics.unknown_messages += 1
-        except cantools.database.DecodeError as e:
-            logger.debug("Decode error for %04x: %s", msg.arbitration_id, e)
-            self.metrics.decode_errors += 1
-        except Exception as e:
-            # First unexpected failure for this message (schema registration,
-            # signal conversion, ...). Loud once, then never again: the key is
-            # blocklisted so every later frame takes the silent short-circuit
-            # above, keeping the log-volume invariant.
-            logger.error(
-                "Failed to emit message %04x (%s): %s - suppressing further errors "
-                "for this message",
-                msg.arbitration_id,
-                dbc_msg.name,
-                e,
-            )
-            self._failed_messages.add(key)
-            self.metrics.emit_errors += 1
-
-    def _handle_message(self, msg: can.Message) -> None:
-        """Decode and emit CAN message to trace.
-
-        One event per definition of the frame's id; for a multiplexed definition
-        TWO, to minimize memory footprint:
-        1. Base signals (including multiplexer): {id:04x}_{name}
-        2. Multiplexed signals: {id:04x}_{name}/{mux_value}
-
-        :param msg: Received CAN message
-        """
-        logger.debug("Received CAN message: %s", msg)
-        self._update_receive_metrics(msg)
-        timestamp_ns = self.get_timestamp(msg.timestamp)
-        self._emit_raw_frame(msg, timestamp_ns)
-        self._decode_and_emit_message(msg, timestamp_ns)
-
-    def _generate_all_schemas(self) -> None:
-        """Generate trace event schemas for all messages in database at init time.
-
-        This provides visibility into what messages are defined, even before they're received.
-        For multiplexed messages, generates schemas for all possible mux values.
-        """
-        for dbc_msg in self.messages:
-            self._generate_base_schema(dbc_msg)
-
-            if dbc_msg.is_multiplexed():
-                self._generate_mux_schemas(dbc_msg)
-
-    def _generate_base_schema(self, dbc_msg: cantools.database.can.Message) -> None:
-        """Generate schema for base (non-multiplexed) signals.
-
-        :param dbc_msg: DBC message definition
-        """
-        cache_key = _definition_key(dbc_msg)
-        event_name = self._get_event_name(dbc_msg)
-        base_signals = [sig for sig in dbc_msg.signals if not sig.multiplexer_ids]
-
-        if base_signals:
-            fields = [cantools_signal_to_trace_metadata(sig) for sig in base_signals]
-            event = self.source.add_event(event_name, fields, event_type=DECODED_EVENT_TYPE)
-
-            for sig in base_signals:
-                value_table = _value_table_for_trace(sig)
-                if value_table:
-                    self.source.add_value_table(event_name, sig.name, value_table)
-
-            self._events[cache_key] = event
-            logger.debug("Generated base schema: '%s' (%d signals)", event_name, len(fields))
-
-    def _generate_mux_schemas(self, dbc_msg: cantools.database.can.Message) -> None:
-        """Generate schemas for all multiplexed signal variants.
-
-        :param dbc_msg: DBC message definition
-        """
-        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
-        if not mux_signal:
-            return
-
-        # Collect all unique mux values from the signals
-        mux_values: set[int] = set()
-        for sig in dbc_msg.signals:
-            if sig.multiplexer_ids:
-                mux_values.update(sig.multiplexer_ids)
-
-        for mux_value_int in sorted(mux_values):
-            self._generate_mux_schema_for_value(dbc_msg, mux_value_int)
-
-    def _generate_mux_schema_for_value(
-        self, dbc_msg: cantools.database.can.Message, mux_value_int: int
-    ) -> None:
-        """Generate schema for a specific multiplexed signal variant.
-
-        :param dbc_msg: DBC message definition
-        :param mux_value_int: Multiplexer value to generate schema for
-        """
-        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
-        if not mux_signal:
-            return
-
-        cache_key = (*_definition_key(dbc_msg), mux_value_int)
-
-        # Skip if already generated
-        if cache_key in self._events:
-            return
-
-        # Use enum name if available, otherwise stringified integer
-        if mux_signal.choices and mux_value_int in mux_signal.choices:
-            mux_value_str = mux_signal.choices[mux_value_int]
-        else:
-            mux_value_str = str(mux_value_int)
-
-        event_name = f"{self._get_event_name(dbc_msg)}/{mux_value_str}"
-        mux_signals = [
-            sig for sig in dbc_msg.signals if mux_value_int in (sig.multiplexer_ids or [])
-        ]
-
-        if mux_signals:
-            fields = [cantools_signal_to_trace_metadata(sig) for sig in mux_signals]
-            event = self.source.add_event(event_name, fields, event_type=DECODED_EVENT_TYPE)
-
-            for sig in mux_signals:
-                value_table = _value_table_for_trace(sig)
-                if value_table:
-                    self.source.add_value_table(event_name, sig.name, value_table)
-
-            self._events[cache_key] = event
-            logger.debug("Generated mux schema: '%s' (%d signals)", event_name, len(fields))
-
-    def _emit_signals(
-        self,
-        event: Any,
-        signals: dict[str, int | float],
-        timestamp_ns: int | None,
-        context: str,
-    ) -> None:
-        """Emit trace event with error handling.
-
-        :param event: Event to emit
-        :param signals: Signal name->value mapping
-        :param timestamp_ns: Timestamp in nanoseconds, or None
-        :param context: Context string for logging (e.g., message name)
-        """
-        try:
-            if timestamp_ns is not None:
-                event.log_at(timestamp_ns, **signals)
-            else:
-                event.log(**signals)
-            logger.debug("Emitted %s: %s", context, signals)
-        except (OverflowError, ValueError) as e:
-            logger.debug("Skipping emission for %s: %s", context, e)
-            self.metrics.decode_errors += 1
-
-    def _emit_base_signals(
-        self, dbc_msg: cantools.database.can.Message, decoded: dict, timestamp_ns: int | None
-    ) -> None:
-        """Emit base (non-multiplexed) signals including multiplexer.
-
-        :param dbc_msg: DBC message definition
-        :param decoded: Decoded signal values
-        :param timestamp_ns: Timestamp in nanoseconds, or None
-        """
-        cache_key = _definition_key(dbc_msg)
-        event = self._events.get(cache_key)
-
-        # Generate schema lazily if not already present
-        if event is None and not self.emit_schemas_on_init:
-            self._generate_base_schema(dbc_msg)
-            event = self._events.get(cache_key)
-
-        if event:
-            signals = self._convert_signals(dbc_msg, decoded, base_only=True)
-            self._emit_signals(event, signals, timestamp_ns, f"base:{dbc_msg.name}")
-
-    def _emit_multiplexed_signals(
-        self,
-        dbc_msg: cantools.database.can.Message,
-        decoded: dict,
-        timestamp_ns: int | None,
-    ) -> None:
-        """Emit multiplexed signals for the active mux value.
-
-        :param dbc_msg: DBC message definition
-        :param decoded: Decoded signal values
-        :param timestamp_ns: Timestamp in nanoseconds, or None
-        """
-        mux_signal = next((sig for sig in dbc_msg.signals if sig.is_multiplexer), None)
-        if not mux_signal:
-            return
-
-        mux_value = decoded.get(mux_signal.name)
-        if mux_value is None:
-            return
-
-        if isinstance(mux_value, int | float):
-            mux_value_int = int(mux_value)
-        else:
-            # NamedSignalValue - get integer representation
-            mux_value_int = int(mux_signal.conversion.choice_to_number(mux_value))
-
-        cache_key = (*_definition_key(dbc_msg), mux_value_int)
-        event = self._events.get(cache_key)
-
-        # Generate mux schema lazily if not already present
-        if event is None and not self.emit_schemas_on_init:
-            self._generate_mux_schema_for_value(dbc_msg, mux_value_int)
-            event = self._events.get(cache_key)
-
-        if event:
-            # Get string representation for debug logging
-            if isinstance(mux_value, int | float):
-                mux_value_str = str(mux_value_int)
-            else:
-                mux_value_str = str(mux_value)
-
-            signals = self._convert_signals(dbc_msg, decoded, mux_value=mux_value_int)
-            self._emit_signals(event, signals, timestamp_ns, f"mux:{dbc_msg.name}/{mux_value_str}")
-        # Note: Silently skip undefined mux values - this is valid during testing/development
-
-    def _convert_signals(
-        self,
-        dbc_msg: cantools.database.can.Message,
-        decoded: dict,
-        base_only: bool = False,
-        mux_value: int | None = None,
-    ) -> dict:
-        """Convert decoded signals to native Python types, filtered by category.
-
-        :param dbc_msg: DBC message definition
-        :param decoded: Decoded signal values from cantools
-        :param base_only: If True, only include base (non-multiplexed) signals
-        :param mux_value: If set, only include signals for this mux value
-        :return: Dictionary of signal_name -> value
-        """
-        signals = {}
-        for signal_name, value in decoded.items():
-            signal_def = dbc_msg.get_signal_by_name(signal_name)
-
-            if base_only:
-                if signal_def.multiplexer_ids:
-                    continue
-            elif mux_value is not None and (
-                not signal_def.multiplexer_ids or mux_value not in signal_def.multiplexer_ids
-            ):
-                continue
-
-            if isinstance(value, int | float):
-                # Trim fp64 noise to scale precision so 1234*0.001 ==
-                # 1.2340000000000002 rounds to 1.234. Without this, the
-                # webapp's string-based value-table lookup misses entries
-                # like "1.234": "SNA", and the trace shows misleading
-                # sub-scale noise.
-                scale = float(signal_def.scale) if signal_def.scale is not None else 1.0
-                precision = _scale_precision(scale)
-                signals[signal_name] = round(value, precision) if precision > 0 else value
-            else:
-                # Defensive fallback. With decode_choices=False set on the
-                # decode() call, cantools should never hand us a
-                # NamedSignalValue here — but if it does (cantools internals
-                # change), fall back to the raw int so we still emit
-                # *something* numeric to the trace.
-                signals[signal_name] = int(signal_def.conversion.choice_to_number(value))
-
-        return signals
 
     # ─── Operations exposed by the free-floating actions module ────────────
     #
@@ -1785,23 +832,11 @@ class CanCodec(can.Listener):
         live = self._transport.tx_errors if self._transport is not None else 0
         return self._ssh_tx_errors_retired + live
 
-    # ─── DBC shapes shared by the wire-contract methods ────────────────────
-
-    def _first_dbc(self) -> Path | None:
-        """First configured DBC, or None on a raw-only bus. Backs the legacy
-        single-DBC fields the tx webapp still reads."""
-        return self.database_files[0] if self.database_files else None
-
-    def _message_database(self, msg: cantools.database.can.Message) -> str | None:
-        """Name of the file the merge took this definition from."""
-        origin = self.message_origin.get(_definition_key(msg))
-        return origin.name if origin else None
-
     def get_tx_state(self) -> dict[str, Any]:
         # Extension id/version/state intentionally NOT included — that info
         # is canonical at the `extensions.list` bridge surface and the webapp
         # consumes it from there, not from this 1 Hz polled action.
-        db_path = self._first_dbc()
+        db_path = self.catalog.first_file
         # On the Rust paths (socketcan / ssh-socketcan) RX counters live in
         # the Rust codec. TX counters merge the Python-side self.metrics (one-shot
         # send failures via the bus/adapter) with the Rust codec's own tx counters
@@ -1837,15 +872,15 @@ class CanCodec(can.Listener):
                 "dbc": {
                     "path": str(db_path) if db_path else None,
                     "name": db_path.name if db_path else None,
-                    "hash": self.dbc_hash,
-                    "message_count": len(self.messages),
+                    "hash": self.catalog.dbc_hash,
+                    "message_count": len(self.catalog.messages),
                 },
-                "dbcs": self.dbc_entries,
+                "dbcs": self.catalog.dbc_entries,
                 # `dbc_conflicts` is one id+name two files laid out differently
                 # (later wins); `dbc_overlaps` is one id under several names,
                 # all of which survive and decode.
-                "dbc_conflicts": self.dbc_conflicts,
-                "dbc_overlaps": self.dbc_overlaps,
+                "dbc_conflicts": self.catalog.dbc_conflicts,
+                "dbc_overlaps": self.catalog.dbc_overlaps,
                 "metrics": {
                     "tx_errors": tx_errors,
                     "tx_overflows": tx_overflows,
@@ -1862,33 +897,33 @@ class CanCodec(can.Listener):
         address. A name at two ids therefore gets two rows, each transmittable;
         nothing is hidden behind a last-wins rule.
         """
-        db_path = self._first_dbc()
+        db_path = self.catalog.first_file
         return {
             "bus": self.bus_name,
             "dbc_name": db_path.name if db_path else None,
-            "dbcs": [path.name for path in self.database_files],
+            "dbcs": [path.name for path in self.catalog.database_files],
             "messages": [
                 {
                     "key": key,
-                    **_describe_dbc_message_summary(msg),
-                    "database": self._message_database(msg),
+                    **describe_dbc_message_summary(msg),
+                    "database": self.catalog.database_of(msg),
                 }
-                for key, msg in self.messages_by_key.items()
+                for key, msg in self.catalog.messages_by_key.items()
             ],
         }
 
     def describe_message(self, message: str) -> dict[str, Any]:
         """Detail for one definition, addressed by key or unambiguous name."""
-        dbc_msg = self._resolve_dbc_message(message)
-        db_path = self._first_dbc()
+        dbc_msg = self.catalog.resolve(message)
+        db_path = self.catalog.first_file
         return {
             "bus": self.bus_name,
             "dbc_name": db_path.name if db_path else None,
-            "dbcs": [path.name for path in self.database_files],
+            "dbcs": [path.name for path in self.catalog.database_files],
             "message": {
-                "key": self._key_of(dbc_msg),
-                **_describe_dbc_message(dbc_msg),
-                "database": self._message_database(dbc_msg),
+                "key": self.catalog.key_of(dbc_msg),
+                **describe_dbc_message(dbc_msg),
+                "database": self.catalog.database_of(dbc_msg),
             },
         }
 
@@ -1900,9 +935,9 @@ class CanCodec(can.Listener):
         is_fd: bool = False,
     ) -> dict[str, Any]:
         self._require_running()
-        can_id_int = _parse_can_id(can_id)
-        _validate_id_range(can_id_int, is_extended)
-        data_bytes = _parse_data_hex(data)
+        can_id_int = parse_can_id(can_id)
+        validate_id_range(can_id_int, is_extended)
+        data_bytes = parse_data_hex(data)
         msg = can.Message(
             arbitration_id=can_id_int,
             data=data_bytes,
@@ -1928,10 +963,10 @@ class CanCodec(can.Listener):
         is_fd: bool = False,
     ) -> dict[str, Any]:
         self._require_running()
-        can_id_int = _parse_can_id(can_id)
-        _validate_id_range(can_id_int, is_extended)
-        data_bytes = _parse_data_hex(data)
-        tid = _task_id(_raw_slot(can_id_int, is_extended), "raw")
+        can_id_int = parse_can_id(can_id)
+        validate_id_range(can_id_int, is_extended)
+        data_bytes = parse_data_hex(data)
+        tid = periodic_task_id(raw_slot(can_id_int, is_extended), "raw")
         replaced = self._stop_slot_if_present(tid)
         msg = can.Message(
             arbitration_id=can_id_int,
@@ -1955,10 +990,10 @@ class CanCodec(can.Listener):
 
     def send_message(self, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
         self._require_running()
-        signals = _parse_signals_json(signals_json)
-        dbc_msg = self._resolve_dbc_message(message)
-        mux_value = _parse_mux(mux)
-        data_bytes = _encode_dbc(dbc_msg, signals, mux_value)
+        signals = parse_signals_json(signals_json)
+        dbc_msg = self.catalog.resolve(message)
+        mux_value = parse_mux(mux)
+        data_bytes = encode_dbc(dbc_msg, signals, mux_value)
         msg = can.Message(
             arbitration_id=dbc_msg.frame_id,
             data=data_bytes,
@@ -1975,10 +1010,10 @@ class CanCodec(can.Listener):
         }
 
     def encode_preview(self, message: str, signals_json: str, mux: str = "") -> dict[str, Any]:
-        signals = _parse_signals_json(signals_json)
-        dbc_msg = self._resolve_dbc_message(message)
-        mux_value = _parse_mux(mux)
-        data_bytes = _encode_dbc(dbc_msg, signals, mux_value)
+        signals = parse_signals_json(signals_json)
+        dbc_msg = self.catalog.resolve(message)
+        mux_value = parse_mux(mux)
+        data_bytes = encode_dbc(dbc_msg, signals, mux_value)
         return {
             "message": message,
             "can_id": dbc_msg.frame_id,
@@ -1996,15 +1031,15 @@ class CanCodec(can.Listener):
         mux: str = "",
     ) -> dict[str, Any]:
         self._require_running()
-        signals = _parse_signals_json(signals_json)
-        dbc_msg = self._resolve_dbc_message(message)
-        mux_value = _parse_mux(mux)
-        data_bytes = _encode_dbc(dbc_msg, signals, mux_value)
+        signals = parse_signals_json(signals_json)
+        dbc_msg = self.catalog.resolve(message)
+        mux_value = parse_mux(mux)
+        data_bytes = encode_dbc(dbc_msg, signals, mux_value)
         mux_key = "dbc" if mux_value is None else f"mux={mux_value}"
         # Keyed per definition: two same-name messages at different ids each
         # hold their own slot.
-        key = self._key_of(dbc_msg)
-        tid = _task_id(key, mux_key)
+        key = self.catalog.key_of(dbc_msg)
+        tid = periodic_task_id(key, mux_key)
         replaced = self._stop_slot_if_present(tid)
         msg = can.Message(
             arbitration_id=dbc_msg.frame_id,
@@ -2035,23 +1070,6 @@ class CanCodec(can.Listener):
     def _require_running(self) -> None:
         if not self.running or not self.bus:
             raise RuntimeError(f"bus '{self.bus_name}' is not running")
-
-    def _resolve_dbc_message(self, message: str) -> cantools.database.can.Message:
-        """A message key, or a name only one definition carries. A name at
-        several ids refuses rather than picking one."""
-        dbc_msg = self.messages_by_key.get(message)
-        if dbc_msg is not None:
-            return dbc_msg
-        keys = self._keys_by_name.get(message, [])
-        if len(keys) == 1:
-            return self.messages_by_key[keys[0]]
-        if keys:
-            raise ValueError(
-                f"message '{message}' is defined at several ids; "
-                f"use a key: {', '.join(sorted(keys))}"
-            )
-        preview = sorted(self.messages_by_key)[:20]
-        raise ValueError(f"unknown DBC message '{message}'. First 20 available: {preview}")
 
     def _spawn_periodic(self, tid: str, msg: can.Message, period_s: float, mode: str) -> None:
         task = self.bus.send_periodic(msg, period_s, autostart=True)

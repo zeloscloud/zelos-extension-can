@@ -322,7 +322,7 @@ def convert_trace_file(
         elif codec:
             # _get_codec raises ValueError on unknown codec — propagated
             # verbatim by the pass-through handler below.
-            database_files = list(_get_codec(codec).database_files)
+            database_files = list(_get_codec(codec).catalog.database_files)
             logger.info("Using codec '%s' databases: %s", codec, database_files)
         else:
             database_files = []
@@ -686,7 +686,7 @@ def _configured_database_files() -> list[str]:
     the action body rather than as a schema default because the inventory is
     dumped at package time, before any config exists.
     """
-    from .codec import bus_database_files  # deferred: pulls in can/cantools
+    from .dbc import bus_database_files  # deferred: pulls in can/cantools
 
     try:
         from zelos_sdk.extensions.config import load_config

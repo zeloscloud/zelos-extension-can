@@ -54,27 +54,29 @@ class TestCanCodecInitialization:
 
         Two of test.dbc's 13 definitions share CAN id 800 under different names,
         so both survive — the same set the Rust decoder reports."""
-        assert len(codec.databases) == 1
-        assert len(codec.databases[0].messages) == 13
-        assert len(codec.messages) == 13
+        assert len(codec.catalog.databases) == 1
+        assert len(codec.catalog.databases[0].messages) == 13
+        assert len(codec.catalog.messages) == 13
 
     def test_creates_message_lookups(self, codec):
         """Test message lookup dictionaries are populated."""
-        assert len(codec.messages_by_id) > 0
-        assert len(codec.messages_by_name) > 0
+        assert len(codec.catalog.messages_by_id) > 0
+        assert len(codec.catalog.messages_by_name) > 0
 
     def test_handles_duplicate_message_names(self, codec):
         """A repeated message name resolves to the LAST definition, so
         messages_by_name and messages_by_id agree."""
         # test.dbc defines "Duplicate_Message" at ids 400 and 500.
-        duplicate_count = sum(1 for msg in codec.messages if msg.name == "Duplicate_Message")
+        duplicate_count = sum(
+            1 for msg in codec.catalog.messages if msg.name == "Duplicate_Message"
+        )
         assert duplicate_count == 2
-        assert codec.messages_by_name["Duplicate_Message"].frame_id == 500
+        assert codec.catalog.messages_by_name["Duplicate_Message"].frame_id == 500
 
     def test_generates_event_names(self, codec):
         """Test event name generation format."""
-        msg = codec.messages_by_name["DUT_Status"]
-        event_name = codec._get_event_name(msg)
+        msg = codec.catalog.messages_by_name["DUT_Status"]
+        event_name = codec.decoder._get_event_name(msg)
         assert event_name == "0064_DUT_Status"  # 0x64 = 100
 
     def test_caches_event_loggers_on_first_message(self, codec):
@@ -82,10 +84,10 @@ class TestCanCodecInitialization:
         import can
 
         # By default, events are not pre-generated (emit_all_schemas_on_init=false)
-        assert len(codec._events) == 0
+        assert len(codec.decoder._events) == 0
 
         # Event should not exist before first message
-        assert (0x64, False, "DUT_Status") not in codec._events
+        assert (0x64, False, "DUT_Status") not in codec.decoder._events
 
         msg = can.Message(
             arbitration_id=0x64,
@@ -95,16 +97,16 @@ class TestCanCodecInitialization:
         )
 
         # Handle the message - should generate schema lazily
-        codec._handle_message(msg)
+        codec.decoder.handle(msg)
 
         # Now the event should exist
-        assert (0x64, False, "DUT_Status") in codec._events
-        assert codec._events[(0x64, False, "DUT_Status")] is not None
+        assert (0x64, False, "DUT_Status") in codec.decoder._events
+        assert codec.decoder._events[(0x64, False, "DUT_Status")] is not None
 
         # Handling the same message again should not increase cache size
-        cache_size_after_first = len(codec._events)
-        codec._handle_message(msg)
-        assert len(codec._events) == cache_size_after_first
+        cache_size_after_first = len(codec.decoder._events)
+        codec.decoder.handle(msg)
+        assert len(codec.decoder._events) == cache_size_after_first
 
     def test_emit_all_schemas_on_init(self, mock_config):
         """Test that all schemas are pre-generated when emit_schemas_on_init=true."""
@@ -119,11 +121,11 @@ class TestCanCodecInitialization:
             codec = CanCodec(mock_config)
 
         # All events should be pre-generated at init
-        assert len(codec._events) > 0
+        assert len(codec.decoder._events) > 0
 
         # Specific event should exist
-        assert (0x64, False, "DUT_Status") in codec._events
-        assert codec._events[(0x64, False, "DUT_Status")] is not None
+        assert (0x64, False, "DUT_Status") in codec.decoder._events
+        assert codec.decoder._events[(0x64, False, "DUT_Status")] is not None
 
         msg = can.Message(
             arbitration_id=0x64,
@@ -133,27 +135,27 @@ class TestCanCodecInitialization:
         )
 
         # Handling message should not change cache size (already pre-generated)
-        initial_cache_size = len(codec._events)
-        codec._handle_message(msg)
-        assert len(codec._events) == initial_cache_size
+        initial_cache_size = len(codec.decoder._events)
+        codec.decoder.handle(msg)
+        assert len(codec.decoder._events) == initial_cache_size
 
     def test_timestamp_mode_enum_conversion(self, mock_config):
         """Test timestamp_mode string is converted to enum."""
         mock_config["timestamp_mode"] = "auto"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            assert codec.timestamp_mode == TimestampMode.AUTO
-            assert isinstance(codec.timestamp_mode, TimestampMode)
+            assert codec.decoder.timestamp_mode == TimestampMode.AUTO
+            assert isinstance(codec.decoder.timestamp_mode, TimestampMode)
 
         mock_config["timestamp_mode"] = "absolute"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            assert codec.timestamp_mode == TimestampMode.ABSOLUTE
+            assert codec.decoder.timestamp_mode == TimestampMode.ABSOLUTE
 
         mock_config["timestamp_mode"] = "ignore"
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
-            assert codec.timestamp_mode == TimestampMode.IGNORE
+            assert codec.decoder.timestamp_mode == TimestampMode.IGNORE
 
     def test_inherits_can_listener(self, codec):
         """Test codec inherits from can.Listener for direct callbacks."""
@@ -170,7 +172,7 @@ class TestSchemaUtils:
     def test_float_signal_mapping(self, codec):
         """An IEEE float raw with identity conversion keeps its declared width;
         a scaled signal is Float64 (fp32 folds adjacent raws at factor 0.001)."""
-        msg = codec.messages_by_name["DUT_Status"]
+        msg = codec.catalog.messages_by_name["DUT_Status"]
         from zelos_sdk import DataType
 
         assert (
@@ -203,7 +205,7 @@ class TestSchemaUtils:
     def test_integer_signal_mapping(self, codec):
         """Test integer signal maps correctly."""
         # Use real signal from DBC
-        msg = codec.messages_by_name["DUT_Status"]
+        msg = codec.catalog.messages_by_name["DUT_Status"]
         state_signal = msg.get_signal_by_name("state")  # 2-bit unsigned
 
         from zelos_sdk import DataType
@@ -214,7 +216,7 @@ class TestSchemaUtils:
     def test_signed_integer_mapping(self, codec):
         """Test signed integer mapping."""
         # Use real signal from DBC
-        msg = codec.messages_by_name["DUT_Status"]
+        msg = codec.catalog.messages_by_name["DUT_Status"]
         signed_signal = msg.get_signal_by_name("signed_signal")  # 2-bit signed
 
         from zelos_sdk import DataType
@@ -228,8 +230,8 @@ class TestMessageDecoding:
 
     def test_get_event_name_format(self, codec):
         """Test event names follow {id:04x}_{name} or {id:08x}_{name} format for extended IDs."""
-        for msg in codec.messages:
-            event_name = codec._get_event_name(msg)
+        for msg in codec.catalog.messages:
+            event_name = codec.decoder._get_event_name(msg)
             assert "_" in event_name
             msg_id_hex, msg_name = event_name.split("_", 1)
             # Standard IDs (11-bit) use 4 hex chars, Extended IDs (29-bit) use 8 hex chars
@@ -250,15 +252,15 @@ class TestMessageDecoding:
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
 
-        codec._handle_message(can.Message(arbitration_id=0x100, is_extended_id=False, data=b"\x12"))
-        codec._handle_message(can.Message(arbitration_id=0x100, is_extended_id=True, data=b"\x34"))
+        codec.decoder.handle(can.Message(arbitration_id=0x100, is_extended_id=False, data=b"\x12"))
+        codec.decoder.handle(can.Message(arbitration_id=0x100, is_extended_id=True, data=b"\x34"))
 
         assert codec.metrics.messages_decoded == 2
         assert codec.metrics.unknown_messages == 0
-        assert (0x100, False) in codec.messages_by_id
-        assert (0x100, True) in codec.messages_by_id
-        assert codec._events[(0x100, False, "StdMessage")] is not None
-        assert codec._events[(0x100, True, "ExtMessage")] is not None
+        assert (0x100, False) in codec.catalog.messages_by_id
+        assert (0x100, True) in codec.catalog.messages_by_id
+        assert codec.decoder._events[(0x100, False, "StdMessage")] is not None
+        assert codec.decoder._events[(0x100, True, "ExtMessage")] is not None
 
 
 class TestConfiguration:
@@ -343,10 +345,10 @@ class TestTimestampHandling:
 
             # First timestamp is small (< 1 hour) - should be detected as boot-relative
             first_hw_ts = 15.5  # 15.5 seconds since boot
-            timestamp_ns = codec.get_timestamp(first_hw_ts)
+            timestamp_ns = codec.decoder.get_timestamp(first_hw_ts)
 
-            assert codec.hw_timestamp_offset is not None
-            assert codec.hw_timestamp_offset > 0
+            assert codec.decoder.hw_timestamp_offset is not None
+            assert codec.decoder.hw_timestamp_offset > 0
             assert timestamp_ns is not None
             # Result should be close to current time
             import time
@@ -363,9 +365,9 @@ class TestTimestampHandling:
             import time
 
             first_hw_ts = time.time()  # Current wall-clock time
-            timestamp_ns = codec.get_timestamp(first_hw_ts)
+            timestamp_ns = codec.decoder.get_timestamp(first_hw_ts)
 
-            assert codec.hw_timestamp_offset == 0.0
+            assert codec.decoder.hw_timestamp_offset == 0.0
             assert timestamp_ns is not None
             assert timestamp_ns == int(first_hw_ts * 1e9)
 
@@ -377,10 +379,10 @@ class TestTimestampHandling:
 
             # Small timestamp - should still use as-is
             hw_ts = 15.5
-            timestamp_ns = codec.get_timestamp(hw_ts)
+            timestamp_ns = codec.decoder.get_timestamp(hw_ts)
 
             assert timestamp_ns == int(hw_ts * 1e9)
-            assert codec.hw_timestamp_offset is None  # Not set in absolute mode
+            assert codec.decoder.hw_timestamp_offset is None  # Not set in absolute mode
 
     def test_timestamp_mode_ignore(self, mock_config):
         """Test ignore mode returns None to use system time."""
@@ -389,7 +391,7 @@ class TestTimestampHandling:
             codec = CanCodec(mock_config)
 
             hw_ts = 15.5
-            timestamp_ns = codec.get_timestamp(hw_ts)
+            timestamp_ns = codec.decoder.get_timestamp(hw_ts)
 
             assert timestamp_ns is None
 
@@ -398,7 +400,7 @@ class TestTimestampHandling:
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(mock_config)
 
-            timestamp_ns = codec.get_timestamp(None)
+            timestamp_ns = codec.decoder.get_timestamp(None)
             assert timestamp_ns is None
 
     def test_timestamp_mode_auto_consistent_offset(self, mock_config):
@@ -408,15 +410,15 @@ class TestTimestampHandling:
 
             # First timestamp establishes offset
             first_hw_ts = 10.0
-            timestamp_ns1 = codec.get_timestamp(first_hw_ts)
-            offset = codec.hw_timestamp_offset
+            timestamp_ns1 = codec.decoder.get_timestamp(first_hw_ts)
+            offset = codec.decoder.hw_timestamp_offset
 
             # Second timestamp should use same offset
             second_hw_ts = 20.0
-            timestamp_ns2 = codec.get_timestamp(second_hw_ts)
+            timestamp_ns2 = codec.decoder.get_timestamp(second_hw_ts)
 
             # Verify offset is preserved
-            assert codec.hw_timestamp_offset == offset
+            assert codec.decoder.hw_timestamp_offset == offset
             # Verify the time difference is preserved
             assert (timestamp_ns2 - timestamp_ns1) == int((second_hw_ts - first_hw_ts) * 1e9)
 
@@ -436,12 +438,12 @@ class TestTimestampHandling:
             )
 
             # Handle the message
-            codec._handle_message(msg)
+            codec.decoder.handle(msg)
 
             # Verify timestamp was processed correctly
-            assert codec.hw_timestamp_offset is not None
-            assert codec.hw_timestamp_offset > 0
-            assert codec.first_hw_timestamp == 15.5
+            assert codec.decoder.hw_timestamp_offset is not None
+            assert codec.decoder.hw_timestamp_offset > 0
+            assert codec.decoder.first_hw_timestamp == 15.5
 
             # Create second message with later timestamp
             msg2 = can.Message(
@@ -452,15 +454,17 @@ class TestTimestampHandling:
             )
 
             # Handle second message
-            codec._handle_message(msg2)
+            codec.decoder.handle(msg2)
 
             # Verify offset remained the same
-            assert codec.first_hw_timestamp == 15.5  # Should not change
+            assert codec.decoder.first_hw_timestamp == 15.5  # Should not change
             # Offset should be consistent
             import time
 
             expected_offset = time.time() - 15.5
-            assert abs(codec.hw_timestamp_offset - expected_offset) < 2.0  # Within 2 seconds
+            assert (
+                abs(codec.decoder.hw_timestamp_offset - expected_offset) < 2.0
+            )  # Within 2 seconds
 
     def test_message_handling_with_absolute_timestamps(self, mock_config):
         """Test full message handling flow with absolute wall-clock timestamps."""
@@ -482,10 +486,10 @@ class TestTimestampHandling:
             )
 
             # Handle the message
-            codec._handle_message(msg)
+            codec.decoder.handle(msg)
 
             # In absolute mode, offset should not be set
-            assert codec.hw_timestamp_offset is None
+            assert codec.decoder.hw_timestamp_offset is None
 
     def test_message_handling_preserves_relative_timing(self, mock_config):
         """Test that relative timing between messages is preserved."""
@@ -500,7 +504,7 @@ class TestTimestampHandling:
             processed_timestamps = []
             for ts in timestamps:
                 # Get the converted timestamp
-                converted_ts = codec.get_timestamp(ts)
+                converted_ts = codec.decoder.get_timestamp(ts)
                 processed_timestamps.append(converted_ts)
 
             # Verify relative timing is preserved
@@ -538,7 +542,7 @@ class TestErrorHandling:
         config = {"interface": "virtual", "channel": "vcan0", "database_files": ["~/bus.dbc"]}
         with patch("zelos_sdk.TraceSource"):
             codec = CanCodec(config)
-        assert codec.database_files == [tmp_path / "bus.dbc"]
+        assert codec.catalog.database_files == [tmp_path / "bus.dbc"]
 
     def test_missing_dbc_suggests_a_close_name(self, tmp_path):
         (tmp_path / "vehicle_full.dbc").touch()
@@ -605,14 +609,14 @@ class TestEmitFailureSuppression:
 
         # Schema registration blows up for the failing message only - the same
         # deterministic fault the real defect hit, repeated on every frame.
-        original_generate = codec._generate_base_schema
+        original_generate = codec.decoder._generate_base_schema
 
         def failing_generate(dbc_msg):
             if dbc_msg.frame_id == self.FAILING_ID:
                 raise RuntimeError("schema registration exploded")
             return original_generate(dbc_msg)
 
-        monkeypatch.setattr(codec, "_generate_base_schema", failing_generate)
+        monkeypatch.setattr(codec.decoder, "_generate_base_schema", failing_generate)
 
         failing = self._frame(self.FAILING_ID, bytes(8))
         healthy = self._frame(self.HEALTHY_ID, bytes(1))
@@ -620,7 +624,7 @@ class TestEmitFailureSuppression:
 
         with caplog.at_level(logging.DEBUG, logger=self.CODEC_LOGGER):
             # First failing frame: loud, exactly once.
-            codec._decode_and_emit_message(failing, None)
+            codec.decoder._decode_and_emit_message(failing, None)
 
             errors = [r for r in caplog.records if r.levelno == logging.ERROR]
             assert len(errors) == 1
@@ -630,25 +634,25 @@ class TestEmitFailureSuppression:
             assert "schema registration exploded" in message
             assert "suppressing further errors for this message" in message
 
-            assert self.FAILING_KEY in codec._failed_messages
+            assert self.FAILING_KEY in codec.decoder._failed_messages
             assert codec.metrics.emit_errors == 1
 
             # Every later frame: silent short-circuit, still counted.
             for i in range(2, frames + 1):
                 caplog.clear()
-                codec._decode_and_emit_message(failing, None)
+                codec.decoder._decode_and_emit_message(failing, None)
                 assert caplog.records == []
                 assert codec.metrics.emit_errors == i
 
             # The healthy sibling keeps emitting throughout, unaffected.
             caplog.clear()
             for _ in range(frames):
-                codec._decode_and_emit_message(healthy, None)
+                codec.decoder._decode_and_emit_message(healthy, None)
             assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
-        healthy_event = codec._events[self.HEALTHY_KEY]
+        healthy_event = codec.decoder._events[self.HEALTHY_KEY]
         assert healthy_event.log.call_count == frames
-        assert self.HEALTHY_KEY not in codec._failed_messages
+        assert self.HEALTHY_KEY not in codec.decoder._failed_messages
 
         # Emit failures never touch decode_errors (bus-noise semantics).
         assert codec.metrics.decode_errors == 0
@@ -665,11 +669,11 @@ class TestEmitFailureSuppression:
 
         with caplog.at_level(logging.DEBUG, logger=self.CODEC_LOGGER):
             for _ in range(3):
-                codec._decode_and_emit_message(short, None)
+                codec.decoder._decode_and_emit_message(short, None)
 
         assert codec.metrics.decode_errors == 3
         assert codec.metrics.emit_errors == 0
-        assert self.FAILING_KEY not in codec._failed_messages
+        assert self.FAILING_KEY not in codec.decoder._failed_messages
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
 
@@ -729,7 +733,7 @@ class TestMultiBusSupport:
         mock_source.assert_not_called()
         assert codec.source is shared
         assert codec.raw_event_name == "chassis/Frame"
-        assert codec._get_event_name(codec.messages_by_name["DUT_Status"]) == (
+        assert codec.decoder._get_event_name(codec.catalog.messages_by_name["DUT_Status"]) == (
             "chassis/0064_DUT_Status"
         )
 
