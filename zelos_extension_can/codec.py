@@ -354,12 +354,12 @@ class CanCodec(can.Listener):
             nominal = bus_config.pop("bitrate", PCAN_DEFAULT_BITRATE)
             bus_config["timing"] = pcan_fd_timing(nominal, bus_config.pop("data_bitrate", nominal))
 
-        # PCAN's macOS library (PCBUSB) cannot echo TX frames, and python-can
-        # fails the whole init on it.
-        if bus_config["interface"] == "pcan" and sys.platform == "darwin":
+        # Only Windows' PCAN-Basic echoes TX frames: macOS's PCBUSB and PCAN-Basic
+        # for Linux refuse the parameter, and python-can fails the whole init on it.
+        if bus_config["interface"] == "pcan" and sys.platform != "win32":
             if bus_config.pop("receive_own_messages", False):
                 warn(
-                    "[%s] PCAN on macOS cannot receive its own messages; ignoring "
+                    "[%s] PCAN receives its own messages only on Windows; ignoring "
                     "receive_own_messages, so transmitted frames are not traced",
                     self.bus_name,
                 )
