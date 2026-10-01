@@ -1357,6 +1357,128 @@ class TestPcanCanFd:
         assert "timing" not in bus.call_args.kwargs
 
 
+class TestReader:
+    """A failed read loses frames, not the reader; only a dead adapter ends it."""
+
+    def test_a_failed_read_is_reported_and_the_next_frame_delivered(self):
+        from zelos_extension_can.codec import _Reader
+
+        frames, errors = [], []
+        reader = _Reader(frames.append, errors.append)
+        overrun = can.CanOperationError("The receive queue was read too late")
+        reader.on_error(overrun)
+        frame = can.Message(arbitration_id=0x10)
+        reader(frame)
+        assert (errors, frames) == ([overrun], [frame])
+
+    def test_failures_back_to_back_end_the_reader(self):
+        from zelos_extension_can.codec import _Reader
+
+        reader = _Reader(lambda _m: None, lambda _e: None)
+        gone = can.CanOperationError("The value of a handle is invalid")
+        for _ in range(_Reader.GIVE_UP_AFTER - 1):
+            reader.on_error(gone)
+        with pytest.raises(can.CanOperationError):
+            reader.on_error(gone)
+
+    def test_a_frame_between_failures_starts_the_count_over(self):
+        from zelos_extension_can.codec import _Reader
+
+        reader = _Reader(lambda _m: None, lambda _e: None)
+        overrun = can.CanOperationError("The receive queue was read too late")
+        for _ in range(3):
+            for _ in range(_Reader.GIVE_UP_AFTER - 1):
+                reader.on_error(overrun)
+            reader(can.Message(arbitration_id=0x10))
+
+    def test_failures_far_apart_never_end_the_reader(self, monkeypatch):
+        from zelos_extension_can.codec import _Reader
+
+        clock = [0.0]
+        monkeypatch.setattr("zelos_extension_can.codec.time.monotonic", lambda: clock[0])
+        reader = _Reader(lambda _m: None, lambda _e: None)
+        for _ in range(_Reader.GIVE_UP_AFTER * 2):
+            clock[0] += _Reader.BACK_TO_BACK_S * 2
+            reader.on_error(can.CanOperationError("The receive queue was read too late"))
+
+    def test_an_unexpected_error_is_not_swallowed(self):
+        from zelos_extension_can.codec import _Reader
+
+        reader = _Reader(lambda _m: None, lambda _e: None)
+        with pytest.raises(KeyError):
+            reader.on_error(KeyError("a bug"))
+
+    def test_a_lost_frame_marks_the_bus_and_is_counted(self, codec):
+        codec._on_receive_error(can.CanOperationError("The receive queue was read too late"))
+        bus = codec.get_tx_state()["bus"]
+        assert bus["status"] == "warning"
+        assert bus["health"]["detail"] == (
+            "Frames were lost on receive: The receive queue was read too late."
+        )
+        assert bus["metrics"]["rx_errors"] == 1
+
+    def test_the_notifier_keeps_running_through_a_failed_read(self, codec):
+        import time as _time
+
+        class _Overrunning(VirtualBus):
+            def __init__(self):
+                super().__init__(channel="overrun-once")
+                self.failed = False
+
+            def _recv_internal(self, timeout):
+                if not self.failed:
+                    self.failed = True
+                    raise can.CanOperationError("The receive queue was read too late")
+                return super()._recv_internal(timeout)
+
+        mocked = codec.bus
+        bus = _Overrunning()
+        peer = VirtualBus(channel="overrun-once")
+        codec.bus = bus
+        received = []
+        codec.decoder.handle = received.append
+        try:
+            codec._start_notifier()
+            assert can.Notifier.find_instances(bus) == (codec._notifier,)
+            deadline = _time.monotonic() + 3
+            while not bus.failed and _time.monotonic() < deadline:
+                _time.sleep(0.01)
+            peer.send(can.Message(arbitration_id=0x42, data=b"\x01"))
+            while not received and _time.monotonic() < deadline:
+                _time.sleep(0.01)
+            assert [m.arbitration_id for m in received] == [0x42]
+            assert codec._check_notifier_health(codec._notifier)
+            assert codec.metrics.rx_errors == 1
+        finally:
+            codec._stop_notifier()
+            codec.bus = mocked
+            bus.shutdown()
+            peer.shutdown()
+
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+    def test_an_adapter_that_keeps_failing_ends_the_notifier(self, codec):
+        """The reconnect takes over from a reader that gave up."""
+        import time as _time
+
+        class _Unplugged(VirtualBus):
+            def _recv_internal(self, timeout):
+                raise can.CanOperationError("The value of a handle is invalid")
+
+        mocked = codec.bus
+        bus = _Unplugged(channel="unplugged")
+        codec.bus = bus
+        try:
+            codec._start_notifier()
+            deadline = _time.monotonic() + 5
+            while codec._check_notifier_health(codec._notifier) and _time.monotonic() < deadline:
+                _time.sleep(0.01)
+            assert not codec._check_notifier_health(codec._notifier)
+        finally:
+            codec._stop_notifier()
+            codec.bus = mocked
+            bus.shutdown()
+
+
 class TestRepeatFilter:
     @staticmethod
     def _record(text: str):

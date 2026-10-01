@@ -86,17 +86,21 @@ def derive_bus_status(running: bool, bus: Any) -> str:
 
 
 class BusHealth:
-    """What a bus's recent failed sends and error frames add to the state
-    its adapter reports."""
+    """What a bus's recent failed sends, lost reads and error frames add to
+    the state its adapter reports."""
 
     def __init__(self, interface: str | None) -> None:
         self._interface = interface
         # The latest of each, with the monotonic time it happened.
         self._tx_failure: tuple[float, str] | None = None
+        self._rx_failure: tuple[float, str] | None = None
         self._error_frame: tuple[float, str, str | None] | None = None
 
     def note_tx_failure(self, reason: str) -> None:
         self._tx_failure = (time.monotonic(), reason)
+
+    def note_rx_failure(self, reason: str) -> None:
+        self._rx_failure = (time.monotonic(), reason)
 
     def note_error_frame(self, msg: can.Message) -> None:
         """Let an error frame mark the bus.
@@ -136,6 +140,10 @@ class BusHealth:
         happened = []
         if self._recent(self._tx_failure):
             happened.append(f"Frames could not be sent: {self._tx_failure[1]}.")
+        if self._recent(self._rx_failure):
+            happened.append(f"Frames were lost on receive: {self._rx_failure[1]}.")
+            if state in (None, "ok"):
+                state = "warning"
         if happened:
             detail = " ".join([*happened, *([detail] if detail else [])])
         health = {"state": state or "unknown", "detail": detail, **counters}
