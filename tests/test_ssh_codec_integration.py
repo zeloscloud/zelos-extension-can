@@ -507,10 +507,10 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(make_ssh_codec, monkeypat
                 c.stop()
 
 
-# ── stop(): tears down the transport and snapshots native metrics ────────────
+# ── stop(): tears down the transport and keeps the final native counts ───────
 
 
-def test_stop_tears_down_transport_and_snapshots(make_ssh_codec):
+def test_stop_tears_down_transport_and_keeps_counts(make_ssh_codec):
     codec = make_ssh_codec()
     transport = codec._transport
 
@@ -520,12 +520,13 @@ def test_stop_tears_down_transport_and_snapshots(make_ssh_codec):
     assert codec._native is None
     assert codec.bus is None
     assert codec.running is False
-    # Metrics were snapshotted off the Rust codec before it was dropped.
-    assert codec._native_metrics is not None
-    assert set(codec._native_metrics) == {
+    # The Rust codec's final counts outlive it.
+    assert set(codec._native_carry) == {
         "messages_received",
         "messages_decoded",
         "unknown_messages",
+        "tx_errors",
+        "tx_overflows",
     }
 
 

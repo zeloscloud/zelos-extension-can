@@ -41,7 +41,7 @@ from .pcan import (
     release_pcan_channel,
 )
 from .periodics import Periodics
-from .socketcan import socketcan_health, socketcan_link
+from .socketcan import SocketcanSupervisor, socketcan_health, socketcan_link
 
 logger = logging.getLogger(__name__)
 
@@ -159,10 +159,14 @@ class CanCodec(can.Listener):
         self._use_ssh = config.get("interface") == "ssh-socketcan"
         self._use_rust = self._use_native or self._use_ssh
         self._native: Any = None
-        # RX and TX counter snapshots taken at stop(), before the Rust handle is
-        # dropped, so get_tx_state keeps reporting the final values afterward.
-        self._native_metrics: dict[str, int] | None = None
-        self._native_tx_metrics: dict[str, int] | None = None
+        # Final counts of Rust codecs already stopped, by a reopen or by stop(),
+        # so the totals get_tx_state reports never drop. Swapped with `_native`
+        # under `_counts_lock`.
+        self._native_carry: dict[str, int] = {}
+        self._counts_lock = threading.Lock()
+        # Serializes opening, reopening and stopping the bus with changes to its
+        # periodics, so stop() never races a reopen that would revive the bus.
+        self._lifecycle = threading.RLock()
         # ssh-socketcan only: the durable ExternalBus and the disposable
         # SshTransport (rebuilt on reconnect). None on every other interface.
         self._ebus: Any = None
@@ -192,6 +196,11 @@ class CanCodec(can.Listener):
         self._tx_failure_lock = threading.Lock()
         self._rx_failure_logged_at = -math.inf
         self.health = BusHealth(config.get("interface"))
+        self._supervisor = (
+            SocketcanSupervisor(str(config.get("channel")), bus_name)
+            if config.get("interface") in ("socketcan", "socketcan-py")
+            else None
+        )
 
         # Demo mode simulation
         self.demo_mode = config.get("demo_mode", False)
@@ -334,6 +343,8 @@ class CanCodec(can.Listener):
             try:
                 self.bus = can.Bus(**bus_config)
                 self.running = True
+                if self._supervisor is not None:
+                    self._supervisor.note_link()
                 logger.info("CAN bus started successfully")
                 return
             except can.CanError as e:
@@ -367,15 +378,22 @@ class CanCodec(can.Listener):
         }
         if self.config.get("rcvbuf_size") is not None:
             kwargs["rcvbuf_size"] = self.config["rcvbuf_size"]
-        self._native = zelos_can.CanCodec(**kwargs)
+        native = zelos_can.CanCodec(**kwargs)
 
         # TX-only python-can compat bus on the same channel; no Notifier is
         # attached so it does no RX work. The bus-based TX action layer
         # (send_raw / send_message / periodics) reuses this unchanged.
-        self.bus = can.Bus(
-            interface="zelos-socketcan", channel=self.config["channel"], fd=self.fd_mode
-        )
+        try:
+            self.bus = can.Bus(
+                interface="zelos-socketcan", channel=self.config["channel"], fd=self.fd_mode
+            )
+        except BaseException:
+            native.stop()
+            raise
+        with self._counts_lock:
+            self._native = native
         self.running = True
+        self._supervisor.note_link()
         logger.info("native socketcan codec started on %s", self.config["channel"])
 
     def _start_ssh(self) -> None:
@@ -447,21 +465,20 @@ class CanCodec(can.Listener):
     def stop(self) -> None:
         """Stop CAN bus and periodic tasks."""
         logger.info(f"[{self.bus_name}] Stopping CAN codec")
+        # Set before waiting on a reopen in progress, so none starts, and again
+        # after, since a reopen marks the bus running.
         self.running = False
+        with self._lifecycle:
+            self.running = False
+            self._stop_locked()
 
+    def _stop_locked(self) -> None:
         if self.demo_task:
             self.demo_task.cancel()
             self.demo_task = None
 
         self.periodics.stop_all()
-
-        if self._native is not None:
-            # Snapshot RX + TX counters before tearing down — the native handle
-            # goes away and get_tx_state must keep reporting the final values.
-            self._native_metrics = self._native_rx_counts()
-            self._native_tx_metrics = self._native_tx_counts()
-            self._native.stop()
-            self._native = None
+        self._retire_native()
 
         # Join the reader thread first, or it reads a shut-down bus.
         self._stop_notifier()
@@ -508,8 +525,15 @@ class CanCodec(can.Listener):
                 self.bus_name,
                 bus_state.name,
             )
+            return False
 
-        return is_active
+        # A PCAN controller that went bus-off stays off until it is initialized
+        # again, so a moment's wiring fault would end all traffic for good.
+        if pcan_controller_state(self.bus) == "bus_off":
+            logger.warning("[%s] The controller is bus-off; restarting the bus", self.bus_name)
+            return False
+
+        return True
 
     async def _reconnect_bus(self) -> bool:
         """Attempt to reconnect to CAN bus.
@@ -529,24 +553,26 @@ class CanCodec(can.Listener):
             return await asyncio.to_thread(self._rebuild_ssh_transport)
 
         try:
-            if self.bus:
-                logger.debug("[%s] Shutting down existing bus object...", self.bus_name)
-                bus, self.bus = self.bus, None
-                # A vanished device fails its own shutdown; that must not block reopening.
-                try:
-                    bus.shutdown()
-                except Exception as e:
-                    logger.warning("[%s] Old bus shutdown failed: %s", self.bus_name, e)
-            self.periodics.forget_tasks()
+            with self._lifecycle:
+                if self.bus:
+                    logger.debug("[%s] Shutting down existing bus object...", self.bus_name)
+                    bus, self.bus = self.bus, None
+                    # A vanished device fails its own shutdown; that must not block reopening.
+                    try:
+                        bus.shutdown()
+                    except Exception as e:
+                        logger.warning("[%s] Old bus shutdown failed: %s", self.bus_name, e)
+                self.periodics.forget_tasks()
 
             logger.debug("[%s] Waiting 1 second before reinitializing bus...", self.bus_name)
             await asyncio.sleep(1)
 
             logger.debug("[%s] Reinitializing bus...", self.bus_name)
-            self.start()
-            # shutdown() stopped the periodics with the old bus; a failed start
-            # leaves them pending for the next attempt.
-            self.periodics.rearm(self.bus)
+            with self._lifecycle:
+                self.start()
+                # shutdown() stopped the periodics with the old bus; a failed
+                # start leaves them pending for the next attempt.
+                self.periodics.rearm(self.bus)
             return True
         except Exception as e:
             logger.error("[%s] Bus reconnection failed: %s", self.bus_name, e)
@@ -719,13 +745,22 @@ class CanCodec(can.Listener):
         This approach is more efficient than AsyncBufferedReader + asyncio.wait_for().
         """
         # Native path: zelos_can.CanCodec runs its own Rust recv/decode/trace
-        # loop and auto-reconnects internally. No python-can Notifier, no health
-        # supervisor, no per-frame Python — just idle until stopped.
+        # loop, with no python-can Notifier and no per-frame Python. Its socket
+        # stays bound to an interface that was unplugged, so the supervisor
+        # reopens it on the replugged one.
         if self._use_native:
             logger.info("[%s] Starting CAN rx (native socketcan pipeline)", self.bus_name)
             try:
                 while self.running:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(5.0)
+                    try:
+                        if await asyncio.to_thread(self._supervisor.look):
+                            await asyncio.to_thread(self._restart_native)
+                    except Exception as e:
+                        # One bus failing to recover must not end every bus.
+                        logger.warning(
+                            "[%s] Recovering the interface failed, retrying: %s", self.bus_name, e
+                        )
             except asyncio.CancelledError:
                 logger.info("[%s] CAN reader cancelled", self.bus_name)
             return
@@ -802,6 +837,17 @@ class CanCodec(can.Listener):
             logger.info("[%s] Starting CAN message rx loop", self.bus_name)
             while self.running:
                 await asyncio.sleep(5.0)
+                if self._supervisor is not None:
+                    try:
+                        replaced = await asyncio.to_thread(self._supervisor.look)
+                    except Exception as e:
+                        replaced = False
+                        logger.warning(
+                            "[%s] Recovering the interface failed, retrying: %s", self.bus_name, e
+                        )
+                    if replaced:
+                        await self._handle_reconnection()
+                        continue
 
                 notifier_alive = self._check_notifier_health(self._notifier)
                 bus_healthy = self._check_bus_health()
@@ -824,31 +870,40 @@ class CanCodec(can.Listener):
     # plain methods (no @action decorators) so `actions.py` can hold the
     # decorator stack and `choices=_available_codecs` lives at module scope.
 
+    _NATIVE_RX_COUNTS = ("messages_received", "messages_decoded", "unknown_messages")
+    # A stalled ssh transport surfaces here (the Rust codec's TX channel/outlet),
+    # not in the Python-side self.metrics.
+    _NATIVE_TX_COUNTS = ("tx_errors", "tx_overflows")
+
+    def _native_counts(self, names: tuple[str, ...]) -> dict[str, int]:
+        """Counters for the Rust paths: the live codec's plus those of codecs
+        already stopped. Counters are 0 before start."""
+        with self._counts_lock:
+            native, carry = self._native, self._native_carry
+        live = native.metrics() if native is not None else None
+        return {n: carry.get(n, 0) + (getattr(live, n) if live else 0) for n in names}
+
     def _native_rx_counts(self) -> dict[str, int]:
-        """RX counters for the native path, from the live Rust codec or the
-        snapshot taken at stop. Counters are 0 before start."""
-        if self._native is not None:
-            m = self._native.metrics()
-            return {
-                "messages_received": m.messages_received,
-                "messages_decoded": m.messages_decoded,
-                "unknown_messages": m.unknown_messages,
-            }
-        if self._native_metrics is not None:
-            return self._native_metrics
-        return {"messages_received": 0, "messages_decoded": 0, "unknown_messages": 0}
+        return self._native_counts(self._NATIVE_RX_COUNTS)
 
     def _native_tx_counts(self) -> dict[str, int]:
-        """TX counters for the Rust path, from the live codec or the stop-time
-        snapshot. A stalled ssh transport surfaces here (the Rust codec's TX
-        channel/outlet), not in the Python-side self.metrics. Counters are 0
-        before start."""
-        if self._native is not None:
-            m = self._native.metrics()
-            return {"tx_errors": m.tx_errors, "tx_overflows": m.tx_overflows}
-        if self._native_tx_metrics is not None:
-            return self._native_tx_metrics
-        return {"tx_errors": 0, "tx_overflows": 0}
+        return self._native_counts(self._NATIVE_TX_COUNTS)
+
+    def _retire_native(self) -> None:
+        """Stop the Rust codec and fold its final counts into the carry.
+
+        It is stopped first, and keeps its counts, so a snapshot taken while
+        it is retired never reads lower than one taken before."""
+        native = self._native
+        if native is None:
+            return
+        native.stop()
+        final = native.metrics()
+        names = self._NATIVE_RX_COUNTS + self._NATIVE_TX_COUNTS
+        with self._counts_lock:
+            carry = self._native_carry
+            self._native_carry = {n: carry.get(n, 0) + getattr(final, n) for n in names}
+            self._native = None
 
     def _ssh_tx_error_count(self) -> int:
         """Remote writes cansend reported failing, across transport rebuilds.
@@ -1110,10 +1165,13 @@ class CanCodec(can.Listener):
     def _start_periodic(
         self, tid: str, msg: can.Message, period_s: float, mode: str, slot: dict[str, Any]
     ) -> None:
-        self.periodics.start(self.bus, tid, msg, period_s, mode, slot)
+        with self._lifecycle:
+            self._require_running()
+            self.periodics.start(self.bus, tid, msg, period_s, mode, slot)
 
     def _stop_periodic_slot(self, tid: str) -> bool:
-        return self.periodics.stop(tid)
+        with self._lifecycle:
+            return self.periodics.stop(tid)
 
     def _send_or_count(self, msg: can.Message) -> None:
         """Wrapper around bus.send() that counts CanError as tx_errors and
@@ -1148,7 +1206,28 @@ class CanCodec(can.Listener):
             link = socketcan_link(iface)
             if link is None:
                 return None, None, {}
-            state, detail = socketcan_health(iface, link, link.settings)
+            settings = link.settings or self._supervisor.settings
+            state, detail = socketcan_health(iface, link, settings)
             return state, detail, link.counters or {}
         state = pcan_controller_state(self.bus)
         return state, HEALTH_DETAIL.get(state) if state else None, {}
+
+    def _restart_native(self) -> None:
+        """Reopen the native codec and its TX bus on a replugged interface,
+        keeping the counts and re-arming the periodics."""
+        with self._lifecycle:
+            if not self.running:
+                return
+            self.periodics.halt()
+            self._retire_native()
+            if self.bus is not None:
+                bus, self.bus = self.bus, None
+                try:
+                    bus.shutdown()
+                except Exception as e:
+                    logger.warning("[%s] Old bus shutdown failed: %s", self.bus_name, e)
+            self._start_native()
+            self.periodics.rearm(self.bus)
+        logger.info(
+            "[%s] reopened %s after it was unplugged", self.bus_name, self.config["channel"]
+        )
