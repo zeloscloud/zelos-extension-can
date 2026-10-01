@@ -951,6 +951,91 @@ def _supervise(codec, monkeypatch, on_tick):
     asyncio.run(codec._run_async())
 
 
+def _quick_reopen_pause(monkeypatch):
+    """The 1 s pause between closing and reopening a bus, made instant."""
+    real_sleep = asyncio.sleep
+
+    async def sleep(s):
+        await real_sleep(0 if s == 1 else s)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+
+def test_a_failing_reopen_leaves_the_event_loop_to_the_other_buses(codec, monkeypatch):
+    # Every bus is supervised on one loop: a reopen blocking it would stall them all.
+    import time
+
+    _quick_reopen_pause(monkeypatch)
+    codec.start()
+    ticks, during = [], []
+
+    def slow_failing_start(*, quiet=False):
+        before = len(ticks)
+        time.sleep(0.3)
+        during.append(len(ticks) - before)
+        raise can.CanOperationError("adapter gone")
+
+    monkeypatch.setattr(codec, "start", slow_failing_start)
+
+    async def scenario():
+        async def tick():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0.01)
+
+        ticker = asyncio.create_task(tick())
+        await codec._handle_reconnection()
+        ticker.cancel()
+
+    asyncio.run(scenario())
+    assert during and during[0] >= 10, f"the loop ticked {during} times during a 0.3 s reopen"
+    assert codec._reopen_failures == 1
+
+
+def test_an_outage_logs_its_cause_once_then_once_a_minute(codec, monkeypatch, caplog):
+    import logging
+
+    _quick_reopen_pause(monkeypatch)
+    codec.start()
+    real_start, clock, quiet_flags = codec.start, [1000.0], []
+    monkeypatch.setattr("zelos_extension_can.codec.time.monotonic", lambda: clock[0])
+
+    def failing_start(*, quiet=False):
+        quiet_flags.append(quiet)
+        raise can.CanOperationError("adapter gone")
+
+    monkeypatch.setattr(codec, "start", failing_start)
+    caplog.set_level(logging.INFO, logger="zelos_extension_can.codec")
+    for _ in range(10):  # a reopen every 9 s, 90 s in all
+        asyncio.run(codec._handle_reconnection())
+        clock[0] += 9
+    name = codec.bus_name
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == [
+        f"[{name}] Reconnecting failed, retrying: adapter gone",
+        f"[{name}] Still reconnecting after 8 attempts: adapter gone",
+    ]
+    # Only the first reopen logs its attempts in full.
+    assert quiet_flags == [False] + [True] * 9
+
+    monkeypatch.setattr(codec, "start", real_start)
+    asyncio.run(codec._handle_reconnection())
+    assert codec.bus is not None
+    assert f"[{name}] Reconnected after 10 failed attempts" in caplog.text
+    assert (codec._reopen_failures, codec._reopen_failure_logged_at) == (0, float("-inf"))
+    codec.stop()
+
+
+def test_a_reopen_after_stop_never_revives_the_bus(codec, monkeypatch):
+    _quick_reopen_pause(monkeypatch)
+    codec.start()
+    codec.stop()
+    opened = []
+    monkeypatch.setattr(codec, "start", lambda **_kw: opened.append(1))
+    asyncio.run(codec._handle_reconnection())
+    assert (opened, codec.bus, codec._notifier) == ([], None, None)
+
+
 def test_reconnect_rearms_periodic_on_new_bus(codec, monkeypatch):
     codec.start()
     tid = codec.start_periodic_raw("0x123", "01 02", period_ms=10)["task_id"]

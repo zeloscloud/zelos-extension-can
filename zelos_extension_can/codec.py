@@ -195,6 +195,10 @@ class CanCodec(can.Listener):
         # Failed sends are counted from every periodic's thread at once.
         self._tx_failure_lock = threading.Lock()
         self._rx_failure_logged_at = -math.inf
+        # Failed reopens since the bus was lost, and when one was last logged:
+        # an adapter left unplugged is retried every cycle but logged once a minute.
+        self._reopen_failures = 0
+        self._reopen_failure_logged_at = -math.inf
         self.health = BusHealth(config.get("interface"))
         self._supervisor = (
             SocketcanSupervisor(str(config.get("channel")), bus_name)
@@ -271,11 +275,19 @@ class CanCodec(can.Listener):
             kwargs["raw_event_name"] = self.raw_event_name
         return kwargs
 
-    def start(self) -> None:
-        """Initialize CAN bus connection with retry logic."""
-        logger.info(
-            f"[{self.bus_name}] Starting CAN bus: interface={self.config['interface']}, "
-            f"channel={self.config['channel']}"
+    def start(self, *, quiet: bool = False) -> None:
+        """Initialize CAN bus connection with retry logic.
+
+        :param quiet: log at debug, for a reopen whose failures the caller summarizes
+        """
+        info, warn, error = (
+            (logger.debug,) * 3 if quiet else (logger.info, logger.warning, logger.error)
+        )
+        info(
+            "[%s] Starting CAN bus: interface=%s, channel=%s",
+            self.bus_name,
+            self.config["interface"],
+            self.config["channel"],
         )
 
         if self._use_native and sys.platform != "linux":
@@ -332,7 +344,7 @@ class CanCodec(can.Listener):
         # fails the whole init on it.
         if bus_config["interface"] == "pcan" and sys.platform == "darwin":
             if bus_config.pop("receive_own_messages", False):
-                logger.warning(
+                warn(
                     "[%s] PCAN on macOS cannot receive its own messages; ignoring "
                     "receive_own_messages, so transmitted frames are not traced",
                     self.bus_name,
@@ -345,15 +357,25 @@ class CanCodec(can.Listener):
                 self.running = True
                 if self._supervisor is not None:
                     self._supervisor.note_link()
-                logger.info("CAN bus started successfully")
+                info("[%s] CAN bus started successfully", self.bus_name)
                 return
             except can.CanError as e:
                 if bus_config["interface"] == "pcan":
                     release_pcan_channel(str(bus_config["channel"]))
                 if attempt == max_retries - 1:
-                    logger.error("Failed to initialize CAN bus after %d attempts", max_retries)
+                    error(
+                        "[%s] Failed to initialize CAN bus after %d attempts",
+                        self.bus_name,
+                        max_retries,
+                    )
                     raise
-                logger.warning("Bus init failed (attempt %d/%d): %s", attempt + 1, max_retries, e)
+                warn(
+                    "[%s] Bus init failed (attempt %d/%d): %s",
+                    self.bus_name,
+                    attempt + 1,
+                    max_retries,
+                    e,
+                )
                 time.sleep(1)
 
     def _start_native(self) -> None:
@@ -552,31 +574,53 @@ class CanCodec(can.Listener):
         if self._use_ssh:
             return await asyncio.to_thread(self._rebuild_ssh_transport)
 
+        # Off the event loop: closing a vanished adapter and opening it again
+        # block, and every bus is supervised on this loop.
         try:
-            with self._lifecycle:
-                if self.bus:
-                    logger.debug("[%s] Shutting down existing bus object...", self.bus_name)
-                    bus, self.bus = self.bus, None
-                    # A vanished device fails its own shutdown; that must not block reopening.
-                    try:
-                        bus.shutdown()
-                    except Exception as e:
-                        logger.warning("[%s] Old bus shutdown failed: %s", self.bus_name, e)
-                self.periodics.forget_tasks()
-
-            logger.debug("[%s] Waiting 1 second before reinitializing bus...", self.bus_name)
+            await asyncio.to_thread(self._close_bus)
             await asyncio.sleep(1)
-
-            logger.debug("[%s] Reinitializing bus...", self.bus_name)
-            with self._lifecycle:
-                self.start()
-                # shutdown() stopped the periodics with the old bus; a failed
-                # start leaves them pending for the next attempt.
-                self.periodics.rearm(self.bus)
+            await asyncio.to_thread(self._reopen_bus)
             return True
         except Exception as e:
-            logger.error("[%s] Bus reconnection failed: %s", self.bus_name, e)
+            self._note_reopen_failure(e)
             return False
+
+    def _close_bus(self) -> None:
+        with self._lifecycle:
+            if self.bus:
+                bus, self.bus = self.bus, None
+                # A vanished device fails its own shutdown; that must not block reopening.
+                try:
+                    bus.shutdown()
+                except Exception as e:
+                    logger.warning("[%s] Old bus shutdown failed: %s", self.bus_name, e)
+            self.periodics.forget_tasks()
+
+    def _reopen_bus(self) -> None:
+        with self._lifecycle:
+            if not self.running:
+                return
+            self.start(quiet=self._reopen_failures > 0)
+            # shutdown() stopped the periodics with the old bus; a failed
+            # start leaves them pending for the next attempt.
+            self.periodics.rearm(self.bus)
+
+    def _note_reopen_failure(self, error: Exception) -> None:
+        """Log a failed reopen: the first in full, then once a minute with a count."""
+        self._reopen_failures += 1
+        now = time.monotonic()
+        if now - self._reopen_failure_logged_at < 60:
+            return
+        self._reopen_failure_logged_at = now
+        if self._reopen_failures == 1:
+            logger.error("[%s] Reconnecting failed, retrying: %s", self.bus_name, error)
+        else:
+            logger.error(
+                "[%s] Still reconnecting after %d attempts: %s",
+                self.bus_name,
+                self._reopen_failures,
+                error,
+            )
 
     def _rebuild_ssh_transport(self) -> bool:
         """Rebuild ONLY the ssh transport; codec + ExternalBus + periodics survive.
@@ -727,16 +771,16 @@ class CanCodec(can.Listener):
 
     async def _handle_reconnection(self) -> None:
         """Handle bus reconnection and notifier recreation."""
-        logger.debug("[%s] Stopping notifier...", self.bus_name)
-        self._stop_notifier()
-
-        if await self._reconnect_bus():
-            self._start_notifier()
-        else:
-            logger.error(
-                "[%s] Reconnection failed - bus remains uninitialized, will retry in 5 seconds",
-                self.bus_name,
+        # Joining the reader blocks too; see _reconnect_bus.
+        await asyncio.to_thread(self._stop_notifier)
+        if not await self._reconnect_bus() or self.bus is None:
+            return
+        self._start_notifier()
+        if self._reopen_failures:
+            logger.info(
+                "[%s] Reconnected after %d failed attempts", self.bus_name, self._reopen_failures
             )
+        self._reopen_failures, self._reopen_failure_logged_at = 0, -math.inf
 
     async def _run_async(self) -> None:
         """Main async loop - health monitoring and reconnection handling.
@@ -853,7 +897,9 @@ class CanCodec(can.Listener):
                 bus_healthy = self._check_bus_health()
 
                 if not notifier_alive or not bus_healthy:
-                    self._log_reconnection_reason(notifier_alive, bus_healthy)
+                    # The cause once per outage; failed reopens are summarized.
+                    if not self._reopen_failures:
+                        self._log_reconnection_reason(notifier_alive, bus_healthy)
                     await self._handle_reconnection()
         except asyncio.CancelledError:
             logger.info("[%s] CAN reader cancelled", self.bus_name)
