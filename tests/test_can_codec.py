@@ -312,15 +312,19 @@ class TestConfigJsonMerging:
             CanCodec(mock_config).start()
             assert mock_bus.call_args.kwargs["interface"] == "socketcan"
 
-    def test_pcan_on_macos_drops_receive_own_messages(self, mock_config):
+    @pytest.mark.parametrize(
+        ("platform", "echo"), [("darwin", None), ("linux", None), ("win32", True)]
+    )
+    def test_pcan_echoes_its_own_messages_only_on_windows(self, mock_config, platform, echo):
+        # PCAN-Basic for Linux and macOS's PCBUSB refuse the parameter outright.
         mock_config.update(interface="pcan", receive_own_messages=True)
         with (
             patch("zelos_sdk.TraceSource"),
             patch("can.Bus") as mock_bus,
-            patch("zelos_extension_can.codec.sys.platform", "darwin"),
+            patch("zelos_extension_can.codec.sys.platform", platform),
         ):
             CanCodec(mock_config).start()
-            assert "receive_own_messages" not in mock_bus.call_args.kwargs
+            assert mock_bus.call_args.kwargs.get("receive_own_messages") is echo
 
     def test_config_json_empty_string_ignored(self, mock_config):
         """Test empty config_json is ignored."""
