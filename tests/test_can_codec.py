@@ -521,12 +521,12 @@ class TestTimestampHandling:
 class TestErrorHandling:
     """Test error handling and resilience."""
 
-    def test_handles_missing_dbc_file(self, test_dbc_path):
+    def test_handles_missing_dbc_file(self, tmp_path):
         """Test proper error when DBC file doesn't exist."""
         config = {
             "interface": "virtual",
             "channel": "vcan0",
-            "database_files": ["/nonexistent/file.dbc"],
+            "database_files": [str(tmp_path / "nonexistent" / "file.dbc")],
         }
         with (
             pytest.raises(FileNotFoundError, match="CAN database file not found"),

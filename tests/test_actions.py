@@ -270,7 +270,7 @@ class TestOpenInApp:
         import subprocess
 
         target = tmp_path / "out.trz"
-        with patch("subprocess.Popen") as popen:
+        with patch.object(actions.sys, "platform", "linux"), patch("subprocess.Popen") as popen:
             actions._open_in_app(target)
 
         assert popen.call_count == 1
