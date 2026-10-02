@@ -41,7 +41,7 @@ before the extension has ever started.
 | Hook | What it does |
 |---|---|
 | **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one SocketCAN (Zelos) bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one PCAN, Kvaser or Vector bus per channel whose vendor driver finds it. On any OS, one slcan bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one Demo bus. Review it, save, then start. Advanced settings are left as they are. |
-| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a SocketCAN (Zelos) / SocketCAN (python-can) bus. You can still type a name. |
+| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail (`can0` / `up, gs_usb`, `vcan0` / `virtual`), for a SocketCAN (Zelos) or SocketCAN (python-can) bus. You can still type a name. |
 
 ### Required Settings
 - **Interface**: the CAN adapter. The config stores the label; the extension opens its python-can interface.
@@ -57,7 +57,7 @@ before the extension has ever started.
   | Demo | | Built-in EV simulator |
 
   Interface values changed; re-select the interface in existing configs.
-- **Channel**: Specify the CAN channel/device name. For `slcan` (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
+- **Channel**: Specify the CAN channel/device name. For slcan (serial) (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
 
 ### Per-Bus Settings
 | Setting | What it does |
@@ -194,6 +194,8 @@ The extension includes a command-line interface for advanced use cases. No insta
 > **Tip:** Run `pip install .` to install and use `zelos-extension-can <args>` from anywhere.
 
 ### CAN Bus Tracing
+
+`trace` takes a python-can interface name, not a form label: `zelos-socketcan` is the Rust bus, and `socketcan` here now means python-can's bus.
 
 ```bash
 # Launch trace process (pass several DBCs to layer them, later files win)
