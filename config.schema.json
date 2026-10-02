@@ -29,6 +29,17 @@
               "socketcan-py",
               "other",
               "demo"
+            ],
+            "enumNames": [
+              "SocketCAN (Linux)",
+              "SocketCAN over SSH",
+              "PCAN",
+              "Kvaser",
+              "Vector",
+              "slcan (serial)",
+              "SocketCAN (python-can)",
+              "Other (python-can)",
+              "Demo"
             ]
           },
           "name": {
