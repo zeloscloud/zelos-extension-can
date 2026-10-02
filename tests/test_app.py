@@ -16,6 +16,7 @@ import pytest
 from zelos_can import ssh_socketcan
 from zelos_can.codec import CanCodec
 
+from zelos_extension_can import INTERFACES
 from zelos_extension_can.cli import app as app_mod
 from zelos_extension_can.cli.app import (
     ADVANCED_DEFAULTS,
@@ -30,14 +31,26 @@ TEST_DBC = Path(__file__).parent / "files" / "test.dbc"
 SCHEMA_PATH = Path(__file__).parents[1] / "config.schema.json"
 
 
+def _vbus(channel):
+    """A python-can virtual bus, configured as the form allows: through Other."""
+    return {
+        "interface": "Other (python-can)",
+        "config_json": json.dumps({"interface": "virtual", "channel": channel}),
+    }
+
+
 def _load_schema():
     return json.loads(SCHEMA_PATH.read_text())
 
 
 def _ssh_branch(schema):
     branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
-    ssh = [b for b in branches if b["properties"]["interface"]["enum"] == ["zelos-ssh-socketcan"]]
-    assert len(ssh) == 1, "exactly one zelos-ssh-socketcan oneOf branch expected"
+    ssh = [
+        b
+        for b in branches
+        if b["properties"]["interface"]["enum"] == ["SocketCAN over SSH (Zelos)"]
+    ]
+    assert len(ssh) == 1, "exactly one ssh-socketcan oneOf branch expected"
     return ssh[0]
 
 
@@ -49,59 +62,6 @@ def test_schema_interface_branches_match_zelos_can():
     fragment = json.loads(files("zelos_can.bus").joinpath("interfaces.schema.json").read_text())
     branches = _load_schema()["properties"]["buses"]["items"]["dependencies"]["interface"]
     assert branches["oneOf"] == fragment
-    # The dropdown: every fragment name, under the fragment's label.
-    labels = {}
-    for b in fragment:
-        labels.update(
-            zip(
-                b["properties"]["interface"]["enum"],
-                b["properties"]["interface"]["enumNames"],
-                strict=True,
-            )
-        )
-    interface = _load_schema()["properties"]["buses"]["items"]["properties"]["interface"]
-    assert dict(zip(interface["enum"], interface["enumNames"], strict=True)) == labels
-
-
-# ── config migration ─────────────────────────────────────────────────────────
-
-
-def test_a_legacy_config_takes_python_can_names(caplog):
-    legacy = {
-        "buses": [
-            {"interface": "socketcan", "channel": "can0"},
-            {"interface": "socketcan-py", "channel": "can1"},
-            {"interface": "ssh-socketcan", "remote_host": "edge"},
-            {"interface": "pcan", "channel": "PCAN_USBBUS1"},
-        ]
-    }
-    with caplog.at_level(logging.INFO):
-        migrated = app_mod.migrate_config(legacy)
-    assert [b["interface"] for b in migrated["buses"]] == [
-        "zelos-socketcan",
-        "socketcan",
-        "zelos-ssh-socketcan",
-        "pcan",
-    ]
-    assert migrated["config_version"] == app_mod.CONFIG_VERSION
-    assert "socketcan -> zelos-socketcan" in caplog.text
-    assert "pcan" not in caplog.text
-
-
-def test_a_current_config_is_untouched():
-    current = {"config_version": 2, "buses": [{"interface": "socketcan", "channel": "can0"}]}
-    assert app_mod.migrate_config(current) is current
-
-
-def test_a_legacy_config_file_loads(tmp_path, monkeypatch):
-    """Old names fail the schema, so the file is migrated before it is validated."""
-    path = tmp_path / "config.json"
-    path.write_text(json.dumps({"buses": [{"interface": "socketcan-py", "channel": "can0"}]}))
-    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(path))
-    monkeypatch.chdir(SCHEMA_PATH.parent)
-    config = app_mod.load_app_config()
-    assert config["buses"][0]["interface"] == "socketcan"
-    assert config["config_version"] == 2
 
 
 def test_schema_is_valid_and_carries_the_per_bus_block():
@@ -134,18 +94,20 @@ def test_schema_is_valid_and_carries_the_per_bus_block():
     assert validator.is_valid(
         {
             "log_level": "INFO",
-            "buses": [{"interface": "socketcan", "channel": "can0", "database_file": "a.dbc"}],
+            "buses": [
+                {"interface": "SocketCAN (Zelos)", "channel": "can0", "database_file": "a.dbc"}
+            ],
         }
     )
-    assert validator.is_valid({"buses": [{"interface": "socketcan", "channel": "can0"}]})
-    assert validator.is_valid({"buses": [{"interface": "demo"}], "advanced": {"prefix": ""}})
-    assert not validator.is_valid({"buses": [{"interface": "demo"}], "advanced": {"nope": 1}})
+    assert validator.is_valid({"buses": [{"interface": "SocketCAN (Zelos)", "channel": "can0"}]})
+    assert validator.is_valid({"buses": [{"interface": "Demo"}], "advanced": {"prefix": ""}})
+    assert not validator.is_valid({"buses": [{"interface": "Demo"}], "advanced": {"nope": 1}})
 
 
-def test_schema_enum_includes_ssh_socketcan():
+def test_every_interface_label_resolves():
     schema = _load_schema()
     enum = schema["properties"]["buses"]["items"]["properties"]["interface"]["enum"]
-    assert "zelos-ssh-socketcan" in enum
+    assert set(enum) == set(INTERFACES)
 
 
 def test_schema_ssh_branch_structure():
@@ -184,7 +146,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     good = {
         "buses": [
             {
-                "interface": "zelos-ssh-socketcan",
+                "interface": "SocketCAN over SSH (Zelos)",
                 "remote_host": "edge",
                 "database_files": [str(TEST_DBC)],
             }
@@ -195,7 +157,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     full = {
         "buses": [
             {
-                "interface": "zelos-ssh-socketcan",
+                "interface": "SocketCAN over SSH (Zelos)",
                 "remote_host": "edge",
                 "remote_channel": "vcan0",
                 "ssh_user": "zelos",
@@ -212,7 +174,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     assert validator.is_valid(full)
 
     missing_host = {
-        "buses": [{"interface": "zelos-ssh-socketcan", "database_files": [str(TEST_DBC)]}]
+        "buses": [{"interface": "SocketCAN over SSH (Zelos)", "database_files": [str(TEST_DBC)]}]
     }
     assert not validator.is_valid(missing_host)
 
@@ -254,9 +216,7 @@ def test_prepare_bus_config_missing_host_exits():
 def test_single_bus_no_name_derives_from_channel():
     """An unnamed bus is always named after its channel, no 'can_codec'
     special case for the single-bus setup."""
-    config = {
-        "buses": [{"interface": "virtual", "channel": "vcan0", "database_files": [str(TEST_DBC)]}]
-    }
+    config = {"buses": [{**_vbus("vcan0"), "database_files": [str(TEST_DBC)]}]}
 
     with patch("zelos_sdk.TraceSource"):
         codecs = _create_codecs(config, TEST_DBC)
@@ -270,8 +230,8 @@ def test_single_bus_no_name_derives_from_channel():
 def test_multi_bus_defaults_name_to_channel():
     config = {
         "buses": [
-            {"interface": "virtual", "channel": "vcan0", "database_files": [str(TEST_DBC)]},
-            {"interface": "virtual", "channel": "vcan1", "database_files": [str(TEST_DBC)]},
+            {**_vbus("vcan0"), "database_files": [str(TEST_DBC)]},
+            {**_vbus("vcan1"), "database_files": [str(TEST_DBC)]},
         ]
     }
 
@@ -290,8 +250,8 @@ def test_multi_bus_rejects_duplicate_names():
     dbc = [str(TEST_DBC)]
     config_dupes = {
         "buses": [
-            {"name": "bus", "interface": "virtual", "channel": "vcan0", "database_files": dbc},
-            {"name": "bus", "interface": "virtual", "channel": "vcan1", "database_files": dbc},
+            {"name": "bus", **_vbus("vcan0"), "database_files": dbc},
+            {"name": "bus", **_vbus("vcan1"), "database_files": dbc},
         ]
     }
     with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
@@ -300,8 +260,8 @@ def test_multi_bus_rejects_duplicate_names():
     # Same channel = same default name = collision
     config_same_channel = {
         "buses": [
-            {"interface": "virtual", "channel": "vcan0", "database_files": dbc},
-            {"interface": "virtual", "channel": "vcan0", "database_files": dbc},
+            {**_vbus("vcan0"), "database_files": dbc},
+            {**_vbus("vcan0"), "database_files": dbc},
         ]
     }
     with patch("zelos_sdk.TraceSource"), pytest.raises(SystemExit):
@@ -310,13 +270,13 @@ def test_multi_bus_rejects_duplicate_names():
 
 @pytest.mark.parametrize("name", ["can.0", "can_log"])  # separator, log-source name
 def test_create_codecs_rejects_an_illegal_bus_name(name):
-    config = {"buses": [{"name": name, "interface": "virtual", "channel": "vcan0"}]}
+    config = {"buses": [{"name": name, **_vbus("vcan0")}]}
     with pytest.raises(SystemExit), patch("zelos_sdk.TraceSource"):
         _create_codecs(config, TEST_DBC, resolve_advanced({}))
 
 
 def test_create_codecs_names_an_ssh_bus_after_its_remote_channel():
-    bus = {"interface": "zelos-ssh-socketcan", "remote_host": "host", "ssh_user": "user"}
+    bus = {"interface": "SocketCAN over SSH (Zelos)", "remote_host": "host", "ssh_user": "user"}
     config = {"buses": [bus, {**bus, "remote_channel": "vcan.1"}]}
     with patch("zelos_sdk.TraceSource"):
         pairs = _create_codecs(config, TEST_DBC, resolve_advanced({}))
@@ -326,8 +286,8 @@ def test_create_codecs_names_an_ssh_bus_after_its_remote_channel():
 def test_create_codecs_shares_one_source_across_buses():
     config = {
         "buses": [
-            {"interface": "virtual", "channel": "vcan0", "database_files": [str(TEST_DBC)]},
-            {"interface": "virtual", "channel": "vcan1", "database_files": [str(TEST_DBC)]},
+            {**_vbus("vcan0"), "database_files": [str(TEST_DBC)]},
+            {**_vbus("vcan1"), "database_files": [str(TEST_DBC)]},
         ]
     }
     shared = MagicMock()
@@ -396,7 +356,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
             "log_level": "INFO",
             "buses": [
                 {
-                    "interface": "zelos-ssh-socketcan",
+                    "interface": "SocketCAN over SSH (Zelos)",
                     "remote_host": "edge",
                     "database_files": [str(TEST_DBC)],
                 }

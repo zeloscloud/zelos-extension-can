@@ -14,7 +14,22 @@ from zelos_can.codec import CanCodec
 #: extension list, so the address they read there is the address they type.
 ACTION_PREFIX = "CAN"
 
+#: A bus's `interface` as configured (the label the form shows) -> the
+#: python-can interface it opens. `demo` and `other` are zelos-can's.
+INTERFACES = {
+    "SocketCAN (Zelos)": "zelos-socketcan",
+    "SocketCAN over SSH (Zelos)": "zelos-ssh-socketcan",
+    "PCAN": "pcan",
+    "Kvaser": "kvaser",
+    "Vector": "vector",
+    "slcan (serial)": "slcan",
+    "SocketCAN (python-can)": "socketcan",
+    "Other (python-can)": "other",
+    "Demo": "demo",
+}
+
 __all__: list[str] = [
     "CanCodec",
     "ACTION_PREFIX",
+    "INTERFACES",
 ]

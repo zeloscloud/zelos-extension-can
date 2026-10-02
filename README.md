@@ -19,7 +19,7 @@ From the CLI, on the agent that has the CAN interface:
 ```bash
 zelos extensions install zeloscloud/zelos-extension-can
 zelos extensions start zeloscloud.zelos-extension-can \
-  --config '{"buses": [{"interface": "zelos-socketcan", "channel": "can0"}]}'
+  --config '{"buses": [{"interface": "SocketCAN (Zelos)", "channel": "can0"}]}'
 ```
 
 In the app:
@@ -40,23 +40,23 @@ before the extension has ever started.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one `zelos-socketcan` bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one `pcan`, `kvaser` or `vector` bus per channel whose vendor driver finds it. On any OS, one `slcan` bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one `demo` bus. Review it, save, then start. Advanced settings are left as they are. |
-| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `zelos-socketcan` / `socketcan` bus. You can still type a name. |
+| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one SocketCAN (Zelos) bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one PCAN, Kvaser or Vector bus per channel whose vendor driver finds it. On any OS, one slcan bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one Demo bus. Review it, save, then start. Advanced settings are left as they are. |
+| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a SocketCAN (Zelos) / SocketCAN (python-can) bus. You can still type a name. |
 
 ### Required Settings
-- **Interface**: the CAN adapter, by its python-can interface name:
+- **Interface**: the CAN adapter. The config stores the label; the extension opens its python-can interface.
 
-  | Value | Label | What |
+  | Interface | python-can | What |
   |---|---|---|
-  | `zelos-socketcan` | SocketCAN (Zelos) | Local SocketCAN on zelos-can's Rust bus, Linux. The recommended local option |
-  | `zelos-ssh-socketcan` | SocketCAN over SSH (Zelos) | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh-zelos-ssh-socketcan) |
-  | `pcan`, `kvaser`, `vector` | PCAN, Kvaser, Vector | Vendor adapters |
-  | `slcan` | slcan (serial) | CANable, CANUSB and other LAWICEL serial adapters |
-  | `socketcan` | SocketCAN (python-can) | Local SocketCAN on python-can |
-  | `other` | Other (python-can) | Any python-can interface, from Advanced Configuration (JSON) |
-  | `demo` | Demo | Built-in EV simulator |
+  | SocketCAN (Zelos) | `zelos-socketcan` | Local SocketCAN on zelos-can's Rust bus, Linux. The recommended local option |
+  | SocketCAN over SSH (Zelos) | `zelos-ssh-socketcan` | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh) |
+  | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
+  | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
+  | SocketCAN (python-can) | `socketcan` | Local SocketCAN on python-can |
+  | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface |
+  | Demo | | Built-in EV simulator |
 
-  A config saved before these names (no `config_version`) is migrated when the extension starts, logged once: `socketcan` becomes `zelos-socketcan`, `socketcan-py` becomes `socketcan`, `ssh-socketcan` becomes `zelos-ssh-socketcan`. A hand-written config meaning python-can's `socketcan` sets `"config_version": 2`.
+  Interface values changed; re-select the interface in existing configs.
 - **Channel**: Specify the CAN channel/device name. For `slcan` (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
 
 ### Per-Bus Settings
@@ -106,13 +106,13 @@ events the same way; a conversion uses the input file's stem as its segment.
 Clear **Prefix** in Advanced settings to keep the previous layout: one source
 per bus (or per converted file) with events unprefixed.
 
-## Remote CAN over SSH (`zelos-ssh-socketcan`)
+## Remote CAN over SSH
 
 Trace a remote edge device's SocketCAN bus over an SSH connection, using the
 edge's **own** `can-utils`. Nothing is installed on the edge, no local `vcan` is
 needed, and it runs from macOS, Linux, or Windows. Decode, tracing, metrics, and
 periodic transmit all run in the same high-throughput Rust pipeline as the local
-`zelos-socketcan` interface. Sent frames are echoed back by the edge's kernel
+SocketCAN (Zelos) interface. Sent frames are echoed back by the edge's kernel
 loopback, so every transmit is traced exactly once.
 
 ### Prerequisites on the edge
