@@ -32,7 +32,7 @@ async def main():
 
     # Configuration for SocketCAN
     config = {
-        "interface": "socketcan",
+        "interface": "zelos-socketcan",
         "channel": "vcan0",  # Change to 'can0' for real hardware
         "database_file": str(demo_dbc),
         "log_raw_frames": False,  # Set True to see raw CAN frames

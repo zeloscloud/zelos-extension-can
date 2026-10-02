@@ -419,9 +419,9 @@ class TestConfigFormHooks:
             "status": "success",
             "config": {
                 "buses": [
-                    {"interface": "socketcan", "channel": "can0", "database_files": []},
-                    {"interface": "socketcan", "channel": "can1", "database_files": []},
-                    {"interface": "socketcan", "channel": "vcan0", "database_files": []},
+                    {"interface": "zelos-socketcan", "channel": "can0", "database_files": []},
+                    {"interface": "zelos-socketcan", "channel": "can1", "database_files": []},
+                    {"interface": "zelos-socketcan", "channel": "vcan0", "database_files": []},
                 ]
             },
         }
@@ -434,7 +434,7 @@ class TestConfigFormHooks:
         result = actions.auto_config()
 
         assert result["config"] == {"buses": [{"name": "demo", "interface": "demo"}]}
-        assert "ssh-socketcan" in result["message"]  # the way out on a laptop
+        assert "zelos-ssh-socketcan" in result["message"]  # the way out on a laptop
 
     def test_auto_config_adds_one_bus_per_adapter_channel(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "win32")
@@ -580,7 +580,7 @@ class TestConfigFormHooks:
 
         buses = actions.auto_config()["config"]["buses"]
 
-        assert {bus["interface"] for bus in buses} == {"socketcan"}
+        assert {bus["interface"] for bus in buses} == {"zelos-socketcan"}
         assert "slcan0" in {bus["channel"] for bus in buses}
 
     def test_schema_hooks_name_actions_that_exist(self):

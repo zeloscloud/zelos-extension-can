@@ -2,8 +2,11 @@
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import sys
+import tempfile
 from collections.abc import Collection
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,6 +35,52 @@ ADVANCED_DEFAULTS: dict = {
     **BUS_DEFAULTS,
     "log_level": "INFO",
 }
+
+
+#: The schema's `config_version`. A config without one was saved before the
+#: interfaces took python-can's names; it is migrated on load.
+CONFIG_VERSION = 2
+LEGACY_INTERFACES = {
+    "socketcan": "zelos-socketcan",
+    "socketcan-py": "socketcan",
+    "ssh-socketcan": "zelos-ssh-socketcan",
+}
+
+
+def migrate_config(config: dict) -> dict:
+    """`config` with its buses' interfaces renamed to python-can's when it predates them."""
+    if "config_version" in config:
+        return config
+    buses, renamed = [], set()
+    for bus in config.get("buses") or []:
+        new = LEGACY_INTERFACES.get(bus.get("interface"))
+        if new:
+            renamed.add(f"{bus['interface']} -> {new}")
+            bus = {**bus, "interface": new}
+        buses.append(bus)
+    if renamed:
+        logger.info(
+            "Config predates python-can interface names; renamed %s", ", ".join(sorted(renamed))
+        )
+    migrated = {**config, "config_version": CONFIG_VERSION}
+    if "buses" in config:
+        migrated["buses"] = buses
+    return migrated
+
+
+def load_app_config() -> dict:
+    """`load_config`, after migrating an old config: its old names fail the schema."""
+    path = Path(os.environ.get("ZELOS_CONFIG_PATH") or "config.json")
+    if not path.exists():
+        return load_config()
+    raw = json.loads(path.read_text())
+    migrated = migrate_config(raw)
+    if migrated is raw:
+        return load_config()
+    with tempfile.TemporaryDirectory() as tmp:
+        migrated_path = Path(tmp) / "config.json"
+        migrated_path.write_text(json.dumps(migrated))
+        return load_config(config_path=migrated_path)
 
 
 def resolve_advanced(config: dict) -> dict:
@@ -101,12 +150,12 @@ def _create_codecs(
             # source name; either way it must already be a legal trace name.
             _validate_name(bus_name, "bus Name", (LOG_SOURCE_NAME,))
         else:
-            # No explicit name: derive from the channel, for ssh-socketcan the
+            # No explicit name: derive from the channel, for zelos-ssh-socketcan the
             # remote interface alone (not "user@host:iface"). Channels can
             # contain '.', which is a catalog PATH SEPARATOR in Zelos trace
             # names and would break catalog / `latest` lookups.
             channel = prepared_config.get("channel", f"bus{i}")
-            if prepared_config.get("interface") == "ssh-socketcan":
+            if prepared_config.get("interface") == "zelos-ssh-socketcan":
                 channel = channel.rpartition(":")[2]
             bus_name = zelos_sdk.sanitize_name(channel, kind="source")
 
@@ -163,7 +212,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     :param demo_dbc_path: Path to demo DBC file
     """
     # Load and validate configuration
-    config = load_config()
+    config = load_app_config()
     advanced = resolve_advanced(config)
     prefix = str(advanced.get("prefix") or "").strip()
     _validate_name(prefix, "Prefix")

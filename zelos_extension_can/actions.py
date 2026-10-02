@@ -649,7 +649,7 @@ def auto_config() -> dict[str, Any]:
     """The app's auto-configure contract: the keys of `config` replace the form's.
 
     Only `buses` is returned, so whatever is set under Advanced survives. Never
-    an ssh-socketcan bus: there is no remote host to guess. No adapter at all
+    a zelos-ssh-socketcan bus: there is no remote host to guess. No adapter at all
     yields one demo bus. `message` is shown in the form's confirmation toast
     (older apps ignore it).
     """
@@ -677,15 +677,15 @@ def auto_config() -> dict[str, Any]:
             "message": (
                 "No CAN adapter found on this machine, so a demo bus was added. Plug in "
                 "the adapter and install its driver, or set its interface by hand: "
-                "pcan/kvaser/vector/slcan, or ssh-socketcan for a remote device."
+                "pcan/kvaser/vector/slcan, or zelos-ssh-socketcan for a remote device."
             ),
         }
-    # socketcan, not socketcan-py: the Rust bus is the native local path.
+    # zelos-socketcan, not python-can's socketcan: the Rust bus is the native local path.
     # No `name`, so each bus is named after its channel. A down interface is
     # configured as it is, with no note: the button surfaces only an error
     # message, and the Channel picker already labels it `down`.
     buses: list[dict[str, Any]] = [
-        {"interface": "socketcan", "channel": iface["name"], "database_files": []}
+        {"interface": "zelos-socketcan", "channel": iface["name"], "database_files": []}
         for iface in interfaces
     ]
     buses += [
@@ -735,9 +735,9 @@ def _configured_database_files() -> list[str]:
     from zelos_can.dbc import bus_database_files  # deferred: pulls in can/cantools
 
     try:
-        from zelos_sdk.extensions.config import load_config
+        from .cli.app import load_app_config
 
-        buses = (load_config() or {}).get("buses") or []
+        buses = (load_app_config() or {}).get("buses") or []
     except Exception:  # no config yet, or schema mismatch — not an error here
         return []
     for bus in buses:
