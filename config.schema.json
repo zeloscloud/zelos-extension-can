@@ -31,7 +31,7 @@
               "demo"
             ],
             "enumNames": [
-              "SocketCAN (Linux)",
+              "SocketCAN (zelos-can)",
               "SocketCAN over SSH",
               "PCAN",
               "Kvaser",
