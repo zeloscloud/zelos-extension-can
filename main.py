@@ -6,11 +6,12 @@ import time
 from pathlib import Path
 
 import rich_click as click
+from zelos_can import demo as _demo
 
 from zelos_extension_can import ACTION_PREFIX as _ACTION_PREFIX
 from zelos_extension_can import cli as cli_commands
 
-DEMO_DBC_PATH = Path(__file__).parent / "zelos_extension_can" / "demo" / "demo.dbc"
+DEMO_DBC_PATH = Path(_demo.__file__).parent / "demo.dbc"
 
 #: Re-exported so the at-rest inventory dump — which reads this entry module —
 #: sees the same namespace the live registration uses. See the definition in

@@ -2,8 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "python-can",
-#     "cantools",
+#     "zelos-can[python-can]",
 #     "zelos-sdk",
 # ]
 # ///
@@ -18,14 +17,11 @@ Usage:
 import asyncio
 import contextlib
 import logging
-import sys
 from pathlib import Path
 
-# Add parent directory to path for local imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from zelos_extension_can.codec import CanCodec
-from zelos_extension_can.demo.demo import run_demo_ev_simulation
+from zelos_can import demo
+from zelos_can.codec import CanCodec
+from zelos_can.demo.demo import run_demo_ev_simulation
 
 # Configure logging
 logging.basicConfig(
@@ -72,7 +68,7 @@ async def periodic_message_example(codec: CanCodec):
 async def main():
     """Run PCAN example with EV simulation."""
     # Path to demo DBC file
-    demo_dbc = Path(__file__).parent.parent / "demo" / "demo.dbc"
+    demo_dbc = Path(demo.__file__).parent / "demo.dbc"
 
     # Configuration for PCAN
     config = {
