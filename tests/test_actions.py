@@ -419,9 +419,9 @@ class TestConfigFormHooks:
             "status": "success",
             "config": {
                 "buses": [
-                    {"interface": "zelos-socketcan", "channel": "can0", "database_files": []},
-                    {"interface": "zelos-socketcan", "channel": "can1", "database_files": []},
-                    {"interface": "zelos-socketcan", "channel": "vcan0", "database_files": []},
+                    {"interface": "SocketCAN (Zelos)", "channel": "can0", "database_files": []},
+                    {"interface": "SocketCAN (Zelos)", "channel": "can1", "database_files": []},
+                    {"interface": "SocketCAN (Zelos)", "channel": "vcan0", "database_files": []},
                 ]
             },
         }
@@ -433,8 +433,8 @@ class TestConfigFormHooks:
 
         result = actions.auto_config()
 
-        assert result["config"] == {"buses": [{"name": "demo", "interface": "demo"}]}
-        assert "zelos-ssh-socketcan" in result["message"]  # the way out on a laptop
+        assert result["config"] == {"buses": [{"name": "demo", "interface": "Demo"}]}
+        assert "SocketCAN over SSH (Zelos)" in result["message"]  # the way out on a laptop
 
     def test_auto_config_adds_one_bus_per_adapter_channel(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "win32")
@@ -453,13 +453,13 @@ class TestConfigFormHooks:
             "config": {
                 "buses": [
                     {
-                        "interface": "pcan",
+                        "interface": "PCAN",
                         "channel": "PCAN_USBBUS1",
                         "bitrate": 500_000,
                         "database_files": [],
                     },
                     {
-                        "interface": "pcan",
+                        "interface": "PCAN",
                         "channel": "PCAN_USBBUS2",
                         "bitrate": 500_000,
                         "database_files": [],
@@ -492,13 +492,13 @@ class TestConfigFormHooks:
 
         assert result["config"]["buses"] == [
             {
-                "interface": "pcan",
+                "interface": "PCAN",
                 "channel": "PCAN_USBBUS2",
                 "bitrate": 500_000,
                 "database_files": [],
             },
             {
-                "interface": "pcan",
+                "interface": "PCAN",
                 "channel": "PCAN_USBBUS1",
                 "bitrate": 250_000,
                 "database_files": [],
@@ -527,7 +527,7 @@ class TestConfigFormHooks:
 
         assert buses == [
             {
-                "interface": "pcan",
+                "interface": "PCAN",
                 "channel": "PCAN_USBBUS1",
                 "bitrate": 1_000_000,
                 "database_files": [],
@@ -543,7 +543,7 @@ class TestConfigFormHooks:
             SimpleNamespace(config={"interface": "demo", "name": "demo"}),
         )
 
-        assert actions.auto_config()["config"] == {"buses": [{"name": "demo", "interface": "demo"}]}
+        assert actions.auto_config()["config"] == {"buses": [{"name": "demo", "interface": "Demo"}]}
 
     def test_auto_config_buses_are_valid_config(self, monkeypatch, tmp_path):
         """What the button writes must pass the schema the form saves against."""
@@ -580,7 +580,7 @@ class TestConfigFormHooks:
 
         buses = actions.auto_config()["config"]["buses"]
 
-        assert {bus["interface"] for bus in buses} == {"zelos-socketcan"}
+        assert {bus["interface"] for bus in buses} == {"SocketCAN (Zelos)"}
         assert "slcan0" in {bus["channel"] for bus in buses}
 
     def test_schema_hooks_name_actions_that_exist(self):

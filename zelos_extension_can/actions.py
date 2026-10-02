@@ -32,6 +32,8 @@ from zelos_can.converter import SUPPORTED_FORMATS
 from zelos_can.utils.file_utils import resolve_database_file
 from zelos_sdk.actions import ActionsRegistry, action
 
+from . import INTERFACES
+
 if TYPE_CHECKING:
     from zelos_can.codec import CanCodec
 
@@ -591,6 +593,9 @@ def _pcan_hardware_name(channel: str) -> str | None:
     return name.decode(errors="replace").strip() or None
 
 
+_LABELS = {name: label for label, name in INTERFACES.items()}
+
+
 def _running_adapter_bitrates() -> dict[tuple[str, str], int]:
     """The adapter buses this extension is running, by (interface, channel), with their bitrate.
 
@@ -649,7 +654,7 @@ def auto_config() -> dict[str, Any]:
     """The app's auto-configure contract: the keys of `config` replace the form's.
 
     Only `buses` is returned, so whatever is set under Advanced survives. Never
-    a zelos-ssh-socketcan bus: there is no remote host to guess. No adapter at all
+    a SocketCAN over SSH bus: there is no remote host to guess. No adapter at all
     yields one demo bus. `message` is shown in the form's confirmation toast
     (older apps ignore it).
     """
@@ -673,24 +678,25 @@ def auto_config() -> dict[str, Any]:
     if not interfaces and not adapters:
         return {
             "status": "success",
-            "config": {"buses": [{"name": "demo", "interface": "demo"}]},
+            "config": {"buses": [{"name": "demo", "interface": "Demo"}]},
             "message": (
                 "No CAN adapter found on this machine, so a demo bus was added. Plug in "
                 "the adapter and install its driver, or set its interface by hand: "
-                "pcan/kvaser/vector/slcan, or zelos-ssh-socketcan for a remote device."
+                "PCAN, Kvaser, Vector or slcan, or SocketCAN over SSH (Zelos) for a remote device."
             ),
         }
-    # zelos-socketcan, not python-can's socketcan: the Rust bus is the native local path.
+    # The Rust bus, not python-can's: the native local path. Buses carry the
+    # interface label the form shows.
     # No `name`, so each bus is named after its channel. A down interface is
     # configured as it is, with no note: the button surfaces only an error
     # message, and the Channel picker already labels it `down`.
     buses: list[dict[str, Any]] = [
-        {"interface": "zelos-socketcan", "channel": iface["name"], "database_files": []}
+        {"interface": "SocketCAN (Zelos)", "channel": iface["name"], "database_files": []}
         for iface in interfaces
     ]
     buses += [
         {
-            "interface": adapter["interface"],
+            "interface": _LABELS[adapter["interface"]],
             "channel": adapter["channel"],
             "bitrate": running.get((adapter["interface"], adapter["channel"]), _ADAPTER_BITRATE),
             "database_files": [],
@@ -735,9 +741,9 @@ def _configured_database_files() -> list[str]:
     from zelos_can.dbc import bus_database_files  # deferred: pulls in can/cantools
 
     try:
-        from .cli.app import load_app_config
+        from zelos_sdk.extensions.config import load_config
 
-        buses = (load_app_config() or {}).get("buses") or []
+        buses = (load_config() or {}).get("buses") or []
     except Exception:  # no config yet, or schema mismatch — not an error here
         return []
     for bus in buses:
