@@ -19,7 +19,7 @@ From the CLI, on the agent that has the CAN interface:
 ```bash
 zelos extensions install zeloscloud/zelos-extension-can
 zelos extensions start zeloscloud.zelos-extension-can \
-  --config '{"buses": [{"interface": "socketcan", "channel": "can0"}]}'
+  --config '{"buses": [{"interface": "zelos-socketcan", "channel": "can0"}]}'
 ```
 
 In the app:
@@ -40,11 +40,23 @@ before the extension has ever started.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one `socketcan` bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one `pcan`, `kvaser` or `vector` bus per channel whose vendor driver finds it. On any OS, one `slcan` bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one `demo` bus. Review it, save, then start. Advanced settings are left as they are. |
-| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `socketcan` / `socketcan-py` bus. You can still type a name. |
+| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one `zelos-socketcan` bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one `pcan`, `kvaser` or `vector` bus per channel whose vendor driver finds it. On any OS, one `slcan` bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one `demo` bus. Review it, save, then start. Advanced settings are left as they are. |
+| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail — `can0` / `up, gs_usb`, `vcan0` / `virtual` — for a `zelos-socketcan` / `socketcan` bus. You can still type a name. |
 
 ### Required Settings
-- **Interface**: Choose your CAN adapter type (socketcan, ssh-socketcan, pcan, kvaser, vector, slcan, socketcan-py, other, or demo). On Linux, `socketcan` is the recommended local SocketCAN option — it is backed by the Rust `zelos-can` bus for higher-throughput, drop-resistant capture. To trace a **remote** device's CAN bus over SSH (from any OS), use `ssh-socketcan` — see [Remote CAN over SSH](#remote-can-over-ssh-ssh-socketcan) below.
+- **Interface**: the CAN adapter, by its python-can interface name:
+
+  | Value | Label | What |
+  |---|---|---|
+  | `zelos-socketcan` | SocketCAN (Zelos) | Local SocketCAN on zelos-can's Rust bus, Linux. The recommended local option |
+  | `zelos-ssh-socketcan` | SocketCAN over SSH (Zelos) | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh-zelos-ssh-socketcan) |
+  | `pcan`, `kvaser`, `vector` | PCAN, Kvaser, Vector | Vendor adapters |
+  | `slcan` | slcan (serial) | CANable, CANUSB and other LAWICEL serial adapters |
+  | `socketcan` | SocketCAN (python-can) | Local SocketCAN on python-can |
+  | `other` | Other (python-can) | Any python-can interface, from Advanced Configuration (JSON) |
+  | `demo` | Demo | Built-in EV simulator |
+
+  A config saved before these names (no `config_version`) is migrated when the extension starts, logged once: `socketcan` becomes `zelos-socketcan`, `socketcan-py` becomes `socketcan`, `ssh-socketcan` becomes `zelos-ssh-socketcan`. A hand-written config meaning python-can's `socketcan` sets `"config_version": 2`.
 - **Channel**: Specify the CAN channel/device name. For `slcan` (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
 
 ### Per-Bus Settings
@@ -94,13 +106,13 @@ events the same way; a conversion uses the input file's stem as its segment.
 Clear **Prefix** in Advanced settings to keep the previous layout: one source
 per bus (or per converted file) with events unprefixed.
 
-## Remote CAN over SSH (`ssh-socketcan`)
+## Remote CAN over SSH (`zelos-ssh-socketcan`)
 
 Trace a remote edge device's SocketCAN bus over an SSH connection, using the
 edge's **own** `can-utils`. Nothing is installed on the edge, no local `vcan` is
 needed, and it runs from macOS, Linux, or Windows. Decode, tracing, metrics, and
 periodic transmit all run in the same high-throughput Rust pipeline as the local
-`socketcan` interface. Sent frames are echoed back by the edge's kernel
+`zelos-socketcan` interface. Sent frames are echoed back by the edge's kernel
 loopback, so every transmit is traced exactly once.
 
 ### Prerequisites on the edge
@@ -185,13 +197,13 @@ The extension includes a command-line interface for advanced use cases. No insta
 
 ```bash
 # Launch trace process (pass several DBCs to layer them, later files win)
-uv run main.py trace socketcan can0 /path/to/file.dbc
+uv run main.py trace zelos-socketcan can0 /path/to/file.dbc
 
 # Name the trace source after the bus instead of the prefix
-uv run main.py trace socketcan can0 /path/to/file.dbc --prefix ''
+uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --prefix ''
 
 # Launch trace process and record to .trz file
-uv run main.py trace socketcan can0 /path/to/file.dbc --file
+uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --file
 
 # Convert candump log to Zelos trace format (supports .asc, .blf, .trc, .log, .csv, .mf4)
 # A .csv needs python-can's header: timestamp,arbitration_id,extended,remote,error,dlc,data

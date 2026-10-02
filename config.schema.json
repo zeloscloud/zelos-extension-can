@@ -6,6 +6,13 @@
     "autoconfig": "CAN/auto_config"
   },
   "properties": {
+    "config_version": {
+      "type": "integer",
+      "title": "Config Version",
+      "description": "Schema version this config was saved with; set by the app. A config without it predates python-can interface names and is migrated on load.",
+      "default": 2,
+      "ui:widget": "hidden"
+    },
     "buses": {
       "type": "array",
       "description": "Add a bus for each CAN adapter on this system, or choose the demo interface for an example.",
@@ -18,21 +25,21 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface type. socketcan is the Rust-backed SocketCAN interface (Linux only); socketcan-py is the python-can implementation. macOS/Windows: pcan/kvaser/vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. ssh-socketcan works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface, a python-can interface name. zelos-socketcan is zelos-can's Rust SocketCAN bus (Linux only); socketcan is python-can's. macOS/Windows: pcan/kvaser/vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. zelos-ssh-socketcan works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
-              "socketcan",
-              "ssh-socketcan",
+              "zelos-socketcan",
+              "zelos-ssh-socketcan",
               "pcan",
               "kvaser",
               "vector",
               "slcan",
-              "socketcan-py",
+              "socketcan",
               "other",
               "demo"
             ],
             "enumNames": [
-              "SocketCAN (zelos-can)",
-              "SocketCAN over SSH",
+              "SocketCAN (Zelos)",
+              "SocketCAN over SSH (Zelos)",
               "PCAN",
               "Kvaser",
               "Vector",
@@ -71,6 +78,9 @@
                   "interface": {
                     "enum": [
                       "demo"
+                    ],
+                    "enumNames": [
+                      "Demo"
                     ]
                   }
                 }
@@ -79,8 +89,12 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "socketcan",
-                      "socketcan-py"
+                      "zelos-socketcan",
+                      "socketcan"
+                    ],
+                    "enumNames": [
+                      "SocketCAN (Zelos)",
+                      "SocketCAN (python-can)"
                     ]
                   },
                   "channel": {
@@ -154,7 +168,10 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "ssh-socketcan"
+                      "zelos-ssh-socketcan"
+                    ],
+                    "enumNames": [
+                      "SocketCAN over SSH (Zelos)"
                     ]
                   },
                   "remote_host": {
@@ -225,6 +242,9 @@
                   "interface": {
                     "enum": [
                       "pcan"
+                    ],
+                    "enumNames": [
+                      "PCAN"
                     ]
                   },
                   "channel": {
@@ -308,6 +328,9 @@
                   "interface": {
                     "enum": [
                       "kvaser"
+                    ],
+                    "enumNames": [
+                      "Kvaser"
                     ]
                   },
                   "channel": {
@@ -391,6 +414,9 @@
                   "interface": {
                     "enum": [
                       "vector"
+                    ],
+                    "enumNames": [
+                      "Vector"
                     ]
                   },
                   "channel": {
@@ -474,6 +500,9 @@
                   "interface": {
                     "enum": [
                       "slcan"
+                    ],
+                    "enumNames": [
+                      "slcan (serial)"
                     ]
                   },
                   "channel": {
@@ -516,6 +545,9 @@
                   "interface": {
                     "enum": [
                       "other"
+                    ],
+                    "enumNames": [
+                      "Other (python-can)"
                     ]
                   },
                   "config_json": {

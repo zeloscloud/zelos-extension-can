@@ -63,9 +63,9 @@ def trace(
 
     Examples:
 
-      # Trace SocketCAN interface
+      # Trace SocketCAN (INTERFACE is a python-can name; zelos-socketcan is the Rust bus)
 
-      zelos-extension-can trace socketcan can0 vehicle.dbc
+      zelos-extension-can trace zelos-socketcan can0 vehicle.dbc
 
       # Trace with custom bitrate
 
@@ -73,19 +73,19 @@ def trace(
 
       # Trace and record to file
 
-      zelos-extension-can trace socketcan can0 vehicle.dbc --file my_trace.trz
+      zelos-extension-can trace zelos-socketcan can0 vehicle.dbc --file my_trace.trz
 
       # Trace CAN-FD
 
-      zelos-extension-can trace socketcan can0 vehicle.dbc --fd --data-bitrate 2000000
+      zelos-extension-can trace zelos-socketcan can0 vehicle.dbc --fd --data-bitrate 2000000
 
       # Several databases, later files win a conflicting message id
 
-      zelos-extension-can trace socketcan can0 base.dbc overlay.dbc
+      zelos-extension-can trace zelos-socketcan can0 base.dbc overlay.dbc
 
       # Name the source after the bus instead of the prefix
 
-      zelos-extension-can trace socketcan can0 vehicle.dbc --prefix ''
+      zelos-extension-can trace zelos-socketcan can0 vehicle.dbc --prefix ''
     """
     if error := name_error(prefix, "Prefix"):
         raise click.BadParameter(error)

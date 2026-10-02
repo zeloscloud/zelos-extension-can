@@ -36,8 +36,8 @@ def _load_schema():
 
 def _ssh_branch(schema):
     branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
-    ssh = [b for b in branches if b["properties"]["interface"]["enum"] == ["ssh-socketcan"]]
-    assert len(ssh) == 1, "exactly one ssh-socketcan oneOf branch expected"
+    ssh = [b for b in branches if b["properties"]["interface"]["enum"] == ["zelos-ssh-socketcan"]]
+    assert len(ssh) == 1, "exactly one zelos-ssh-socketcan oneOf branch expected"
     return ssh[0]
 
 
@@ -49,6 +49,59 @@ def test_schema_interface_branches_match_zelos_can():
     fragment = json.loads(files("zelos_can.bus").joinpath("interfaces.schema.json").read_text())
     branches = _load_schema()["properties"]["buses"]["items"]["dependencies"]["interface"]
     assert branches["oneOf"] == fragment
+    # The dropdown: every fragment name, under the fragment's label.
+    labels = {}
+    for b in fragment:
+        labels.update(
+            zip(
+                b["properties"]["interface"]["enum"],
+                b["properties"]["interface"]["enumNames"],
+                strict=True,
+            )
+        )
+    interface = _load_schema()["properties"]["buses"]["items"]["properties"]["interface"]
+    assert dict(zip(interface["enum"], interface["enumNames"], strict=True)) == labels
+
+
+# ── config migration ─────────────────────────────────────────────────────────
+
+
+def test_a_legacy_config_takes_python_can_names(caplog):
+    legacy = {
+        "buses": [
+            {"interface": "socketcan", "channel": "can0"},
+            {"interface": "socketcan-py", "channel": "can1"},
+            {"interface": "ssh-socketcan", "remote_host": "edge"},
+            {"interface": "pcan", "channel": "PCAN_USBBUS1"},
+        ]
+    }
+    with caplog.at_level(logging.INFO):
+        migrated = app_mod.migrate_config(legacy)
+    assert [b["interface"] for b in migrated["buses"]] == [
+        "zelos-socketcan",
+        "socketcan",
+        "zelos-ssh-socketcan",
+        "pcan",
+    ]
+    assert migrated["config_version"] == app_mod.CONFIG_VERSION
+    assert "socketcan -> zelos-socketcan" in caplog.text
+    assert "pcan" not in caplog.text
+
+
+def test_a_current_config_is_untouched():
+    current = {"config_version": 2, "buses": [{"interface": "socketcan", "channel": "can0"}]}
+    assert app_mod.migrate_config(current) is current
+
+
+def test_a_legacy_config_file_loads(tmp_path, monkeypatch):
+    """Old names fail the schema, so the file is migrated before it is validated."""
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"buses": [{"interface": "socketcan-py", "channel": "can0"}]}))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(path))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    config = app_mod.load_app_config()
+    assert config["buses"][0]["interface"] == "socketcan"
+    assert config["config_version"] == 2
 
 
 def test_schema_is_valid_and_carries_the_per_bus_block():
@@ -92,7 +145,7 @@ def test_schema_is_valid_and_carries_the_per_bus_block():
 def test_schema_enum_includes_ssh_socketcan():
     schema = _load_schema()
     enum = schema["properties"]["buses"]["items"]["properties"]["interface"]["enum"]
-    assert "ssh-socketcan" in enum
+    assert "zelos-ssh-socketcan" in enum
 
 
 def test_schema_ssh_branch_structure():
@@ -131,7 +184,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     good = {
         "buses": [
             {
-                "interface": "ssh-socketcan",
+                "interface": "zelos-ssh-socketcan",
                 "remote_host": "edge",
                 "database_files": [str(TEST_DBC)],
             }
@@ -142,7 +195,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     full = {
         "buses": [
             {
-                "interface": "ssh-socketcan",
+                "interface": "zelos-ssh-socketcan",
                 "remote_host": "edge",
                 "remote_channel": "vcan0",
                 "ssh_user": "zelos",
@@ -158,7 +211,9 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     }
     assert validator.is_valid(full)
 
-    missing_host = {"buses": [{"interface": "ssh-socketcan", "database_files": [str(TEST_DBC)]}]}
+    missing_host = {
+        "buses": [{"interface": "zelos-ssh-socketcan", "database_files": [str(TEST_DBC)]}]
+    }
     assert not validator.is_valid(missing_host)
 
 
@@ -188,7 +243,7 @@ def test_validate_name_rejects_a_catalog_separator():
 def test_prepare_bus_config_missing_host_exits():
     with pytest.raises(SystemExit):
         _prepare_bus_config(
-            {"interface": "ssh-socketcan", "database_files": [str(TEST_DBC)]},
+            {"interface": "zelos-ssh-socketcan", "database_files": [str(TEST_DBC)]},
             Path("/nonexistent/demo.dbc"),
         )
 
@@ -261,7 +316,7 @@ def test_create_codecs_rejects_an_illegal_bus_name(name):
 
 
 def test_create_codecs_names_an_ssh_bus_after_its_remote_channel():
-    bus = {"interface": "ssh-socketcan", "remote_host": "host", "ssh_user": "user"}
+    bus = {"interface": "zelos-ssh-socketcan", "remote_host": "host", "ssh_user": "user"}
     config = {"buses": [bus, {**bus, "remote_channel": "vcan.1"}]}
     with patch("zelos_sdk.TraceSource"):
         pairs = _create_codecs(config, TEST_DBC, resolve_advanced({}))
@@ -299,7 +354,7 @@ def test_run_codecs_async_propagates_can_error_and_cleans_up(monkeypatch):
     monkeypatch.setattr(ssh_socketcan, "SshTransport", boom)
     codec = CanCodec(
         {
-            "interface": "ssh-socketcan",
+            "interface": "zelos-ssh-socketcan",
             "channel": "zelos@edge:vcan0",
             "database_files": [str(TEST_DBC)],
         },
@@ -341,7 +396,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
             "log_level": "INFO",
             "buses": [
                 {
-                    "interface": "ssh-socketcan",
+                    "interface": "zelos-ssh-socketcan",
                     "remote_host": "edge",
                     "database_files": [str(TEST_DBC)],
                 }
