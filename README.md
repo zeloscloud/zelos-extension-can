@@ -56,7 +56,6 @@ before the extension has ever started.
   | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface |
   | Demo | | Built-in EV simulator |
 
-  Interface values changed; re-select the interface in existing configs.
 - **Channel**: Specify the CAN channel/device name. For slcan (serial) (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
 
 ### Per-Bus Settings
