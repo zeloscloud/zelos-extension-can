@@ -2,7 +2,8 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "zelos-can[python-can]",
+#     # Placeholder: needs the zelos-can release carrying src#1603.
+#     "zelos-can[python-can]>=0.0.11a1",
 #     "zelos-sdk",
 # ]
 # ///
@@ -34,7 +35,7 @@ async def main():
     config = {
         "interface": "zelos-socketcan",
         "channel": "vcan0",  # Change to 'can0' for real hardware
-        "database_file": str(demo_dbc),
+        "database_files": [str(demo_dbc)],
         "log_raw_frames": False,  # Set True to see raw CAN frames
         "emit_schemas_on_init": False,  # Lazy schema generation
         "timestamp_mode": "ignore",  # Use system time for trace events

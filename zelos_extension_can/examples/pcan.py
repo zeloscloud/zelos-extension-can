@@ -2,7 +2,8 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "zelos-can[python-can]",
+#     # Placeholder: needs the zelos-can release carrying src#1603.
+#     "zelos-can[python-can]>=0.0.11a1",
 #     "zelos-sdk",
 # ]
 # ///
@@ -75,7 +76,7 @@ async def main():
         "interface": "pcan",
         "channel": "PCAN_USBBUS1",  # Adjust for your device
         "bitrate": 500000,
-        "database_file": str(demo_dbc),
+        "database_files": [str(demo_dbc)],
         "log_raw_frames": False,  # Set True to see raw CAN frames
         "emit_schemas_on_init": True,  # Generate all schemas at startup
         "timestamp_mode": "auto",  # Auto-detect timestamp format
