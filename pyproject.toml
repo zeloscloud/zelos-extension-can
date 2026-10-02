@@ -22,18 +22,17 @@ dependencies = [
     # which first ships in 0.0.11a1. Naming a prerelease here is what lets a
     # resolver pick one at all: without it, an installed extension resolves the
     # newest final release and its at-rest actions simply do not appear.
-    "zelos-sdk>=0.0.12a1",
-    # serial extra: pyserial for the slcan interface. Pure Python, no deps.
+    "zelos-sdk>=0.0.12a3",
+    # Imported directly by `actions.py` and `cli/app.py`. serial extra: pyserial
+    # for slcan detection. Pure Python, no deps.
     "python-can[serial]",
-    "cantools",
     "rich-click>=1.8.0",
+    # `cli/export.py` reads trace queries as Arrow IPC.
     "pyarrow>=14.0.0",
-    # Rust-backed CAN codec. Registers the 'zelos-socketcan' python-can plugin
-    # (Linux) and provides zelos_can.ExternalBus, which drives the cross-platform
-    # 'ssh-socketcan' interface. Wheels cover all platforms, so there is no
-    # sys_platform marker. 0.0.10 carries DBC units on the Rust paths and
-    # ExternalBus.inject(dlc=). Floor (not exact) pin.
-    "zelos-can[python-can]>=0.0.10",
+    # The CAN runtime: codec, DBC decode, bus config, ssh-socketcan, converter,
+    # demo. The python-can extra brings python-can[serial] and cantools. Wheels
+    # cover all platforms, so there is no sys_platform marker. Floor (not exact) pin.
+    "zelos-can[python-can]>=0.0.11a1",
 ]
 
 [project.scripts]

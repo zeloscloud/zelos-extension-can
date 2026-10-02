@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import json
 import logging
 import sys
 from collections.abc import Collection
@@ -12,39 +11,27 @@ from typing import Any
 
 import can.exceptions
 import zelos_sdk
+from zelos_can.bus import BUS_DEFAULTS, BusConfigError, prepare_bus_config
+from zelos_can.codec import CanCodec
+from zelos_can.naming import DEFAULT_PREFIX, LOG_SOURCE_NAME, name_error, trace_layout
 from zelos_sdk.extensions import load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from .. import ACTION_PREFIX
 from .. import actions as can_actions
-from ..codec import CanCodec
-from ..dbc import bus_database_files
-from ..naming import DEFAULT_PREFIX, LOG_SOURCE_NAME, name_error, trace_layout
 from .utils import setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
 
 #: `advanced` settings and their defaults. Everything here is global: one value
-#: applies to every bus. The four bus-level keys were per-bus before and are
-#: still honoured per-bus (see `_prepare_bus_config`) so old configs keep their
-#: settings, but they are no longer offered in the schema.
+#: applies to every bus. The four bus-level keys (`BUS_DEFAULTS`) were per-bus
+#: before and are still honoured per-bus (see `prepare_bus_config`) so old
+#: configs keep their settings, but they are no longer offered in the schema.
 ADVANCED_DEFAULTS: dict = {
     "prefix": DEFAULT_PREFIX,
-    "log_raw_frames": True,
-    "receive_own_messages": True,
-    "emit_schemas_on_init": False,
-    "timestamp_mode": "auto",
+    **BUS_DEFAULTS,
     "log_level": "INFO",
 }
-
-#: Advanced keys the codec reads off a bus config, so a legacy per-bus value
-#: still wins over the global one.
-_BUS_LEVEL_ADVANCED = (
-    "log_raw_frames",
-    "receive_own_messages",
-    "emit_schemas_on_init",
-    "timestamp_mode",
-)
 
 
 def resolve_advanced(config: dict) -> dict:
@@ -71,80 +58,12 @@ def _validate_name(value: str, label: str, reserved: Collection[str] = ()) -> No
 def _prepare_bus_config(
     bus_config: dict, demo_dbc_path: Path, advanced: dict | None = None
 ) -> dict:
-    """Prepare a bus configuration, handling demo and 'other' interface modes.
-
-    Folds a legacy single `database_file` into the `database_files` list and
-    applies the global `advanced` settings that used to live per-bus.
-
-    :param bus_config: Raw bus configuration from the buses array
-    :param demo_dbc_path: Path to demo DBC file
-    :param advanced: Resolved advanced settings (defaults applied when omitted)
-    :return: Prepared configuration dict
-    """
-    config = bus_config.copy()
-    bus_name = config.get("name", "bus")
-    advanced = advanced if advanced is not None else dict(ADVANCED_DEFAULTS)
-
-    config["database_files"] = bus_database_files(config)
-    config.pop("database_file", None)
-
-    # Global advanced settings; a legacy per-bus value overrides.
-    for key in _BUS_LEVEL_ADVANCED:
-        config.setdefault(key, advanced[key])
-
-    # Handle demo interface selection
-    if config.get("interface") == "demo":
-        logger.info(f"[{bus_name}] Demo mode: using built-in EV simulator")
-        config["demo_mode"] = True
-        config["interface"] = "virtual"
-        config["channel"] = "vcan0"
-        config["database_files"] = [str(demo_dbc_path)]
-        config["receive_own_messages"] = True
-
-    # Handle "other" interface - merge config_json into main config
-    if config.get("interface") == "other":
-        logger.info(f"[{bus_name}] Using custom interface from config_json")
-
-        if "config_json" not in config or not config["config_json"]:
-            logger.error(
-                f"[{bus_name}] 'other' interface requires config_json with interface and channel"
-            )
-            sys.exit(1)
-        try:
-            custom_config = json.loads(config["config_json"])
-            if "interface" not in custom_config:
-                logger.error(f"[{bus_name}] config_json must include 'interface' key")
-                sys.exit(1)
-            if "channel" not in custom_config:
-                logger.error(f"[{bus_name}] config_json must include 'channel' key")
-                sys.exit(1)
-            # Merge custom config into main config
-            config["interface"] = custom_config.pop("interface")
-            config["channel"] = custom_config.pop("channel")
-            # Update config_json with remaining custom parameters
-            config["config_json"] = json.dumps(custom_config) if custom_config else ""
-            logger.info(
-                f"[{bus_name}] Custom interface: {config['interface']}, "
-                f"channel: {config['channel']}"
-            )
-        except json.JSONDecodeError as e:
-            logger.error(f"[{bus_name}] Invalid JSON in config_json: {e}")
-            sys.exit(1)
-
-    # Handle ssh-socketcan - synthesize the "[user@]host:iface" channel the
-    # transport parses from the user-facing remote_host / ssh_user /
-    # remote_channel fields.
-    if config.get("interface") == "ssh-socketcan":
-        host = config.get("remote_host")
-        if not host:
-            logger.error(f"[{bus_name}] 'ssh-socketcan' interface requires 'remote_host'")
-            sys.exit(1)
-        user = config.get("ssh_user")
-        iface = config.get("remote_channel", "can0")
-        config["channel"] = f"{user}@{host}:{iface}" if user else f"{host}:{iface}"
-        logger.info(f"[{bus_name}] ssh-socketcan channel: {config['channel']}")
-
-    return config
+    """`prepare_bus_config`, exiting with its one-line reason on bad input."""
+    try:
+        return prepare_bus_config(bus_config, demo_dbc_path, advanced)
+    except BusConfigError as e:
+        logger.error("%s", e)
+        sys.exit(1)
 
 
 def _create_codecs(

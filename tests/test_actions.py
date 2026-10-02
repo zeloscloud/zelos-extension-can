@@ -14,11 +14,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from zelos_can.codec import CanCodec
 from zelos_sdk.actions import Action
 from zelos_sdk.extensions.actions import get_standalone_actions
 
 from zelos_extension_can import ACTION_PREFIX, actions
-from zelos_extension_can.codec import CanCodec
 
 DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
 
@@ -224,7 +224,7 @@ class TestCsvHeader:
         assert not src.with_suffix(".trz").exists()
 
     def test_cli_path_rejects_a_foreign_header(self, tmp_path):
-        from zelos_extension_can.converter import _convert_with_progress
+        from zelos_can.converter import _convert_with_progress
 
         src = self._foreign_csv(tmp_path)
         output = tmp_path / "out.trz"
@@ -314,7 +314,7 @@ class TestOpenInApp:
         # `convert` imports convert_can_trace inside the function body, so it
         # must be patched where it is defined, not on the actions module.
         with (
-            patch("zelos_extension_can.converter.convert_can_trace", _write_trace),
+            patch("zelos_can.converter.convert_can_trace", _write_trace),
             patch.object(actions, "_open_in_app", side_effect=OSError("no opener")),
         ):
             result = actions.convert(

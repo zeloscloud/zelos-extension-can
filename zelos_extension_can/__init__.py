@@ -3,7 +3,7 @@
 A Zelos extension for CAN monitoring.
 """
 
-from zelos_extension_can.codec import CanCodec
+from zelos_can.codec import CanCodec
 
 #: Action namespace for this extension. Single source for both surfaces — the
 #: live registration (`zelos_sdk.init(name=ACTION_PREFIX)`) and the at-rest

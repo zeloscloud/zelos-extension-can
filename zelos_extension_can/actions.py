@@ -28,13 +28,12 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from zelos_can.converter import SUPPORTED_FORMATS
+from zelos_can.utils.file_utils import resolve_database_file
 from zelos_sdk.actions import ActionsRegistry, action
 
-from .converter import SUPPORTED_FORMATS
-from .utils.file_utils import resolve_database_file
-
 if TYPE_CHECKING:
-    from .codec import CanCodec
+    from zelos_can.codec import CanCodec
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +311,7 @@ def convert_trace_file(
     overwrite: bool = False,
     emit_all_schemas: bool = True,
 ) -> dict[str, Any]:
-    from .converter import convert_can_trace
+    from zelos_can.converter import convert_can_trace
 
     try:
         # Validate arguments before touching the filesystem so callers get a
@@ -733,7 +732,7 @@ def _configured_database_files() -> list[str]:
     the action body rather than as a schema default because the inventory is
     dumped at package time, before any config exists.
     """
-    from .dbc import bus_database_files  # deferred: pulls in can/cantools
+    from zelos_can.dbc import bus_database_files  # deferred: pulls in can/cantools
 
     try:
         from zelos_sdk.extensions.config import load_config
@@ -845,7 +844,7 @@ def convert(
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
-    from .converter import convert_can_trace
+    from zelos_can.converter import convert_can_trace
 
     source = Path(input_file).expanduser()
     if not source.is_file():
