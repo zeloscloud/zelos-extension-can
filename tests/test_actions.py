@@ -205,7 +205,7 @@ class TestCsvHeader:
     FOREIGN_HEADER = "Time Stamp,ID,Extended,Dir,Bus,LEN,D1,D2\n"
 
     def _foreign_csv(self, tmp_path: Path) -> Path:
-        src = tmp_path / "savvycan.csv"
+        src = tmp_path / "other_tool.csv"
         src.write_text(self.FOREIGN_HEADER + "166064,00000064,false,Rx,0,2,01,02\n")
         return src
 
