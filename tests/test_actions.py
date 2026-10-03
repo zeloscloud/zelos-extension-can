@@ -619,6 +619,7 @@ def test_only_actions_that_read_are_declared_read_only():
         "list_messages",
         "describe_message",
         "encode_preview",
+        "j1939_encode_preview",
     }
 
 

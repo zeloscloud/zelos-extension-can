@@ -578,6 +578,20 @@
           ],
           "default": "auto"
         },
+        "j1939": {
+          "type": "boolean",
+          "title": "J1939",
+          "description": "Every 29-bit message on a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus is a J1939 parameter group, for a DBC that does not mark them (VFrameFormat). Off, the messages the DBC marks J1939 still are: matched by PGN from any sender, one table per sender, transport protocol transfers (BAM, RTS/CTS) rebuilt, reserved raw values (not available, error) decoded to empty.",
+          "default": false,
+          "ui:widget": "toggle"
+        },
+        "j1939_node": {
+          "type": "string",
+          "title": "J1939 Node",
+          "description": "The DBC node (BU_) every SocketCAN (Zelos) and SocketCAN over SSH (Zelos) bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each such bus's DBCs. Empty: no claim until the J1939 Claim action, and J1939 sends refuse.",
+          "default": "",
+          "ui:placeholder": "Tester"
+        },
         "log_level": {
           "type": "string",
           "title": "Log Level",

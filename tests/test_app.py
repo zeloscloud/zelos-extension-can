@@ -283,6 +283,22 @@ def test_create_codecs_names_an_ssh_bus_after_its_remote_channel():
     assert [name for _, name in pairs] == ["can0", "vcan_1"]
 
 
+def test_advanced_j1939_reaches_each_bus_and_a_bus_value_wins():
+    config = {"buses": [_vbus("vcan0"), {**_vbus("vcan1"), "j1939": False}]}
+    with patch("zelos_sdk.TraceSource"):
+        pairs = _create_codecs(config, TEST_DBC, resolve_advanced({"advanced": {"j1939": True}}))
+    assert [codec.j1939 for codec, _ in pairs] == [True, False]
+
+
+def test_advanced_j1939_node_reaches_the_rust_buses_only():
+    advanced = resolve_advanced({"advanced": {"j1939_node": "NoSuchNode"}})
+    with patch("zelos_sdk.TraceSource"):
+        _create_codecs({"buses": [_vbus("vcan0")]}, TEST_DBC, advanced)
+        ssh = {"interface": "SocketCAN over SSH (Zelos)", "remote_host": "h", "ssh_user": "u"}
+        with pytest.raises(ValueError, match="no DBC node 'NoSuchNode'"):
+            _create_codecs({"buses": [ssh]}, TEST_DBC, advanced)
+
+
 def test_create_codecs_shares_one_source_across_buses():
     config = {
         "buses": [

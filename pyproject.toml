@@ -31,8 +31,9 @@ dependencies = [
     "pyarrow>=14.0.0",
     # The CAN runtime: codec, DBC decode, bus config, ssh-socketcan, converter,
     # demo. The python-can extra brings python-can[serial] and cantools. Wheels
-    # cover all platforms, so there is no sys_platform marker. Floor (not exact) pin.
-    "zelos-can[python-can]>=0.0.11a5",
+    # cover all platforms, so there is no sys_platform marker. 0.0.11a8 carries
+    # the J1939 runtime with j1939_node identity. Floor (not exact) pin.
+    "zelos-can[python-can]>=0.0.11a8",
 ]
 
 [project.scripts]
