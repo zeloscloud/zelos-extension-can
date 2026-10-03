@@ -69,6 +69,18 @@ wheels = [
 ]
 
 [[package]]
+name = "canopen"
+version = "2.4.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-can" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/be/ea/f2654cb432988dfe9ab93140ff502f7e2e7eaa1835e8aaa4ee5a935af736/canopen-2.4.1.tar.gz", hash = "sha256:20a84bc498b34dadd79cece467d3bbe19591c1c02a8f39331bcc6065c4d8b2eb", size = 111357, upload-time = "2025-08-05T11:11:39.476Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/80/d3/386a7814c6d3f4209350067ec6ae9618ac7bd1807df244855362d221f263/canopen-2.4.1-py3-none-any.whl", hash = "sha256:651dfb189978fb9083f491128e9fb8cb0e85dc8ccb82b12dd7139236d0080b77", size = 67200, upload-time = "2025-08-05T11:11:38.031Z" },
+]
+
+[[package]]
 name = "cantools"
 version = "40.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -707,20 +719,21 @@ wheels = [
 
 [[package]]
 name = "zelos-can"
-version = "0.0.11a5"
+version = "0.0.11a8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "zelos-sdk" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/39/56c6d0776eeb948da1d755e2a88461dea7a6296794cca39d4a85b4382e87/zelos_can-0.0.11a5-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a06fa612e6b325ca3af3023d39466df60bc7c0b7646f31fc5e1a9900ba52fa85", size = 2788137, upload-time = "2026-10-03T00:03:37.319Z" },
-    { url = "https://files.pythonhosted.org/packages/2b/35/23e394421808ee590a6a2d2a531d89de376a00033e95b4dfade2083a193d/zelos_can-0.0.11a5-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:1e55ccf501735f265f90517b0f036bd09b6890e90d0acae1ed1bbd4e4fb8ffe9", size = 3611325, upload-time = "2026-10-03T00:03:38.891Z" },
-    { url = "https://files.pythonhosted.org/packages/26/8e/e773e3b0c3c5c9ba82366e7743f32bc7c64a1b4d3560ed78c403eb1256a7/zelos_can-0.0.11a5-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c421a21ca5bf86d255a163e65b0f42f89532b593c78cc4e21b091ee4ba52622b", size = 3953843, upload-time = "2026-10-03T00:03:40.553Z" },
-    { url = "https://files.pythonhosted.org/packages/18/91/c3262875746a6d07b3e20f1deeac5f096fc4e5ab2a370961677faede10ef/zelos_can-0.0.11a5-cp310-abi3-win_amd64.whl", hash = "sha256:24f3b1b77e9be3a60d784ecff570ed0ad5e306035d3c6c0c31bb09c0225f85d3", size = 2960549, upload-time = "2026-10-03T00:03:42.537Z" },
+    { url = "https://files.pythonhosted.org/packages/33/f6/e5142442614b594572dbc518b1a33a39afbc37522ee1fd0f2ccfb9432c63/zelos_can-0.0.11a8-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:51e9017d2d22cba3c5bdf67a04c854a57a16f98df2c8784864e43c3817b6cc91", size = 2804040, upload-time = "2026-10-04T02:27:41.944Z" },
+    { url = "https://files.pythonhosted.org/packages/66/78/9e8a3a8e990a554ae6ee93771ced87d3ddd048fe3b01c60f84cf307b40cf/zelos_can-0.0.11a8-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:7c751fc0000871cb471fd127c9381cf05c13d641d8452513d8811d58e2e96da1", size = 3627077, upload-time = "2026-10-04T02:27:43.66Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/db/d663e1aefcd7e1f5399ffa83cca367b0f3505babe58041e26d848e6ddfb8/zelos_can-0.0.11a8-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:9b5967615014647374ad2ab9c388a538a24c111cf0e4a869c8d6ed09f118d8f7", size = 3970163, upload-time = "2026-10-04T02:27:45.83Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/a7/606cb92b21a495af30e27e982129bc824ead4bd2e0258d307679f95749b4/zelos_can-0.0.11a8-cp310-abi3-win_amd64.whl", hash = "sha256:afbfe1de65a5af5392028dfaf958de8f08b311878dc3f13e8bdf179c5173d2da", size = 2976612, upload-time = "2026-10-04T02:27:47.185Z" },
 ]
 
 [package.optional-dependencies]
 python-can = [
+    { name = "canopen" },
     { name = "cantools" },
     { name = "python-can", extra = ["serial"] },
 ]
@@ -759,7 +772,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.14.2" },
     { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.3.0" },
     { name = "tqdm", marker = "extra == 'cli'", specifier = ">=4.0.0" },
-    { name = "zelos-can", extras = ["python-can"], specifier = ">=0.0.11a5" },
+    { name = "zelos-can", extras = ["python-can"], specifier = ">=0.0.11a8" },
     { name = "zelos-sdk", specifier = ">=0.0.12a3" },
 ]
 provides-extras = ["cli", "dev"]

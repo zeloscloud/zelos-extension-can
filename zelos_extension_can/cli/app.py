@@ -24,14 +24,23 @@ from .utils import setup_shutdown_handler
 logger = logging.getLogger(__name__)
 
 #: `advanced` settings and their defaults. Everything here is global: one value
-#: applies to every bus. The four bus-level keys (`BUS_DEFAULTS`) were per-bus
-#: before and are still honoured per-bus (see `prepare_bus_config`) so old
-#: configs keep their settings, but they are no longer offered in the schema.
+#: applies to every bus. The bus-level keys (`BUS_DEFAULTS`) are copied onto
+#: each bus config (see `prepare_bus_config`); a bus that still sets one itself
+#: keeps it.
 ADVANCED_DEFAULTS: dict = {
     "prefix": DEFAULT_PREFIX,
     **BUS_DEFAULTS,
+    "j1939": False,
+    "j1939_node": "",
     "log_level": "INFO",
 }
+
+#: Bus-level keys this extension owns (not zelos-can's `BUS_DEFAULTS`), copied
+#: onto each bus config the same way.
+EXTENSION_BUS_KEYS = ("j1939",)
+
+#: Interfaces whose bus runs zelos-can's Rust codec, the only ones with a J1939 node.
+RUST_INTERFACES = ("zelos-socketcan", "zelos-ssh-socketcan")
 
 
 def resolve_advanced(config: dict) -> dict:
@@ -97,6 +106,11 @@ def _create_codecs(
         )
         for bus in buses
     ]
+    for prepared in prepared_configs:
+        for key in EXTENSION_BUS_KEYS:
+            prepared.setdefault(key, advanced[key])
+        if advanced["j1939_node"] and prepared["interface"] in RUST_INTERFACES:
+            prepared.setdefault("j1939_node", advanced["j1939_node"])
 
     seen_names: set[str] = set()
 

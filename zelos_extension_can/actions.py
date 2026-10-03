@@ -234,6 +234,203 @@ def start_periodic_message(
     return _get_codec(codec).start_periodic_message(message, signals_json, period_ms, mux)
 
 
+# ─── J1939 ──────────────────────────────────────────────────────────────────
+#
+# The bus's J1939 node (zelos-socketcan and zelos-ssh-socketcan buses): it
+# claims an address, then sends from it. Up to 8 bytes is one frame; longer
+# goes by the transport protocol, BAM to everyone or RTS/CTS to one node. A
+# send waits up to 5 s for the transfer and returns {completed, error}.
+
+_J1939_SENT = (
+    "Returns the addressing and payload sent, plus {completed, error}: completed false "
+    "with no error is a transfer still running after 5 s."
+)
+
+
+def _j1939_addressed(fn):
+    """The addressing every J1939 send takes; the source is the claimed address."""
+    for decorate in (
+        action.boolean(
+            "fd",
+            title="J1939-22 (CAN FD)",
+            description="Needs CAN-FD Mode on the bus",
+            required=False,
+            default=False,
+            widget="toggle",
+        ),
+        action.integer(
+            "priority",
+            title="Priority (0-7)",
+            description="Default: the DBC's",
+            minimum=0,
+            maximum=7,
+            required=False,
+        ),
+        action.integer(
+            "destination_address",
+            title="Destination address",
+            description="PDU1 messages only; 255 is everyone. Default: the DBC's",
+            minimum=0,
+            maximum=255,
+            required=False,
+        ),
+    ):
+        fn = decorate(fn)
+    return fn
+
+
+@action(
+    "J1939 Claim",
+    "Start the bus's J1939 node: claim `address` for the 64-bit NAME (J1939-81). "
+    "The address is usable 250 ms later unless a lower NAME contests it; NAME bit 63 "
+    "(arbitrary address capable) lets the node move to a free address in 128..247 when it "
+    "loses. get_tx_state shows the address held. Kept, and claimed again when the bus reopens.",
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.text("name", title="NAME (hex, 64-bit)", placeholder="0x8000000000001000")
+@action.integer("address", title="Address (0-253)", minimum=0, maximum=253)
+def j1939_claim(codec: str, name: str, address: int) -> dict[str, Any]:
+    return _get_codec(codec).j1939_claim(name, address)
+
+
+@action(
+    "J1939 Send",
+    "Send a DBC-encoded J1939 parameter group once from the claimed address. "
+    "`message` is a key from list_messages, or a name only one definition carries. " + _J1939_SENT,
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.text("message", title="DBC message key or name")
+@action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
+@_j1939_addressed
+@action.text("mux", title="Multiplexer (optional)", required=False, default="")
+def j1939_send(
+    codec: str,
+    message: str,
+    signals_json: str,
+    destination_address: int | None = None,
+    priority: int | None = None,
+    fd: bool = False,
+    mux: str = "",
+) -> dict[str, Any]:
+    return _get_codec(codec).j1939_send(
+        message, signals_json, destination_address, priority, fd, mux
+    )
+
+
+@action(
+    "J1939 Encode Preview",
+    "Encode a J1939 parameter group without sending it: its PGN, addressing and bytes.",
+    read_only=True,
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.text("message", title="DBC message key or name")
+@action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
+@_j1939_addressed
+@action.text("mux", title="Multiplexer (optional)", required=False, default="")
+def j1939_encode_preview(
+    codec: str,
+    message: str,
+    signals_json: str,
+    destination_address: int | None = None,
+    priority: int | None = None,
+    fd: bool = False,
+    mux: str = "",
+) -> dict[str, Any]:
+    return _get_codec(codec).j1939_encode_preview(
+        message, signals_json, destination_address, priority, fd, mux
+    )
+
+
+@action(
+    "J1939 Start Periodic",
+    "Send a DBC-encoded J1939 parameter group periodically from the claimed address, "
+    "the first now. A period whose previous transfer is still running is skipped and "
+    "counted (`skipped` in the periodic). Returns {task_id, replaced}; stop it with "
+    "stop_periodic.",
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.text("message", title="DBC message key or name")
+@action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
+@action.number(
+    "period_ms", title="Period (ms)", minimum=1, maximum=60_000, required=False, default=100
+)
+@_j1939_addressed
+@action.text("mux", title="Multiplexer (optional)", required=False, default="")
+def j1939_send_periodic(
+    codec: str,
+    message: str,
+    signals_json: str,
+    period_ms: int = 100,
+    destination_address: int | None = None,
+    priority: int | None = None,
+    fd: bool = False,
+    mux: str = "",
+) -> dict[str, Any]:
+    return _get_codec(codec).j1939_send_periodic(
+        message, signals_json, period_ms, destination_address, priority, fd, mux
+    )
+
+
+@action(
+    "J1939 Send Raw",
+    "Send a parameter group's bytes once from the claimed address. " + _J1939_SENT,
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.text("pgn", title="PGN (hex)", placeholder="FECA")
+@action.text(
+    "data", title="Data (hex bytes)", placeholder="01 02 03 04", required=False, default=""
+)
+@action.integer(
+    "destination_address",
+    title="Destination address",
+    description="PDU1 PGNs only; 255 or empty is everyone",
+    minimum=0,
+    maximum=255,
+    required=False,
+)
+@action.integer("priority", title="Priority (0-7)", minimum=0, maximum=7, required=False, default=6)
+@action.boolean(
+    "fd",
+    title="J1939-22 (CAN FD)",
+    description="Needs CAN-FD Mode on the bus",
+    required=False,
+    default=False,
+    widget="toggle",
+)
+def j1939_send_raw(
+    codec: str,
+    pgn: str,
+    data: str = "",
+    destination_address: int | None = None,
+    priority: int = 6,
+    fd: bool = False,
+) -> dict[str, Any]:
+    return _get_codec(codec).j1939_send_raw(pgn, data, destination_address, priority, fd)
+
+
+@action(
+    "J1939 Request",
+    "Ask a node, or everyone, to send a parameter group (Request, PGN 0xEA00) from the "
+    "claimed address. The answer decodes like any other frame, transport protocol included.",
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.text("pgn", title="PGN (hex)", placeholder="FECA")
+@action.integer(
+    "destination_address",
+    title="Destination address",
+    description="255 is everyone",
+    minimum=0,
+    maximum=255,
+    required=False,
+    default=255,
+)
+@action.integer("priority", title="Priority (0-7)", minimum=0, maximum=7, required=False, default=6)
+def j1939_request(
+    codec: str, pgn: str, destination_address: int = 255, priority: int = 6
+) -> dict[str, Any]:
+    return _get_codec(codec).j1939_request(pgn, destination_address, priority)
+
+
 @action("Stop Periodic", "Stop a periodic task by its stable task_id (from start_periodic_*)")
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.text("task_id", title="Task ID")
@@ -305,6 +502,14 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     ),
     widget="toggle",
 )
+@action.boolean(
+    "j1939",
+    required=False,
+    default=False,
+    title="J1939",
+    description="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
+    widget="toggle",
+)
 def convert_trace_file(
     input_path: str,
     database_path: str | list[str] = "",
@@ -312,6 +517,7 @@ def convert_trace_file(
     output_path: str = "",
     overwrite: bool = False,
     emit_all_schemas: bool = True,
+    j1939: bool = False,
 ) -> dict[str, Any]:
     from zelos_can.converter import convert_can_trace
 
@@ -355,6 +561,7 @@ def convert_trace_file(
             database_files,
             output_file,
             emit_schemas_on_init=emit_all_schemas,
+            j1939=j1939,
         )
         return {
             "status": "success",
@@ -841,12 +1048,21 @@ def _open_in_app(path: Path) -> None:
     default=False,
     widget="toggle",
 )
+@action.boolean(
+    "j1939",
+    required=False,
+    default=False,
+    title="J1939",
+    description="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
+    widget="toggle",
+)
 def convert(
     input_file: str,
     database_file: str | list[str] = "",
     output_file: str = "",
     force: bool = False,
     open_on_complete: bool = False,
+    j1939: bool = False,
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
@@ -870,7 +1086,7 @@ def convert(
     )
     _clear_destination(destination, force)
 
-    stats = convert_can_trace(source, database_paths, destination)
+    stats = convert_can_trace(source, database_paths, destination, j1939=j1939)
 
     # The trace exists on disk from here on. Failing to open it is a worse
     # outcome to report than it is a real one: the conversion succeeded, and
