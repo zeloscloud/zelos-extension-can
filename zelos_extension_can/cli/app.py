@@ -32,12 +32,13 @@ ADVANCED_DEFAULTS: dict = {
     **BUS_DEFAULTS,
     "j1939": False,
     "j1939_node": "",
+    "canopen": False,
     "log_level": "INFO",
 }
 
 #: Bus-level keys this extension owns (not zelos-can's `BUS_DEFAULTS`), copied
 #: onto each bus config the same way.
-EXTENSION_BUS_KEYS = ("j1939",)
+EXTENSION_BUS_KEYS = ("j1939", "canopen")
 
 #: Interfaces whose bus runs zelos-can's Rust codec, the only ones with a J1939 node.
 RUST_INTERFACES = ("zelos-socketcan", "zelos-ssh-socketcan")
