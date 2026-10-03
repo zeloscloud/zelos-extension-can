@@ -61,6 +61,9 @@ def test_schema_interface_branches_match_zelos_can():
     """The per-interface branches are zelos-can's fragment, verbatim."""
     fragment = json.loads(files("zelos_can.bus").joinpath("interfaces.schema.json").read_text())
     branches = _load_schema()["properties"]["buses"]["items"]["dependencies"]["interface"]
+    # Except the Demo branch's canopen_node, which this extension adds.
+    owned = [b["properties"].pop("canopen_node", None) for b in branches["oneOf"]]
+    assert sum(o is not None for o in owned) == 1
     assert branches["oneOf"] == fragment
 
 
@@ -283,11 +286,13 @@ def test_create_codecs_names_an_ssh_bus_after_its_remote_channel():
     assert [name for _, name in pairs] == ["can0", "vcan_1"]
 
 
-def test_advanced_j1939_reaches_each_bus_and_a_bus_value_wins():
-    config = {"buses": [_vbus("vcan0"), {**_vbus("vcan1"), "j1939": False}]}
+def test_advanced_j1939_and_canopen_reach_each_bus_and_a_bus_value_wins():
+    config = {"buses": [_vbus("vcan0"), {**_vbus("vcan1"), "j1939": False, "canopen": False}]}
+    advanced = resolve_advanced({"advanced": {"j1939": True, "canopen": True}})
     with patch("zelos_sdk.TraceSource"):
-        pairs = _create_codecs(config, TEST_DBC, resolve_advanced({"advanced": {"j1939": True}}))
+        pairs = _create_codecs(config, TEST_DBC, advanced)
     assert [codec.j1939 for codec, _ in pairs] == [True, False]
+    assert [codec.canopen for codec, _ in pairs] == [True, False]
 
 
 def test_advanced_j1939_node_reaches_the_rust_buses_only():
