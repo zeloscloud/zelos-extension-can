@@ -47,6 +47,42 @@
             },
             "default": [],
             "ui:orderable": true
+          },
+          "canopen_nodes": {
+            "type": "array",
+            "title": "CANopen nodes",
+            "description": "CANopen devices on this bus, decoded on SocketCAN (Zelos) and SocketCAN over SSH (Zelos): NMT state, heartbeat, EMCY and SDO, plus the node's PDOs and object names from its EDS or DCF. Leave empty for none.",
+            "items": {
+              "type": "object",
+              "title": "Node",
+              "properties": {
+                "node_id": {
+                  "type": "integer",
+                  "title": "Node ID",
+                  "description": "1-127. Leave empty for a DCF that sets its NodeID.",
+                  "minimum": 1,
+                  "maximum": 127
+                },
+                "file": {
+                  "type": "string",
+                  "title": "EDS or DCF file",
+                  "description": "The node's .eds or .dcf. Without one, the node's protocol messages still decode; its PDOs stay raw frames.",
+                  "ui:widget": "file-picker"
+                },
+                "name": {
+                  "type": "string",
+                  "title": "Name",
+                  "description": "Names the node's events. Letters, digits, space, '_' and '-' only. Defaults to node<id in hex>.",
+                  "ui:placeholder": "defaults to node<id>"
+                }
+              },
+              "ui:order": [
+                "node_id",
+                "file",
+                "name"
+              ]
+            },
+            "default": []
           }
         },
         "required": [
@@ -61,6 +97,13 @@
                     "enum": [
                       "Demo"
                     ]
+                  },
+                  "canopen_node": {
+                    "type": "boolean",
+                    "title": "Simulated CANopen node",
+                    "description": "Adds a simulated CANopen device to the demo bus: node 0x20, a power distribution unit.",
+                    "default": false,
+                    "ui:widget": "toggle"
                   }
                 }
               },
@@ -528,6 +571,7 @@
           "remote_channel",
           "name",
           "database_files",
+          "canopen_nodes",
           "*"
         ]
       },
@@ -591,6 +635,13 @@
           "description": "The DBC node (BU_) every SocketCAN (Zelos) and SocketCAN over SSH (Zelos) bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each such bus's DBCs. Empty: no claim until the J1939 Claim action, and J1939 sends refuse.",
           "default": "",
           "ui:placeholder": "Tester"
+        },
+        "canopen": {
+          "type": "boolean",
+          "title": "CANopen",
+          "description": "Decode CANopen (NMT, heartbeat, EMCY, SYNC, TIME, SDO) for every node-id on a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus, for a bus with no CANopen nodes configured. Off, a bus decodes CANopen only when it lists nodes.",
+          "default": false,
+          "ui:widget": "toggle"
         },
         "log_level": {
           "type": "string",

@@ -7,6 +7,8 @@ from pathlib import Path
 import rich_click as click
 from zelos_can.naming import DEFAULT_PREFIX, name_error
 
+from .utils import canopen_node_option
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     help="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
 )
+@canopen_node_option
 @click.option(
     "-f",
     "--force",
@@ -47,6 +50,8 @@ def convert(
     output: Path | None,
     prefix: str,
     j1939: bool,
+    canopen: bool,
+    canopen_nodes: list[dict],
     force: bool,
     verbose: bool,
 ) -> None:
@@ -78,6 +83,10 @@ def convert(
       # Overwrite existing file
 
       zelos-extension-can convert capture.trc decoder.dbc -f
+
+      # CANopen node 0x20, decoded with its EDS
+
+      zelos-extension-can convert capture.log --canopen-node 0x20:pdu.eds
     """
     from zelos_can.converter import SUPPORTED_FORMATS, _convert_with_progress
 
@@ -118,7 +127,14 @@ def convert(
     try:
         # Perform conversion with progress bar
         _convert_with_progress(
-            input_file, list(database_files), output_file, verbose, prefix, j1939
+            input_file,
+            list(database_files),
+            output_file,
+            verbose,
+            prefix,
+            j1939,
+            "on" if canopen else "auto",
+            canopen_nodes,
         )
     except Exception as e:
         logger.error(f"Conversion failed: {e}")

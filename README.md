@@ -65,6 +65,7 @@ before the extension has ever started.
 | **Name** | Trace segment for this bus. Letters, digits, space, `_`, `-` only. Defaults to the sanitized channel. |
 | **Bitrate** | CAN bus bitrate (default 500000). |
 | **FD Mode** | Enable CAN-FD support. |
+| **CANopen nodes** | CANopen devices on the bus: node ID, EDS/DCF, name. See [CANopen](#canopen). |
 
 Two databases that define one message id:
 
@@ -118,6 +119,24 @@ out of range) fails the start with the reason. Empty (the default): no claim unt
 address 249 for Function 129 (off-board diagnostic-service tool) in Industry Group 0,
 instances 0.
 
+### CANopen
+
+On a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus, the bus's **CANopen nodes** decode
+as CANopen (CiA 301). **Advanced > CANopen** (off by default) decodes the
+protocol messages of every node-id, for a bus that lists none. The CLI `trace`
+and `convert` have `--canopen` and a repeatable `--canopen-node ID[:FILE[:NAME]]`
+(`--canopen-node 0x20:pdu.eds:pdu`, `--canopen-node 5::left`); the in-app
+Convert actions have only the **CANopen** toggle, every node-id without files.
+Other interfaces log a warning and decode nothing.
+
+| What | Behavior |
+|---|---|
+| **Decoded** | NMT, heartbeat and node guarding, EMCY, SYNC, TIME, LSS and SDO transfers, by the predefined connection set. With an EDS or DCF, the node's PDOs too, under its object names. |
+| **Node** | **Node ID** 1-127, empty for a DCF that sets `NodeID`. **EDS or DCF file** optional. **Name** names the node's events (default `node<id hex>`); same characters as a bus name. A DBC message on a configured node's COB-ID or PDO is an error, except on its SYNC or TIME COB-ID: there the DBC wins, with a warning. |
+| **Status** | `CANopen Nodes`: per node, `configured`, NMT `state`, `last_heartbeat_ns`, `heartbeat_period_ms`, `heartbeat_lost`, `emcy_count`, `last_emcy_code`, `sdo_count`. `Get TX State` carries the `canopen_*` counters: frames, SDO completed / aborted / resync / CRC error, short frames, heartbeat late / lost, unknown nodes, PDO short / remapped / reverted / unlearned, client SDO / timeout / stale. |
+| **Transmit** | `CANopen SDO Read` / `SDO Write` / `NMT` [actions](#actions), on a running bus with CANopen decode on (nodes listed or the Advanced toggle): the SDO client matches answers through the decoder. The extension is the SDO client and NMT master, never a node. SDO Write and NMT change device state with no confirmation, like `Send Raw`. |
+| **Demo** | **Simulated CANopen node** on a Demo bus adds node `0x20`, a power distribution unit described by the bundled `pdu.eds`, and decodes the demo bus on the Rust path. |
+
 ### Advanced Settings
 
 One value each, applied to every bus.
@@ -131,6 +150,7 @@ One value each, applied to every bus.
 | **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
 | **J1939** | Every 29-bit message on a SocketCAN (Zelos) / SocketCAN over SSH (Zelos) bus is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
 | **J1939 Node** | The DBC node the SocketCAN (Zelos) / SocketCAN over SSH (Zelos) buses claim and send as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
+| **CANopen** | Decode CANopen for every node-id on a SocketCAN (Zelos) / SocketCAN over SSH (Zelos) bus with no CANopen nodes listed (default off). See [CANopen](#canopen). |
 | **Log Level** | Logging verbosity for all buses. |
 
 ### Trace layout
@@ -218,6 +238,9 @@ The extension provides several actions accessible from the Zelos App:
 - **J1939 Send** / **J1939 Encode Preview** / **J1939 Start Periodic**: A DBC-encoded parameter group; destination (PDU1) and priority default to the DBC's, `fd` sends J1939-22
 - **J1939 Send Raw**: A PGN and its bytes, any length
 - **J1939 Request**: Ask a node, or everyone, for a PGN (Request, `0xEA00`); the answer decodes like any other frame
+- **CANopen Nodes** / **CANopen Describe**: A bus's CANopen nodes and their state; a configured node's object dictionary entry, or its PDOs, from its EDS/DCF
+- **CANopen SDO Read** / **CANopen SDO Write**: Read or write one object on a node (index in hex, subindex). A write is typed by the node's EDS/DCF entry (a chosen data type must agree); without one the data type is required, `bytes` for raw hex. An abort or no answer is an error
+- **CANopen NMT**: start, stop, pre_operational, reset_node or reset_communication, to one node or all (node 0, entered explicitly)
 - **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
 - **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
 
@@ -266,6 +289,9 @@ uv run main.py convert capture.log vehicle.dbc --prefix ''
 
 # Every 29-bit message is a J1939 parameter group, for a DBC that does not mark them
 uv run main.py convert capture.log vehicle.dbc --j1939
+
+# CANopen node 0x20 with its EDS, and node 5 without one, named left
+uv run main.py convert capture.log --canopen-node 0x20:pdu.eds --canopen-node 5::left
 ```
 
 ## Support
