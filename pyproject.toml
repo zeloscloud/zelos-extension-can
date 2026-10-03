@@ -32,7 +32,7 @@ dependencies = [
     # The CAN runtime: codec, DBC decode, bus config, ssh-socketcan, converter,
     # demo. The python-can extra brings python-can[serial] and cantools. Wheels
     # cover all platforms, so there is no sys_platform marker. Floor (not exact) pin.
-    "zelos-can[python-can]>=0.0.11a3",
+    "zelos-can[python-can]>=0.0.11a5",
 ]
 
 [project.scripts]
