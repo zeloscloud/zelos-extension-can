@@ -77,6 +77,47 @@ One message name at two ids (a moved message) is neither: both definitions
 survive and both are listed. Address each by its `key` — a transmit by the bare
 name refuses and names the keys.
 
+### J1939
+
+On a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus, and in `convert`, the messages the
+DBC marks J1939 (`VFrameFormat` = `J1939PG` per message, or `ProtocolType` = `J1939` on
+the database, which SAE, CSS and Vector J1939
+DBCs do) are J1939 parameter groups. **Advanced > J1939** (off by default)
+makes every 29-bit message one, for a DBC without that attribute. `convert`
+and `trace` have `--j1939` for the same.
+
+| What | Behavior |
+|---|---|
+| **Matching** | By PGN, whatever the priority. A message the DBC defines at source address `0xFE` decodes from any sender. |
+| **Tables** | One per sender: `0cf00400_EEC1`, `0cf00401_EEC1`. |
+| **One message, several definitions** | A sender decodes under its own definition, whatever the destination. A sender the DBC does not name decodes under the first definition when they all share one layout, and is left undecoded when layouts differ. |
+| **Messages over 8 bytes** | Transport protocol transfers (BAM, RTS/CTS) are rebuilt and decoded, stamped with their last packet. |
+| **Not available, error** | A raw value J1939 reserves for these (above `0xFA` at 8 bits, `0xFAFF` at 16, and so on) decodes to empty. It stays a value when the DBC's range for the signal takes it in, or a `VAL_` labels it. |
+| **Address claim** | Off until **Advanced > J1939 Node** names a DBC node (see [J1939 node identity](#j1939-node-identity)), or the `J1939 Claim` action runs. The node defends its address against a higher NAME and yields to a lower one; NAME bit 63 (arbitrary address capable) lets it move to a free address in 128..247. Claimed again when the bus reopens. `get_tx_state` shows `j1939.address` (empty while claiming, or lost). |
+| **Transmit** | From the claimed address only. Up to 8 bytes is one frame; longer goes by the transport protocol, BAM to everyone or RTS/CTS to one node. A send waits up to 5 s and returns `completed` / `error`. |
+| **J1939-22 (CAN FD)** | `fd` on a send, with CAN-FD Mode on: a Multi-PG frame up to 60 bytes, FD.TP beyond, every frame with BRS. The claim stays on classic frames. |
+| **Periodic** | A period whose previous transfer is still running, or whose claim is still settling, is skipped and counted (`skipped` on the periodic). A send that fails, busy or aborted included, counts in `failed` / `last_error` on the periodic and in `tx_errors`. |
+| **Counters** | `j1939_tx_completed`, `j1939_tx_aborted`, `j1939_claim_lost`, and `fdtp_*`, `j1939_22_*` on receive. |
+| **python-can buses** | No node: the J1939 transmit actions refuse; Encode Preview still works. |
+
+### J1939 node identity
+
+**Advanced > J1939 Node** names the DBC node (`BU_`) every SocketCAN (Zelos) and SocketCAN
+over SSH (Zelos) bus acts as. Each such bus claims it when it starts and again when it
+reopens. The node's identity comes from its J1939 node attributes, as other J1939 tools
+read them:
+
+| Attribute | Identity |
+|---|---|
+| `NmStationAddress` | Address claimed, 0..253. The default 254 (no address) refuses. |
+| `NmJ1939AAC`, `NmJ1939IndustryGroup`, `NmJ1939System`, `NmJ1939SystemInstance`, `NmJ1939Function`, `NmJ1939FunctionInstance`, `NmJ1939ECUInstance`, `NmJ1939ManufacturerCode`, `NmJ1939IdentityNumber` | The 64-bit NAME. Unset ones take the DBC's default. |
+
+The node must be in each such bus's DBCs. A bad identity (unknown node, no address, a field
+out of range) fails the start with the reason. Empty (the default): no claim until the
+`J1939 Claim` action, and J1939 sends refuse. The J1939 address registry reserves source
+address 249 for Function 129 (off-board diagnostic-service tool) in Industry Group 0,
+instances 0.
+
 ### Advanced Settings
 
 One value each, applied to every bus.
@@ -88,6 +129,8 @@ One value each, applied to every bus.
 | **Receive Own Messages** | Receive frames this host transmits. |
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
 | **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
+| **J1939** | Every 29-bit message on a SocketCAN (Zelos) / SocketCAN over SSH (Zelos) bus is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
+| **J1939 Node** | The DBC node the SocketCAN (Zelos) / SocketCAN over SSH (Zelos) buses claim and send as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
 | **Log Level** | Logging verbosity for all buses. |
 
 ### Trace layout
@@ -171,6 +214,10 @@ The extension provides several actions accessible from the Zelos App:
 - **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key` (`0334_Merge_Moved`: its id and name, and the name of its trace event). The transmit actions take a key, or a name only one definition carries.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
+- **J1939 Claim**: Claim an address for a NAME on a SocketCAN (Zelos) / SocketCAN over SSH (Zelos) bus; the J1939 sends go from it
+- **J1939 Send** / **J1939 Encode Preview** / **J1939 Start Periodic**: A DBC-encoded parameter group; destination (PDU1) and priority default to the DBC's, `fd` sends J1939-22
+- **J1939 Send Raw**: A PGN and its bytes, any length
+- **J1939 Request**: Ask a node, or everyone, for a PGN (Request, `0xEA00`); the answer decodes like any other frame
 - **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
 - **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
 
@@ -216,6 +263,9 @@ uv run main.py convert capture.log
 
 # Name the trace source after the input file instead of the prefix
 uv run main.py convert capture.log vehicle.dbc --prefix ''
+
+# Every 29-bit message is a J1939 parameter group, for a DBC that does not mark them
+uv run main.py convert capture.log vehicle.dbc --j1939
 ```
 
 ## Support
