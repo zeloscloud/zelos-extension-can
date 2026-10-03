@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
     help="Leading trace-source name; pass '' to name the source after the input file",
 )
 @click.option(
+    "--j1939",
+    is_flag=True,
+    help="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
+)
+@click.option(
     "-f",
     "--force",
     is_flag=True,
@@ -41,6 +46,7 @@ def convert(
     database_files: tuple[Path, ...],
     output: Path | None,
     prefix: str,
+    j1939: bool,
     force: bool,
     verbose: bool,
 ) -> None:
@@ -111,7 +117,9 @@ def convert(
 
     try:
         # Perform conversion with progress bar
-        _convert_with_progress(input_file, list(database_files), output_file, verbose, prefix)
+        _convert_with_progress(
+            input_file, list(database_files), output_file, verbose, prefix, j1939
+        )
     except Exception as e:
         logger.error(f"Conversion failed: {e}")
         if verbose:
