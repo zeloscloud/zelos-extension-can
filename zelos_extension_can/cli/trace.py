@@ -9,7 +9,7 @@ import zelos_sdk
 from zelos_can.codec import CanCodec
 from zelos_can.naming import DEFAULT_PREFIX, name_error
 
-from .utils import setup_shutdown_handler
+from .utils import canopen_node_option, setup_shutdown_handler
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     help="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
 )
+@canopen_node_option
 def trace(
     interface: str,
     channel: str,
@@ -62,6 +63,8 @@ def trace(
     data_bitrate: int | None,
     prefix: str,
     j1939: bool,
+    canopen: bool,
+    canopen_nodes: list[dict],
 ) -> None:
     """Trace CAN bus without app configuration.
 
@@ -92,6 +95,11 @@ def trace(
       # Name the source after the bus instead of the prefix
 
       zelos-extension-can trace zelos-socketcan can0 vehicle.dbc --prefix ''
+
+      # CANopen nodes 0x20 (with its EDS) and 5 (no file, named left)
+
+      zelos-extension-can trace zelos-socketcan can0 --canopen-node 0x20:pdu.eds \\
+        --canopen-node 5::left
     """
     if error := name_error(prefix, "Prefix"):
         raise click.BadParameter(error)
@@ -104,6 +112,8 @@ def trace(
         "bitrate": bitrate,
         "fd_mode": fd,
         "j1939": j1939,
+        "canopen": canopen,
+        "canopen_nodes": canopen_nodes,
         "log_raw_frames": True,  # Enable raw logging in CLI mode
         "emit_schemas_on_init": True,  # Emit all schemas upfront in CLI mode
     }

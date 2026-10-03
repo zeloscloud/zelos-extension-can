@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from zelos_can.converter import SUPPORTED_FORMATS
+from zelos_can.params import NMT_COMMANDS, SDO_DATA_TYPES
 from zelos_can.utils.file_utils import resolve_database_file
 from zelos_sdk.actions import ActionsRegistry, action
 
@@ -431,6 +432,113 @@ def j1939_request(
     return _get_codec(codec).j1939_request(pgn, destination_address, priority)
 
 
+# ─── CANopen ────────────────────────────────────────────────────────────────
+#
+# Over a bus's Rust codec, which runs the SDO client and the NMT master. The
+# extension never answers as a node.
+
+
+def _canopen_sdo(fn):
+    """The object address and timeout every SDO transfer takes."""
+    for decorate in (
+        action.number(
+            "timeout",
+            title="Timeout per answer (s)",
+            minimum=0.1,
+            maximum=10,
+            required=False,
+            default=1.0,
+        ),
+        action.integer(
+            "subindex", title="Subindex", minimum=0, maximum=255, required=False, default=0
+        ),
+        action.text("index", title="Index (hex)", placeholder="1008"),
+        action.integer("node_id", title="Node ID (1-127)", minimum=1, maximum=127),
+    ):
+        fn = decorate(fn)
+    return fn
+
+
+@action(
+    "CANopen Nodes",
+    "The CANopen nodes a bus has configured or seen: NMT state, heartbeat, EMCY and "
+    "SDO counts. `warnings` are the decoder's.",
+    read_only=True,
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+def canopen_nodes(codec: str) -> dict[str, Any]:
+    return _get_codec(codec).canopen_nodes_status()
+
+
+@action(
+    "CANopen Describe",
+    "A configured node's object dictionary entry at `index`, from its EDS/DCF; "
+    "without an index, its PDOs and communication objects.",
+    read_only=True,
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.integer("node_id", title="Node ID (1-127)", minimum=1, maximum=127)
+@action.text("index", title="Index (hex, optional)", placeholder="1018", required=False, default="")
+def canopen_describe(codec: str, node_id: int, index: str = "") -> dict[str, Any]:
+    return _get_codec(codec).canopen_describe(node_id, index)
+
+
+@action(
+    "CANopen SDO Read",
+    "Read one object from a node (SDO upload). Transmits on the bus. An abort, or no "
+    "answer in time, is an error.",
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_canopen_sdo
+def canopen_sdo_read(
+    codec: str, node_id: int, index: str, subindex: int = 0, timeout: float = 1.0
+) -> dict[str, Any]:
+    return _get_codec(codec).canopen_sdo_read(node_id, index, subindex, timeout)
+
+
+@action(
+    "CANopen SDO Write",
+    "Write one object on a node (SDO download). Transmits on the bus and changes the "
+    "device's state; no confirmation. The type is the node's dictionary entry when its "
+    "EDS/DCF is configured (a chosen data type must agree), else the chosen data type: "
+    "integers decimal or 0x hex, REAL decimal, BOOLEAN 0/1, VISIBLE_STRING text, bytes "
+    "hex. An abort, or no answer in time, is an error.",
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_canopen_sdo
+@action.text("value", title="Value", placeholder="1500, 0x5dc, or 01 02 as bytes")
+@action.select(
+    "data_type",
+    title="Data type (required without an EDS/DCF entry)",
+    choices=list(SDO_DATA_TYPES),
+    required=False,
+)
+def canopen_sdo_write(
+    codec: str,
+    node_id: int,
+    index: str,
+    value: str,
+    subindex: int = 0,
+    timeout: float = 1.0,
+    data_type: str = "",
+) -> dict[str, Any]:
+    return _get_codec(codec).canopen_sdo_write(
+        node_id, index, subindex, value, data_type or "", timeout
+    )
+
+
+@action(
+    "CANopen NMT",
+    "Send an NMT command. Transmits on the bus and changes the state of the addressed "
+    "node, or of every node on the bus with node 0; no confirmation.",
+)
+@action.select("codec", title="CAN bus", choices=_available_codecs)
+@action.select("command", title="Command", choices=list(NMT_COMMANDS))
+@action.integer("node_id", title="Node ID (1-127, or 0 for all nodes)", minimum=0, maximum=127)
+def canopen_nmt(codec: str, command: str, node_id: int) -> dict[str, Any]:
+    return _get_codec(codec).canopen_nmt(command, node_id)
+
+
 @action("Stop Periodic", "Stop a periodic task by its stable task_id (from start_periodic_*)")
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.text("task_id", title="Task ID")
@@ -510,6 +618,14 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     description="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
     widget="toggle",
 )
+@action.boolean(
+    "canopen",
+    required=False,
+    default=False,
+    title="CANopen",
+    description="Decode CANopen (NMT, heartbeat, EMCY, SDO) for every node-id",
+    widget="toggle",
+)
 def convert_trace_file(
     input_path: str,
     database_path: str | list[str] = "",
@@ -518,6 +634,7 @@ def convert_trace_file(
     overwrite: bool = False,
     emit_all_schemas: bool = True,
     j1939: bool = False,
+    canopen: bool = False,
 ) -> dict[str, Any]:
     from zelos_can.converter import convert_can_trace
 
@@ -562,6 +679,7 @@ def convert_trace_file(
             output_file,
             emit_schemas_on_init=emit_all_schemas,
             j1939=j1939,
+            canopen="on" if canopen else "auto",
         )
         return {
             "status": "success",
@@ -1056,6 +1174,14 @@ def _open_in_app(path: Path) -> None:
     description="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
     widget="toggle",
 )
+@action.boolean(
+    "canopen",
+    required=False,
+    default=False,
+    title="CANopen",
+    description="Decode CANopen (NMT, heartbeat, EMCY, SDO) for every node-id",
+    widget="toggle",
+)
 def convert(
     input_file: str,
     database_file: str | list[str] = "",
@@ -1063,6 +1189,7 @@ def convert(
     force: bool = False,
     open_on_complete: bool = False,
     j1939: bool = False,
+    canopen: bool = False,
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
@@ -1086,7 +1213,9 @@ def convert(
     )
     _clear_destination(destination, force)
 
-    stats = convert_can_trace(source, database_paths, destination, j1939=j1939)
+    stats = convert_can_trace(
+        source, database_paths, destination, j1939=j1939, canopen="on" if canopen else "auto"
+    )
 
     # The trace exists on disk from here on. Failing to open it is a worse
     # outcome to report than it is a real one: the conversion succeeded, and

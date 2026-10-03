@@ -620,6 +620,8 @@ def test_only_actions_that_read_are_declared_read_only():
         "describe_message",
         "encode_preview",
         "j1939_encode_preview",
+        "canopen_nodes",
+        "canopen_describe",
     }
 
 
