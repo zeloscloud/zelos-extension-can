@@ -19,7 +19,7 @@ From the CLI, on the agent that has the CAN interface:
 ```bash
 zelos extensions install zeloscloud/zelos-extension-can
 zelos extensions start zeloscloud.zelos-extension-can \
-  --config '{"buses": [{"interface": "SocketCAN (Zelos)", "channel": "can0"}]}'
+  --config '{"buses": [{"interface": "SocketCAN", "channel": "can0"}]}'
 ```
 
 In the app:
@@ -40,19 +40,18 @@ before the extension has ever started.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one SocketCAN (Zelos) bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one PCAN, Kvaser or Vector bus per channel whose vendor driver finds it. On any OS, one slcan bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one Demo bus. Review it, save, then start. Advanced settings are left as they are. |
-| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail (`can0` / `up, gs_usb`, `vcan0` / `virtual`), for a SocketCAN (Zelos) or SocketCAN (python-can) bus. You can still type a name. |
+| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one SocketCAN bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one PCAN, Kvaser or Vector bus per channel whose vendor driver finds it. On any OS, one slcan bus per CANable or CANUSB serial port. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one Demo bus. Review it, save, then start. Advanced settings are left as they are. |
+| **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail (`can0` / `up, gs_usb`, `vcan0` / `virtual`), for a SocketCAN bus. You can still type a name. |
 
 ### Required Settings
 - **Interface**: the CAN adapter. The config stores the label; the extension opens its python-can interface.
 
   | Interface | python-can | What |
   |---|---|---|
-  | SocketCAN (Zelos) | `zelos-socketcan` | Local SocketCAN on zelos-can's Rust bus, Linux. The recommended local option |
-  | SocketCAN over SSH (Zelos) | `zelos-ssh-socketcan` | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh) |
+  | SocketCAN | `zelos-socketcan` | Local SocketCAN on zelos-can's Rust bus, Linux. The recommended local option |
+  | SocketCAN over SSH | `zelos-ssh-socketcan` | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh) |
   | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
   | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
-  | SocketCAN (python-can) | `socketcan` | Local SocketCAN on python-can |
   | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface |
   | Demo | | Built-in EV simulator |
 
@@ -80,7 +79,7 @@ name refuses and names the keys.
 
 ### J1939
 
-On a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus, and in `convert`, the messages the
+On a SocketCAN or SocketCAN over SSH bus, and in `convert`, the messages the
 DBC marks J1939 (`VFrameFormat` = `J1939PG` per message, or `ProtocolType` = `J1939` on
 the database, which SAE, CSS and Vector J1939
 DBCs do) are J1939 parameter groups. **Advanced > J1939** (off by default)
@@ -103,8 +102,8 @@ and `trace` have `--j1939` for the same.
 
 ### J1939 node identity
 
-**Advanced > J1939 Node** names the DBC node (`BU_`) every SocketCAN (Zelos) and SocketCAN
-over SSH (Zelos) bus acts as. Each such bus claims it when it starts and again when it
+**Advanced > J1939 Node** names the DBC node (`BU_`) every SocketCAN and SocketCAN
+over SSH bus acts as. Each such bus claims it when it starts and again when it
 reopens. The node's identity comes from its J1939 node attributes, as other J1939 tools
 read them:
 
@@ -121,7 +120,7 @@ instances 0.
 
 ### CANopen
 
-On a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus, the bus's **CANopen nodes** decode
+On a SocketCAN or SocketCAN over SSH bus, the bus's **CANopen nodes** decode
 as CANopen (CiA 301). **Advanced > CANopen** (off by default) decodes the
 protocol messages of every node-id, for a bus that lists none. The CLI `trace`
 and `convert` have `--canopen` and a repeatable `--canopen-node ID[:FILE[:NAME]]`
@@ -148,9 +147,9 @@ One value each, applied to every bus.
 | **Receive Own Messages** | Receive frames this host transmits. |
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
 | **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
-| **J1939** | Every 29-bit message on a SocketCAN (Zelos) / SocketCAN over SSH (Zelos) bus is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
-| **J1939 Node** | The DBC node the SocketCAN (Zelos) / SocketCAN over SSH (Zelos) buses claim and send as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
-| **CANopen** | Decode CANopen for every node-id on a SocketCAN (Zelos) / SocketCAN over SSH (Zelos) bus with no CANopen nodes listed (default off). See [CANopen](#canopen). |
+| **J1939** | Every 29-bit message on a SocketCAN / SocketCAN over SSH bus is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
+| **J1939 Node** | The DBC node the SocketCAN / SocketCAN over SSH buses claim and send as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
+| **CANopen** | Decode CANopen for every node-id on a SocketCAN / SocketCAN over SSH bus with no CANopen nodes listed (default off). See [CANopen](#canopen). |
 | **Log Level** | Logging verbosity for all buses. |
 
 ### Trace layout
@@ -174,7 +173,7 @@ Trace a remote edge device's SocketCAN bus over an SSH connection, using the
 edge's **own** `can-utils`. Nothing is installed on the edge, no local `vcan` is
 needed, and it runs from macOS, Linux, or Windows. Decode, tracing, metrics, and
 periodic transmit all run in the same high-throughput Rust pipeline as the local
-SocketCAN (Zelos) interface. Sent frames are echoed back by the edge's kernel
+SocketCAN interface. Sent frames are echoed back by the edge's kernel
 loopback, so every transmit is traced exactly once.
 
 ### Prerequisites on the edge
@@ -234,7 +233,7 @@ The extension provides several actions accessible from the Zelos App:
 - **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key` (`0334_Merge_Moved`: its id and name, and the name of its trace event). The transmit actions take a key, or a name only one definition carries.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
-- **J1939 Claim**: Claim an address for a NAME on a SocketCAN (Zelos) / SocketCAN over SSH (Zelos) bus; the J1939 sends go from it
+- **J1939 Claim**: Claim an address for a NAME on a SocketCAN / SocketCAN over SSH bus; the J1939 sends go from it
 - **J1939 Send** / **J1939 Encode Preview** / **J1939 Start Periodic**: A DBC-encoded parameter group; destination (PDU1) and priority default to the DBC's, `fd` sends J1939-22
 - **J1939 Send Raw**: A PGN and its bytes, any length
 - **J1939 Request**: Ask a node, or everyone, for a PGN (Request, `0xEA00`); the answer decodes like any other frame

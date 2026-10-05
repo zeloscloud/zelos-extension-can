@@ -1007,7 +1007,7 @@ def auto_config() -> dict[str, Any]:
             "message": (
                 "No CAN adapter found on this machine, so a demo bus was added. Plug in "
                 "the adapter and install its driver, or set its interface by hand: "
-                "PCAN, Kvaser, Vector or slcan, or SocketCAN over SSH (Zelos) for a remote device."
+                "PCAN, Kvaser, Vector or slcan, or SocketCAN over SSH for a remote device."
             ),
         }
     # The Rust bus, not python-can's: the native local path. Buses carry the
@@ -1016,7 +1016,7 @@ def auto_config() -> dict[str, Any]:
     # configured as it is, with no note: the button surfaces only an error
     # message, and the Channel picker already labels it `down`.
     buses: list[dict[str, Any]] = [
-        {"interface": "SocketCAN (Zelos)", "channel": iface["name"], "database_files": []}
+        {"interface": "SocketCAN", "channel": iface["name"], "database_files": []}
         for iface in interfaces
     ]
     buses += [

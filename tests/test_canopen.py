@@ -20,7 +20,7 @@ def test_schema_takes_a_node_by_id_or_by_dcf_and_refuses_an_id_out_of_range():
     validator = jsonschema.Draft7Validator(json.loads((ROOT / "config.schema.json").read_text()))
 
     def bus(*nodes):
-        bus = {"interface": "SocketCAN (Zelos)", "channel": "can0", "canopen_nodes": list(nodes)}
+        bus = {"interface": "SocketCAN", "channel": "can0", "canopen_nodes": list(nodes)}
         return {"buses": [bus], "advanced": {"canopen": True}}
 
     assert validator.is_valid(bus({"node_id": 1}, {"node_id": 127, "name": "left"}))

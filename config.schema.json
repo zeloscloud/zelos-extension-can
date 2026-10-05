@@ -18,15 +18,14 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface. SocketCAN (Zelos) is zelos-can's Rust SocketCAN bus (Linux only); SocketCAN (python-can) is python-can's. macOS/Windows: PCAN, Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. SocketCAN over SSH (Zelos) works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN, Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
-              "SocketCAN (Zelos)",
-              "SocketCAN over SSH (Zelos)",
+              "SocketCAN",
+              "SocketCAN over SSH",
               "PCAN",
               "Kvaser",
               "Vector",
               "slcan (serial)",
-              "SocketCAN (python-can)",
               "Other (python-can)",
               "Demo"
             ]
@@ -51,7 +50,7 @@
           "canopen_nodes": {
             "type": "array",
             "title": "CANopen nodes",
-            "description": "CANopen devices on this bus, decoded on SocketCAN (Zelos) and SocketCAN over SSH (Zelos): NMT state, heartbeat, EMCY and SDO, plus the node's PDOs and object names from its EDS or DCF. Leave empty for none.",
+            "description": "CANopen devices on this bus, decoded on SocketCAN and SocketCAN over SSH: NMT state, heartbeat, EMCY and SDO, plus the node's PDOs and object names from its EDS or DCF. Leave empty for none.",
             "items": {
               "type": "object",
               "title": "Node",
@@ -111,8 +110,7 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "SocketCAN (Zelos)",
-                      "SocketCAN (python-can)"
+                      "SocketCAN"
                     ]
                   },
                   "channel": {
@@ -162,7 +160,7 @@
                           },
                           "data_bitrate": {
                             "type": "integer",
-                            "title": "Data Bitrate (bps)",
+                            "title": "CAN-FD Data Bitrate (bps)",
                             "description": "CAN-FD data phase bitrate",
                             "enum": [
                               500000,
@@ -186,7 +184,7 @@
                 "properties": {
                   "interface": {
                     "enum": [
-                      "SocketCAN over SSH (Zelos)"
+                      "SocketCAN over SSH"
                     ]
                   },
                   "remote_host": {
@@ -315,7 +313,7 @@
                           },
                           "data_bitrate": {
                             "type": "integer",
-                            "title": "Data Bitrate (bps)",
+                            "title": "CAN-FD Data Bitrate (bps)",
                             "description": "CAN-FD data phase bitrate",
                             "enum": [
                               500000,
@@ -398,7 +396,7 @@
                           },
                           "data_bitrate": {
                             "type": "integer",
-                            "title": "Data Bitrate (bps)",
+                            "title": "CAN-FD Data Bitrate (bps)",
                             "description": "CAN-FD data phase bitrate",
                             "enum": [
                               500000,
@@ -481,7 +479,7 @@
                           },
                           "data_bitrate": {
                             "type": "integer",
-                            "title": "Data Bitrate (bps)",
+                            "title": "CAN-FD Data Bitrate (bps)",
                             "description": "CAN-FD data phase bitrate",
                             "enum": [
                               500000,
@@ -625,21 +623,21 @@
         "j1939": {
           "type": "boolean",
           "title": "J1939",
-          "description": "Every 29-bit message on a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus is a J1939 parameter group, for a DBC that does not mark them (VFrameFormat). Off, the messages the DBC marks J1939 still are: matched by PGN from any sender, one table per sender, transport protocol transfers (BAM, RTS/CTS) rebuilt, reserved raw values (not available, error) decoded to empty.",
+          "description": "Every 29-bit message on a SocketCAN or SocketCAN over SSH bus is a J1939 parameter group, for a DBC that does not mark them (VFrameFormat). Off, the messages the DBC marks J1939 still are: matched by PGN from any sender, one table per sender, transport protocol transfers (BAM, RTS/CTS) rebuilt, reserved raw values (not available, error) decoded to empty.",
           "default": false,
           "ui:widget": "toggle"
         },
         "j1939_node": {
           "type": "string",
           "title": "J1939 Node",
-          "description": "The DBC node (BU_) every SocketCAN (Zelos) and SocketCAN over SSH (Zelos) bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each such bus's DBCs. Empty: no claim until the J1939 Claim action, and J1939 sends refuse.",
+          "description": "The DBC node (BU_) every SocketCAN and SocketCAN over SSH bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each such bus's DBCs. Empty: no claim until the J1939 Claim action, and J1939 sends refuse.",
           "default": "",
           "ui:placeholder": "Tester"
         },
         "canopen": {
           "type": "boolean",
           "title": "CANopen",
-          "description": "Decode CANopen (NMT, heartbeat, EMCY, SYNC, TIME, SDO) for every node-id on a SocketCAN (Zelos) or SocketCAN over SSH (Zelos) bus, for a bus with no CANopen nodes configured. Off, a bus decodes CANopen only when it lists nodes.",
+          "description": "Decode CANopen (NMT, heartbeat, EMCY, SYNC, TIME, SDO) for every node-id on a SocketCAN or SocketCAN over SSH bus, for a bus with no CANopen nodes configured. Off, a bus decodes CANopen only when it lists nodes.",
           "default": false,
           "ui:widget": "toggle"
         },
