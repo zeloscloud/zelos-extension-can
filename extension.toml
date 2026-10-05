@@ -2,7 +2,7 @@
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
 name = "CAN"
-version = "0.1.17"
+version = "0.2.0"
 description = "Capture, decode (DBC) and send CAN and CAN-FD frames live, and convert CAN logs (.asc, .blf, .trc, .log, .csv, .mf4) to Zelos traces (.trz), with or without a DBC."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
