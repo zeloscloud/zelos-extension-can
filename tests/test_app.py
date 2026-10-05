@@ -45,11 +45,7 @@ def _load_schema():
 
 def _ssh_branch(schema):
     branches = schema["properties"]["buses"]["items"]["dependencies"]["interface"]["oneOf"]
-    ssh = [
-        b
-        for b in branches
-        if b["properties"]["interface"]["enum"] == ["SocketCAN over SSH (Zelos)"]
-    ]
+    ssh = [b for b in branches if b["properties"]["interface"]["enum"] == ["SocketCAN over SSH"]]
     assert len(ssh) == 1, "exactly one ssh-socketcan oneOf branch expected"
     return ssh[0]
 
@@ -97,12 +93,10 @@ def test_schema_is_valid_and_carries_the_per_bus_block():
     assert validator.is_valid(
         {
             "log_level": "INFO",
-            "buses": [
-                {"interface": "SocketCAN (Zelos)", "channel": "can0", "database_file": "a.dbc"}
-            ],
+            "buses": [{"interface": "SocketCAN", "channel": "can0", "database_file": "a.dbc"}],
         }
     )
-    assert validator.is_valid({"buses": [{"interface": "SocketCAN (Zelos)", "channel": "can0"}]})
+    assert validator.is_valid({"buses": [{"interface": "SocketCAN", "channel": "can0"}]})
     assert validator.is_valid({"buses": [{"interface": "Demo"}], "advanced": {"prefix": ""}})
     assert not validator.is_valid({"buses": [{"interface": "Demo"}], "advanced": {"nope": 1}})
 
@@ -149,7 +143,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     good = {
         "buses": [
             {
-                "interface": "SocketCAN over SSH (Zelos)",
+                "interface": "SocketCAN over SSH",
                 "remote_host": "edge",
                 "database_files": [str(TEST_DBC)],
             }
@@ -160,7 +154,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     full = {
         "buses": [
             {
-                "interface": "SocketCAN over SSH (Zelos)",
+                "interface": "SocketCAN over SSH",
                 "remote_host": "edge",
                 "remote_channel": "vcan0",
                 "ssh_user": "zelos",
@@ -177,7 +171,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
     assert validator.is_valid(full)
 
     missing_host = {
-        "buses": [{"interface": "SocketCAN over SSH (Zelos)", "database_files": [str(TEST_DBC)]}]
+        "buses": [{"interface": "SocketCAN over SSH", "database_files": [str(TEST_DBC)]}]
     }
     assert not validator.is_valid(missing_host)
 
@@ -279,7 +273,7 @@ def test_create_codecs_rejects_an_illegal_bus_name(name):
 
 
 def test_create_codecs_names_an_ssh_bus_after_its_remote_channel():
-    bus = {"interface": "SocketCAN over SSH (Zelos)", "remote_host": "host", "ssh_user": "user"}
+    bus = {"interface": "SocketCAN over SSH", "remote_host": "host", "ssh_user": "user"}
     config = {"buses": [bus, {**bus, "remote_channel": "vcan.1"}]}
     with patch("zelos_sdk.TraceSource"):
         pairs = _create_codecs(config, TEST_DBC, resolve_advanced({}))
@@ -299,7 +293,7 @@ def test_advanced_j1939_node_reaches_the_rust_buses_only():
     advanced = resolve_advanced({"advanced": {"j1939_node": "NoSuchNode"}})
     with patch("zelos_sdk.TraceSource"):
         _create_codecs({"buses": [_vbus("vcan0")]}, TEST_DBC, advanced)
-        ssh = {"interface": "SocketCAN over SSH (Zelos)", "remote_host": "h", "ssh_user": "u"}
+        ssh = {"interface": "SocketCAN over SSH", "remote_host": "h", "ssh_user": "u"}
         with pytest.raises(ValueError, match="no DBC node 'NoSuchNode'"):
             _create_codecs({"buses": [ssh]}, TEST_DBC, advanced)
 
@@ -377,7 +371,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
             "log_level": "INFO",
             "buses": [
                 {
-                    "interface": "SocketCAN over SSH (Zelos)",
+                    "interface": "SocketCAN over SSH",
                     "remote_host": "edge",
                     "database_files": [str(TEST_DBC)],
                 }

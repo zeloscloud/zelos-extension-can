@@ -17,13 +17,12 @@ ACTION_PREFIX = "CAN"
 #: A bus's `interface` as configured (the label the form shows) -> the
 #: python-can interface it opens. `demo` and `other` are zelos-can's.
 INTERFACES = {
-    "SocketCAN (Zelos)": "zelos-socketcan",
-    "SocketCAN over SSH (Zelos)": "zelos-ssh-socketcan",
+    "SocketCAN": "zelos-socketcan",
+    "SocketCAN over SSH": "zelos-ssh-socketcan",
     "PCAN": "pcan",
     "Kvaser": "kvaser",
     "Vector": "vector",
     "slcan (serial)": "slcan",
-    "SocketCAN (python-can)": "socketcan",
     "Other (python-can)": "other",
     "Demo": "demo",
 }
