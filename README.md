@@ -31,8 +31,6 @@ In the app:
 
 ## Configuration
 
-All configuration is managed through the Zelos App settings interface.
-
 ### Filling in the form
 
 Both hooks read the machine running the agent, need no privileges, and work
