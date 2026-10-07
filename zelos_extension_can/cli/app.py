@@ -17,7 +17,7 @@ from zelos_can.naming import DEFAULT_PREFIX, LOG_SOURCE_NAME, name_error, trace_
 from zelos_sdk.extensions import load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
-from .. import ACTION_PREFIX, INTERFACES
+from .. import ACTION_PREFIX, INTERFACES, gs_usb
 from .. import actions as can_actions
 from .utils import setup_shutdown_handler
 
@@ -101,12 +101,16 @@ def _create_codecs(
 
     # Prepare all configs first to get channel names
     # The configured interface is a label; the bus opens its python-can name.
-    prepared_configs = [
-        _prepare_bus_config(
-            {**bus, "interface": INTERFACES[bus["interface"]]}, demo_dbc_path, advanced
-        )
-        for bus in buses
-    ]
+    prepared_configs = []
+    for bus in buses:
+        bus = {**bus, "interface": INTERFACES[bus["interface"]]}
+        if bus["interface"] == gs_usb.INTERFACE:
+            gs_usb.require_extra()
+            bus = gs_usb.bus_config(bus)
+        prepared_configs.append(_prepare_bus_config(bus, demo_dbc_path, advanced))
+    # Also covers gs_usb through "Other (python-can)".
+    if any(p["interface"] == gs_usb.INTERFACE for p in prepared_configs):
+        gs_usb.prime_libusb()
     for prepared in prepared_configs:
         for key in EXTENSION_BUS_KEYS:
             prepared.setdefault(key, advanced[key])
@@ -115,8 +119,8 @@ def _create_codecs(
 
     seen_names: set[str] = set()
 
-    for i, (bus_config, prepared_config) in enumerate(zip(buses, prepared_configs, strict=True)):
-        bus_name = (bus_config.get("name") or "").strip()
+    for i, prepared_config in enumerate(prepared_configs):
+        bus_name = (prepared_config.get("name") or "").strip()
         if bus_name:
             # With a prefix the name becomes an event segment, without one a
             # source name; either way it must already be a legal trace name.

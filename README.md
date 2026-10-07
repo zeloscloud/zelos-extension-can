@@ -50,10 +50,15 @@ before the extension has ever started.
   | SocketCAN over SSH | `zelos-ssh-socketcan` | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh) |
   | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
   | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
+  | gs_usb (USB) | `gs_usb` | candleLight and CANable (gs_usb firmware) over libusb; classic CAN; needs the `gs_usb` extra |
   | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface |
   | Demo | | Built-in EV simulator |
 
 - **Channel**: Specify the CAN channel/device name. For slcan (serial) (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
+- **gs_usb (USB)**: pick the adapter by **Device Index** (scan order, empty = first) or by **USB Bus** and **USB Address**, not both. The `gs_usb` extra (`gs-usb`, `libusb-package`) bundles libusb for Windows, macOS and Linux x86_64/aarch64.
+  - Linux: the kernel `gs_usb` driver claims the adapter as a SocketCAN interface; use SocketCAN. This interface needs that driver unbound and USB access (root or a udev rule).
+  - Windows: candleLight firmware binds WinUSB on its own; older or clone firmware may need [Zadig](https://zadig.akeo.ie/).
+  - macOS: works with the bundled libusb.
 
 ### Per-Bus Settings
 | Setting | What it does |
