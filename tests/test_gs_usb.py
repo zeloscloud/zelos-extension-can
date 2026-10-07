@@ -113,3 +113,71 @@ def test_prime_libusb_loads_libusb_package_library():
     with patch.dict(sys.modules, modules):
         gs_usb.prime_libusb()
     libusb1.get_backend.assert_called_once_with(find_library=finder.find_library)
+
+
+# ── discovery ────────────────────────────────────────────────────────────────
+
+
+def _usb_tree(root: Path, devices: dict[str, tuple[int, int]], bound: dict[str, str]) -> Path:
+    """A /sys/bus/usb: devices by sysfs name -> (busnum, devnum); bound interface -> netdev."""
+    for name, (busnum, devnum) in devices.items():
+        dev = root / "devices" / name
+        dev.mkdir(parents=True)
+        (dev / "busnum").write_text(f"{busnum}\n")
+        (dev / "devnum").write_text(f"{devnum}\n")
+    driver = root / "drivers" / "gs_usb"
+    driver.mkdir(parents=True)
+    (driver / "bind").write_text("")
+    for iface, netdev in bound.items():
+        target = root / "devices" / iface.split(":")[0] / iface
+        (target / "net" / netdev).mkdir(parents=True)
+        (driver / iface).symlink_to(target)
+    return root
+
+
+def test_linux_skips_kernel_held_adapters_keeping_scan_order(monkeypatch, tmp_path):
+    usb = _usb_tree(tmp_path, {"1-1": (1, 5), "1-2": (1, 6)}, {"1-1:1.0": "can0"})
+    monkeypatch.setattr(gs_usb, "_SYS_USB", usb)
+    monkeypatch.setattr(gs_usb.sys, "platform", "linux")
+    monkeypatch.setattr(gs_usb, "extra_installed", lambda: True)
+    scanned = [{"bus": 1, "address": 5, "name": "a"}, {"bus": 1, "address": 6, "name": None}]
+    monkeypatch.setattr(gs_usb, "scan", lambda skip, timeout: scanned)
+    # Index 1 stays 1: GsUsbBus counts the kernel-held adapter too. No product string
+    # falls back to the generic name.
+    assert gs_usb.discover() == ([{"index": 1, "name": "gs_usb adapter"}], {0: ["can0"]}, "")
+
+
+def test_linux_fails_closed_without_sysfs(monkeypatch, tmp_path):
+    monkeypatch.setattr(gs_usb, "_SYS_USB", tmp_path / "missing")
+    monkeypatch.setattr(gs_usb.sys, "platform", "linux")
+    monkeypatch.setattr(gs_usb, "extra_installed", lambda: True)
+    monkeypatch.setattr(gs_usb, "scan", MagicMock())
+    adapters, held, note = gs_usb.discover()
+    assert (adapters, held) == ([], {})
+    assert note.startswith("gs_usb scan skipped")
+    gs_usb.scan.assert_not_called()
+
+
+def test_missing_extra_scans_nothing_and_says_nothing(monkeypatch, caplog):
+    monkeypatch.setattr(gs_usb, "extra_installed", lambda: False)
+    monkeypatch.setattr(gs_usb, "scan", MagicMock())
+    with caplog.at_level("DEBUG"):
+        assert gs_usb.discover() == ([], {}, "")
+    gs_usb.scan.assert_not_called()
+    assert not [r for r in caplog.records if r.levelno > 10]
+
+
+def test_unreadable_product_string_is_none():
+    class Locked:
+        bus, address = 1, 7
+
+        @property
+        def product(self):
+            raise OSError("Access denied (insufficient permissions)")
+
+    held = SimpleNamespace(bus=1, address=8, product="never read")
+    devices = [SimpleNamespace(gs_usb=Locked()), SimpleNamespace(gs_usb=held)]
+    assert gs_usb._describe(devices, {(1, 8)}) == [
+        {"bus": 1, "address": 7, "name": None},
+        {"bus": 1, "address": 8, "name": None},
+    ]
