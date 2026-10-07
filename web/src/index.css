@@ -1,0 +1,241 @@
+/* The SDK stamps the host's theme tokens (--background, --foreground, --border, ...) on the document root,
+   so the panel matches Zelos in light and dark mode. The fallbacks only show before the first handshake. */
+
+:root {
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  margin: 0;
+  box-sizing: border-box;
+  border-color: hsl(var(--border, 0 0% 14.9%));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 14px;
+  background: hsl(var(--background, 0 0% 3.9%));
+  color: hsl(var(--foreground, 0 0% 98%));
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Panel states ------------------------------------------------------------------------------ */
+
+.panel-state {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px;
+  text-align: center;
+  text-wrap: balance;
+  line-height: 1.625;
+  color: hsl(var(--muted-foreground));
+}
+
+.panel-state svg {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+  stroke-width: 1;
+}
+
+.panel-state.error svg {
+  color: hsl(var(--destructive));
+}
+
+.panel-state-detail {
+  font-size: 12px;
+}
+
+/* --- Grid chrome ------------------------------------------------------------------------------- */
+
+.grid-panel {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  flex-direction: column;
+  outline: none;
+}
+
+.grid-search {
+  flex-shrink: 0;
+  padding: 4px;
+}
+
+/* The app's search field: 40 px tall, the magnifier inside on the left, a focus ring. */
+.grid-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 4px 0 10px;
+  border: 1px solid hsl(var(--input));
+  border-radius: calc(var(--radius, 0.5rem) - 2px);
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+}
+
+.grid-search-box:has(input:focus-visible) {
+  box-shadow:
+    0 0 0 2px hsl(var(--background)),
+    0 0 0 4px hsl(var(--ring));
+}
+
+.grid-search-box svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.grid-search-box input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 14px;
+}
+
+.grid-search-box input::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.grid-search-box button {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: calc(var(--radius, 0.5rem) - 2px);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.grid-search-box button:hover {
+  background: hsl(var(--accent) / 0.5);
+}
+
+/* `min-height: 0` lets the body shrink; without it the grid overflows the panel. */
+.grid-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.grid-body > div {
+  height: 100%;
+  width: 100%;
+}
+
+.grid-status {
+  flex-shrink: 0;
+  overflow: hidden;
+  padding: 4px 8px;
+  border-top: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grid-cell {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* A cell's text in its own box: text-overflow does not reach text laid out directly in a flex row. */
+.cell-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grid-cell.truncate,
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grid-cell.centered {
+  justify-content: center;
+}
+
+/* A value column: monospace with tabular figures, so numbers, timestamps and hex line up down the column. */
+.mono-value {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.search-hit {
+  border-radius: 4px;
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+/* --- Bus Monitor cells ------------------------------------------------------------------------- */
+
+.can-bytes {
+  flex-wrap: wrap;
+  column-gap: 6px;
+}
+
+/* A decoded message: one line per field, one step under the grid's value size. The line height is the
+   16px the row height is computed from (`canRowHeight`), so the two move together. */
+.can-event-lines {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* A changed byte or value, marked for as long as it takes to notice and no longer. The element is
+   remounted when its text changes (the token is part of its React key), which is what replays this; a
+   cell nothing changed in keeps its node and stays still. */
+@keyframes can-flash {
+  from {
+    background-color: hsl(var(--primary) / 0.45);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+.can-flash {
+  animation: can-flash 300ms ease-out;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .can-flash {
+    animation: none;
+  }
+}
