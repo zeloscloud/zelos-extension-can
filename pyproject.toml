@@ -49,6 +49,12 @@ Documentation = "https://docs.zeloscloud.io/extensions"
 cli = [
     "tqdm>=4.0.0",
 ]
+# The gs_usb interface. gs-usb brings pyusb; libusb-package bundles the native
+# libusb-1.0 pip cannot install (Windows, macOS, Linux x86_64/aarch64).
+gs_usb = [
+    "gs-usb>=0.3.1",
+    "libusb-package>=1.0.26",
+]
 dev = [
     "pytest>=8.4.2",
     "pre-commit>=4.3.0",

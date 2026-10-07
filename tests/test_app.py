@@ -60,7 +60,12 @@ def test_schema_interface_branches_match_zelos_can():
     # Except the Demo branch's canopen_node, which this extension adds.
     owned = [b["properties"].pop("canopen_node", None) for b in branches["oneOf"]]
     assert sum(o is not None for o in owned) == 1
-    assert branches["oneOf"] == fragment
+    # And the gs_usb branch, which this extension owns.
+    gs_usb = [
+        b for b in branches["oneOf"] if b["properties"]["interface"]["enum"] == ["gs_usb (USB)"]
+    ]
+    assert len(gs_usb) == 1
+    assert [b for b in branches["oneOf"] if b not in gs_usb] == fragment
 
 
 def test_schema_is_valid_and_carries_the_per_bus_block():
