@@ -6,7 +6,7 @@
 - 📤 **Sending CAN frames** - Send CAN messages directly from the Zelos App
 - ⚙️ **Supports any CAN HW/SW stack** - Support for SocketCAN, PCAN, Kvaser, Vector, and virtual interfaces
 - 📄 **Multiple database formats** - Supports DBC, ARXML, KCD, and SYM formats
-- 🗂️ **Several databases per bus** - Layer DBCs in order; definitions of one message id coexist
+- 📡 **All CAN Protocols** - CANopen, J1939, CAN FD, CAN2.0 A/B
 - 📁 **Trace file conversion** - Convert CAN logs to Zelos format for offline analysis
 - 🚗 **Demo mode** - Built-in EV simulation for testing without hardware
 
