@@ -18,7 +18,7 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN, Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN, Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. gs_usb is a candleLight or CANable (gs_usb firmware) adapter opened over libusb, for macOS and Windows; on Linux the kernel driver makes it a SocketCAN interface, so use SocketCAN there. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
               "SocketCAN",
               "SocketCAN over SSH",
@@ -26,6 +26,7 @@
               "Kvaser",
               "Vector",
               "slcan (serial)",
+              "gs_usb (USB)",
               "Other (python-can)",
               "Demo"
             ]
@@ -557,6 +558,83 @@
                 "required": [
                   "config_json"
                 ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "gs_usb (USB)"
+                    ]
+                  },
+                  "channel": {
+                    "type": "integer",
+                    "title": "Device Index",
+                    "description": "Which connected gs_usb adapter to use, in scan order (0 = first). Leave empty to use the first, or to pick the adapter by USB Bus and USB Address instead. Needs the extension's gs_usb extra. Windows: candleLight firmware binds WinUSB on its own; older or clone firmware may need Zadig. Linux: the kernel gs_usb driver claims the adapter as SocketCAN; this interface needs that driver unbound and USB access (root or a udev rule).",
+                    "minimum": 0,
+                    "ui:placeholder": "0"
+                  },
+                  "usb_bus": {
+                    "type": "integer",
+                    "title": "USB Bus",
+                    "description": "USB bus number of the adapter, with USB Address. Instead of Device Index.",
+                    "minimum": 0
+                  },
+                  "usb_address": {
+                    "type": "integer",
+                    "title": "USB Address",
+                    "description": "USB device address of the adapter on USB Bus. Instead of Device Index.",
+                    "minimum": 1,
+                    "maximum": 127
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "CAN bus bitrate",
+                    "enum": [
+                      10000,
+                      20000,
+                      50000,
+                      83300,
+                      100000,
+                      125000,
+                      250000,
+                      500000,
+                      750000,
+                      1000000
+                    ],
+                    "default": 500000
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can gs_usb Bus() kwargs as JSON object"
+                  }
+                },
+                "required": [
+                  "bitrate"
+                ],
+                "dependencies": {
+                  "usb_bus": {
+                    "required": [
+                      "usb_address"
+                    ],
+                    "not": {
+                      "required": [
+                        "channel"
+                      ]
+                    }
+                  },
+                  "usb_address": {
+                    "required": [
+                      "usb_bus"
+                    ],
+                    "not": {
+                      "required": [
+                        "channel"
+                      ]
+                    }
+                  }
+                }
               }
             ]
           }
