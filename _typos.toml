@@ -1,0 +1,3 @@
+[files]
+# CAN databases: DBC keywords (BA_, BO_, SG_, ...) are not English words.
+extend-exclude = ["*.dbc"]

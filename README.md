@@ -9,6 +9,7 @@
 - 📡 **All CAN Protocols** - CANopen, J1939, CAN FD, CAN2.0 A/B
 - 📁 **Trace file conversion** - Convert CAN logs to Zelos format for offline analysis
 - 🚗 **Demo mode** - Built-in EV simulation for testing without hardware
+- 🖥️ **Bus Monitor panel** - One live row per CAN id or decoded message, in any Zelos layout
 
 ## Quick Start
 
@@ -28,6 +29,18 @@ In the app:
 2. **Configure** your CAN connection and add your database files (.dbc, .arxml, .kcd, or .sym)
 3. **Start** the extension to begin streaming data
 4. **View** real-time data in your Zelos App
+
+## Bus Monitor panel
+
+The extension adds a panel to the Zelos App: the **CAN Bus Monitor** (Zelos 26.0.10 or later).
+
+Drag a CAN frame table (`zelos.can.frame.*`) from the sidebar onto a layout, and a Bus Monitor opens with it bound. Decoded message tables (`zelos.can.message.*`) dragged with it, or dropped on it later, ride on the same panel. Any other event dropped on the panel becomes a row too.
+
+- **One row per id.** A frame table becomes one row per arbitration id; a decoded message is one row with one line per signal, units included. Each row updates in place as its id recurs, and an id that fired once stays.
+- **Follows the cursor.** Live, the panel shows the newest frames. Paused or in a trace, it shows the bus as of the cursor; move the cursor back and the panel clears and rebuilds from there.
+- **Columns.** Timestamp, Message (hover it for the table the row came from), DLC, Data, and an optional Source column. Sort by Message or Timestamp; decoded messages stay above raw frames either way. The search box filters rows, with `*` and `?` wildcards.
+- **Right-click a cell** to copy its value, a frame's bytes, or the whole row as JSON.
+- **Options**, in the panel's Edit sheet: *Flash changes* (briefly highlight a byte or value that changed), *Show Source*, and *Font size*.
 
 ## Configuration
 
@@ -247,6 +260,8 @@ The extension provides several actions accessible from the Zelos App:
 ## Development
 
 Want to contribute or modify this extension? See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete developer guide.
+
+The extension has two halves: the Python agent at the root, and the Bus Monitor panel, a Vite + React project under `web/` that builds into `dist/panels/`. `just check`, `just test` and `just package` cover both.
 
 ## Links
 
