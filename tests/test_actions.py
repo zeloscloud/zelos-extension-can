@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -19,6 +21,8 @@ from zelos_sdk.actions import Action
 from zelos_sdk.extensions.actions import get_standalone_actions
 
 from zelos_extension_can import ACTION_PREFIX, actions
+
+_REAL_DISCOVER = actions.gs_usb.discover
 
 DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
 
@@ -384,9 +388,10 @@ class TestConfigFormHooks:
 
     @pytest.fixture(autouse=True)
     def _no_adapters(self, monkeypatch):
-        """Hide this machine's own adapters and serial ports; a test adds the ones it needs."""
+        """Hide this machine's adapters, serial ports and gs_usb devices; a test adds its own."""
         monkeypatch.setattr(actions, "_vendor_adapters", list)
         monkeypatch.setattr(actions, "_slcan_adapters", list)
+        monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {}, ""))
 
     def test_list_interfaces_offers_can_devices_only_hardware_first(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "linux")
@@ -689,6 +694,91 @@ class TestAdapterDetection:
             assert "first channel" not in message
         else:
             assert message.endswith(f"{note} is available.")
+
+    # ── gs_usb discovery and the form hint ──
+
+    def _hang(self, monkeypatch, code):
+        """The real discover, with the child scan replaced by `code`."""
+        monkeypatch.setattr(actions.gs_usb, "discover", _REAL_DISCOVER)
+        monkeypatch.setattr(actions.gs_usb, "extra_installed", lambda: True)
+        monkeypatch.setattr(actions.gs_usb, "SCAN_SECONDS", 0.5)
+        monkeypatch.setattr(actions.gs_usb.sys, "platform", "darwin")
+        monkeypatch.setattr(
+            actions.gs_usb, "_scan_command", lambda skip: [sys.executable, "-c", code]
+        )
+        monkeypatch.setattr(
+            actions,
+            "_vendor_adapters",
+            lambda: [{"interface": "pcan", "channel": "PCAN_USBBUS1", "name": "PCAN-USB"}],
+        )
+
+    def test_auto_config_gives_up_on_a_hung_gs_usb_scan(self, monkeypatch):
+        self._hang(monkeypatch, "import time; time.sleep(30)")
+        start = time.monotonic()
+        result = actions.auto_config()
+        assert time.monotonic() - start < 2.5
+        assert [b["interface"] for b in result["config"]["buses"]] == ["PCAN"]
+        assert result["message"].endswith("gs_usb scan skipped: no answer within 0.5 s.")
+
+    def test_auto_config_survives_a_failing_gs_usb_scan(self, monkeypatch):
+        self._hang(monkeypatch, "raise SystemExit('No backend available')")
+        result = actions.auto_config()
+        assert [b["interface"] for b in result["config"]["buses"]] == ["PCAN"]
+        assert result["message"].endswith("gs_usb scan skipped: No backend available.")
+
+    def test_auto_config_lists_gs_usb_adapters_by_index(self, monkeypatch):
+        found = ([{"index": 1, "name": "candleLight"}], {}, "")
+        monkeypatch.setattr(actions.gs_usb, "discover", lambda: found)
+        result = actions.auto_config()
+        assert result["config"]["buses"] == [
+            {"interface": "gs_usb (USB)", "channel": 1, "bitrate": 500000, "database_files": []}
+        ]
+        assert result["message"].startswith("Found candleLight on gs_usb index 1.")
+
+    def test_auto_config_keeps_a_found_bus_as_the_form_has_it(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+        mine = {
+            "interface": "SocketCAN",
+            "channel": "can0",
+            "name": "chassis",
+            "database_files": ["a.dbc"],
+        }
+        gone = {"interface": "SocketCAN", "channel": "can9", "name": "gone"}
+        buses = actions.auto_config({"buses": [mine, gone]})["config"]["buses"]
+        assert buses[0] == mine
+        assert [b["channel"] for b in buses] == ["can0", "can1", "vcan0"]
+
+    def test_auto_config_keeps_the_forms_gs_usb_for_a_kernel_held_adapter(
+        self, monkeypatch, tmp_path
+    ):
+        """can0 is a gs_usb adapter the kernel holds: the form's gs_usb bus wins over SocketCAN."""
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+        monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {0: ["can0"]}, ""))
+        gs = {"interface": "gs_usb (USB)", "channel": 0, "bitrate": 250000}
+        buses = actions.auto_config({"buses": [gs]})["config"]["buses"]
+        assert buses[0] == gs
+        assert [b["channel"] for b in buses[1:]] == ["can1", "vcan0"]
+        # Without it in the form, today's default: SocketCAN.
+        assert actions.auto_config({"buses": []})["config"]["buses"][0]["interface"] == "SocketCAN"
+
+    @pytest.mark.parametrize(
+        "form",
+        [
+            None,
+            {},
+            "nope",
+            {"buses": "x"},
+            {"buses": [1, None, {"interface": 3}, {"interface": "SocketCAN", "channel": {}}]},
+            {"buses": [{"interface": "SocketCAN", "channel": True}]},
+        ],
+    )
+    def test_auto_config_ignores_a_malformed_form(self, monkeypatch, tmp_path, form):
+        monkeypatch.setattr(actions.sys, "platform", "linux")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", _sys_class_net(tmp_path))
+        expected = actions.auto_config()
+        assert actions.auto_config(form) == expected
 
     @pytest.mark.parametrize(
         ("reply", "name"),
