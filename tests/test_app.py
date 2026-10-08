@@ -319,12 +319,13 @@ def test_create_codecs_shares_one_source_across_buses():
 
 
 def test_run_codecs_async_propagates_can_error_and_cleans_up(monkeypatch):
-    """A CanError from codec.start() propagates out of _run_codecs_async (so
-    run_app_mode's except can catch it), and the try/finally still tears down any
-    bus that had already started before the failing one."""
+    """A permanent ssh failure from codec.start() propagates out of
+    _run_codecs_async (so run_app_mode's except can catch it), and the
+    try/finally still tears down any bus that had already started before the
+    failing one."""
 
     def boom(bus, channel, **kwargs):
-        raise can.exceptions.CanInitializationError("cannot reach edge:22 (ssh: timed out)")
+        raise ssh_socketcan.SshPermanentError("ssh authentication to edge failed")
 
     monkeypatch.setattr(ssh_socketcan, "SshTransport", boom)
     codec = CanCodec(
@@ -349,7 +350,7 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
     reason rather than propagating a raw CanInitializationError traceback."""
 
     def boom(bus, channel, **kwargs):
-        raise can.exceptions.CanInitializationError(
+        raise ssh_socketcan.SshPermanentError(
             "ssh host key for edge is not trusted (ssh: Host key verification failed.)"
         )
 
@@ -393,3 +394,77 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
         for c in created:
             with contextlib.suppress(Exception):
                 c.stop()
+
+
+def test_transient_ssh_start_failure_retries_then_runs(monkeypatch):
+    """A reset during the first handshake is retried. The bus is only marked
+    started once start() succeeds, and then the run loop is entered."""
+    attempts = {"n": 0}
+    codec = MagicMock()
+    codec.bus_name = "pcm"
+    codec.config = {"interface": "zelos-ssh-socketcan"}
+
+    def start():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise can.exceptions.CanInitializationError(
+                "ssh-socketcan on localhost:can0 failed. "
+                "(ssh: kex_exchange_identification: read: Connection reset by peer)"
+            )
+
+    codec.start.side_effect = start
+
+    async def run():
+        return None
+
+    codec._run_async = run
+
+    async def no_sleep(_interval):
+        return None
+
+    monkeypatch.setattr(app_mod.asyncio, "sleep", no_sleep)
+
+    asyncio.run(_run_codecs_async([codec]))
+
+    assert attempts["n"] == 2
+    codec.stop.assert_called_once()
+
+
+def test_non_ssh_start_failure_does_not_retry():
+    attempts = {"n": 0}
+    codec = MagicMock()
+    codec.bus_name = "local"
+    codec.config = {"interface": "zelos-socketcan"}
+
+    def start():
+        attempts["n"] += 1
+        raise can.exceptions.CanInitializationError("cannot open can0")
+
+    codec.start.side_effect = start
+
+    with pytest.raises(can.exceptions.CanInitializationError):
+        asyncio.run(_run_codecs_async([codec]))
+    assert attempts["n"] == 1
+    codec.stop.assert_not_called()
+
+
+def test_started_bus_is_stopped_when_a_later_ssh_bus_is_permanent():
+    """The first bus connected. The second is a permanent ssh failure. The
+    first is stopped and the permanent error still propagates."""
+    first = MagicMock()
+    first.bus_name = "pcm"
+    first.config = {"interface": "zelos-ssh-socketcan"}
+    second = MagicMock()
+    second.bus_name = "dcm"
+    second.config = {"interface": "zelos-ssh-socketcan"}
+    second.start.side_effect = ssh_socketcan.SshPermanentError("ssh authentication to edge failed")
+
+    async def run():
+        return None
+
+    first._run_async = run
+
+    with pytest.raises(ssh_socketcan.SshPermanentError):
+        asyncio.run(_run_codecs_async([first, second]))
+    first.stop.assert_called_once()
+    second.stop.assert_not_called()
