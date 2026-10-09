@@ -14,6 +14,7 @@ import zelos_sdk
 from zelos_can.bus import BUS_DEFAULTS, BusConfigError, prepare_bus_config
 from zelos_can.codec import CanCodec
 from zelos_can.naming import DEFAULT_PREFIX, LOG_SOURCE_NAME, name_error, trace_layout
+from zelos_can.ssh_socketcan import SshPermanentError
 from zelos_sdk.extensions import load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
@@ -42,6 +43,14 @@ EXTENSION_BUS_KEYS = ("j1939", "canopen")
 
 #: Interfaces whose bus runs zelos-can's Rust codec, the only ones with a J1939 node.
 RUST_INTERFACES = ("zelos-socketcan", "zelos-ssh-socketcan")
+
+#: ssh-socketcan startup retry. A Mender port-forward resets the first handshake
+#: while its session is still coming up; that is transient, and the codec's
+#: reconnect loop does not exist until start() succeeds. Same bounds as the
+#: running supervisor: 5s, then double, cap 60s.
+_SSH_INTERFACE = "zelos-ssh-socketcan"
+_SSH_RETRY_INITIAL_S = 5.0
+_SSH_RETRY_MAX_S = 60.0
 
 
 def resolve_advanced(config: dict) -> dict:
@@ -150,6 +159,40 @@ def _create_codecs(
     return codecs
 
 
+def _transient_ssh_start_failure(codec: CanCodec, exc: BaseException) -> bool:
+    """True when ssh-socketcan failed for a reason retrying can fix.
+
+    Authentication, a rejected host key, and a missing can-utils binary are
+    `SshPermanentError` and must still stop the extension. A reset or timeout
+    while the tunnel is reconnecting is a plain `CanInitializationError`.
+    """
+    return (
+        codec.config.get("interface") == _SSH_INTERFACE
+        and isinstance(exc, can.exceptions.CanInitializationError)
+        and not isinstance(exc, SshPermanentError)
+    )
+
+
+async def _start_codec(codec: CanCodec) -> None:
+    """Start one bus, retrying a transient ssh-socketcan connect failure."""
+    interval = _SSH_RETRY_INITIAL_S
+    while True:
+        try:
+            codec.start()
+            return
+        except can.exceptions.CanError as e:
+            if not _transient_ssh_start_failure(codec, e):
+                raise
+            logger.warning(
+                "[%s] ssh connect failed, retrying in %.0fs: %s",
+                codec.bus_name,
+                interval,
+                e,
+            )
+            await asyncio.sleep(interval)
+            interval = min(interval * 2, _SSH_RETRY_MAX_S)
+
+
 async def _run_codecs_async(codecs: list[CanCodec]) -> None:
     """Run multiple codecs concurrently.
 
@@ -158,11 +201,13 @@ async def _run_codecs_async(codecs: list[CanCodec]) -> None:
     # Start buses inside the try so that if one start() raises, the finally
     # stops the buses already started. Otherwise an already-started bus owning
     # non-daemon ssh threads (with a live remote candump session) is never torn
-    # down and the process hangs forever.
+    # down and the process hangs forever. A transient ssh connect failure is
+    # retried here; start() tears the failed attempt down, so the next call is
+    # clean. The running supervisor only watches a bus that has started.
     started: list[CanCodec] = []
     try:
         for codec in codecs:
-            codec.start()
+            await _start_codec(codec)
             started.append(codec)
 
         # Run all codecs concurrently using their async run method
@@ -283,14 +328,16 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         bus_count = len(codecs)
         logger.info(f"Starting CAN extension with {bus_count} bus{'es' if bus_count > 1 else ''}")
 
-        # A bus that can't start (bad interface, unreachable / unauthenticated
-        # ssh host, missing remote can-utils, ...) raises can.exceptions.CanError
-        # — CanInitializationError and CanInterfaceNotImplementedError are
-        # subclasses, as is the mid-run SshPermanentError; a bad `config_json`
-        # raises ValueError and the Rust-side loader RuntimeError. Exit cleanly
-        # with a one-line reason instead of a traceback that looks like a crash.
-        # _run_codecs_async's try/finally has already stopped every bus it
-        # started, so cleanup is complete by the time we get here.
+        # A bus that can't start (bad interface, unauthenticated ssh host,
+        # missing remote can-utils, ...) raises can.exceptions.CanError.
+        # CanInitializationError and CanInterfaceNotImplementedError are
+        # subclasses, as is the mid-run SshPermanentError. A transient
+        # ssh-socketcan connect error is retried in _start_codec and does not
+        # reach here. A bad `config_json` raises ValueError and the Rust-side
+        # loader RuntimeError. Exit cleanly with a one-line reason instead of a
+        # traceback that looks like a crash. _run_codecs_async's try/finally has
+        # already stopped every bus it started, so cleanup is complete by the
+        # time we get here.
         try:
             asyncio.run(_run_codecs_async(codecs))
         except (can.exceptions.CanError, ValueError, FileNotFoundError, RuntimeError) as e:
