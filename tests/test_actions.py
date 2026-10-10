@@ -643,7 +643,14 @@ class TestConfigFormHooks:
         assert result["config"]["buses"] == [
             {"interface": "gs_usb (USB)", "channel": 1, "bitrate": 500000, "database_files": []}
         ]
-        assert result["message"].startswith("Found candleLight on gs_usb index 1.")
+        assert result["message"].startswith("Found candleLight on gs_usb index 1. Each is set to")
+        form = {"buses": [{"interface": "gs_usb (USB)", "channel": 1, "bitrate": 250000}]}
+        result = actions.auto_config(form)
+        assert result["config"]["buses"] == form["buses"]
+        assert (
+            "Buses already in the form keep their settings; new ones are set to"
+            in result["message"]
+        )
 
     def test_auto_config_keeps_a_found_bus_as_the_form_has_it(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "linux")
@@ -719,6 +726,11 @@ def test_only_actions_that_read_are_declared_read_only():
 
 class TestAdapterDetection:
     """What each detection source reports, with the vendor libraries and serial ports stubbed."""
+
+    @pytest.fixture(autouse=True)
+    def _no_gs_usb(self, monkeypatch):
+        """Hide this machine's gs_usb devices; they would join every message."""
+        monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {}, ""))
 
     def test_vendor_adapters_list_each_channel_as_the_interface_enum_names_it(self, monkeypatch):
         answers = {
