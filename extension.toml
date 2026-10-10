@@ -2,7 +2,7 @@
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
 name = "CAN"
-version = "0.2.1"
+version = "0.3.0"
 description = "Capture, decode (DBC) and send CAN and CAN-FD frames live, and convert CAN logs (.asc, .blf, .trc, .log, .csv, .mf4) to Zelos traces (.trz), with or without a DBC."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
@@ -14,20 +14,40 @@ categories = ["Automotive", "Networking", "Industrial", "IoT"]
 icon = "assets/icon.png"
 readme = "README.md"
 
-# Compatibility (optional, defaults to ^25.0.20)
+# Panels need Zelos 26.0.10 or later
 [zelos]
-version = ">=26.0.8"
+version = ">=26.0.10"
 
-# Configuration schema (enables UI in Zelos App)
+# Configuration schema for the agent (enables the config form in Zelos App)
 [config]
 schema = "config.schema.json"
 
-# Runtime configuration
-[runtime]
-type = "python"
+# The agent: captures, decodes and sends CAN traffic
+[agent]
+runtime = "python"
 entry = "main.py"
 python_version = "3.11"
 
-# Graceful shutdown configuration (optional, defaults to 10)
-[stop]
+# Graceful shutdown (optional, defaults to 10)
+[agent.stop]
 grace_seconds = 10
+
+# The app part: panels the app renders in a layout
+[app]
+
+[[app.panels]]
+id = "bus-monitor"
+name = "CAN Bus Monitor"
+description = "CAN frames and messages"
+icon = "assets/bus-monitor.svg"
+entry = "dist/panels/bus-monitor.html"
+accepts = ["zelos.can.frame."]
+affiliates = ["zelos.can.message."]
+binds = "any"
+default_height = 2
+live_only = false
+options_schema = "dist/panels/bus-monitor.options.json"
+ai_guidance = "A bus monitor: one latched row per arbitration id or decoded message, each updated in place as it recurs."
+
+[package]
+paths = ["zelos_extension_can", "main.py", "pyproject.toml", "uv.lock", "dist", "assets", "README.md", "config.schema.json"]
