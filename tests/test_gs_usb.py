@@ -135,6 +135,7 @@ def _usb_tree(root: Path, devices: dict[str, tuple[int, int]], bound: dict[str, 
     return root
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="sysfs interface names contain ':'")
 def test_linux_skips_kernel_held_adapters_keeping_scan_order(monkeypatch, tmp_path):
     usb = _usb_tree(tmp_path, {"1-1": (1, 5), "1-2": (1, 6)}, {"1-1:1.0": "can0"})
     monkeypatch.setattr(gs_usb, "_SYS_USB", usb)

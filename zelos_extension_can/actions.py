@@ -1100,9 +1100,14 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     if adapters:
         found = ", ".join(f"{a['name']} on {_where(a)}" for a in adapters)
         rate = f"{_ADAPTER_BITRATE // 1000} kbit/s"
+        kept = []
+        if {(_LABELS[a["interface"]], str(a["channel"])) for a in adapters} & form.keys():
+            kept.append("buses already in the form keep their settings")
+        if running:
+            kept.append("running buses keep their bitrate")
         setting = (
-            f"Running buses keep their bitrate; new ones are set to {rate}."
-            if running
+            f"{'; '.join(kept).capitalize()}; new ones are set to {rate}."
+            if kept
             else f"Each is set to {rate}."
         )
         result["message"] = f"Found {found}. {setting} Change Bitrate to match your bus."
