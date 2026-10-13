@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
     help="Leading trace-source name; pass '' to name the source after the bus",
 )
 @click.option(
+    "--cluster",
+    help="The ARXML CAN cluster to decode; required when the ARXML has several",
+)
+@click.option(
     "--j1939",
     is_flag=True,
     help="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
@@ -57,6 +61,7 @@ def trace(
     interface: str,
     channel: str,
     database_files: tuple[Path, ...],
+    cluster: str | None,
     bitrate: int,
     file: Path | None,
     fd: bool,
@@ -109,6 +114,7 @@ def trace(
         "interface": interface,
         "channel": channel,
         "database_files": [str(p) for p in database_files],
+        "cluster": cluster,
         "bitrate": bitrate,
         "fd_mode": fd,
         "j1939": j1939,
