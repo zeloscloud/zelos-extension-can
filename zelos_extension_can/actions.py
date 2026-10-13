@@ -571,7 +571,7 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     "database_path",
     required=False,
     default="",
-    title="CAN Database File (.dbc)",
+    title="CAN Database File (.dbc, .arxml)",
     description=(
         "Database file, or a list of them in precedence order. If empty, `codec` "
         "lends its list; with neither, only raw frames are written."
@@ -588,6 +588,13 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
         "Used only when `database_path` is empty — the named codec's DBCs drive the conversion."
     ),
     choices=_available_codecs,
+)
+@action.text(
+    "cluster",
+    required=False,
+    default="",
+    title="ARXML CAN Cluster",
+    description="Required when the ARXML describes several CAN clusters. Empty: the codec's",
 )
 @action.text(
     "output_path",
@@ -635,6 +642,7 @@ def convert_trace_file(
     emit_all_schemas: bool = True,
     j1939: bool = False,
     canopen: bool = False,
+    cluster: str = "",
 ) -> dict[str, Any]:
     from zelos_can.converter import convert_can_trace
 
@@ -643,13 +651,16 @@ def convert_trace_file(
         # clear "you need to pass X" error rather than a misleading
         # "input file not found" when the real problem is missing config.
         supplied = _as_paths(database_path)
+        cluster = cluster.strip() or None
         if supplied:
             database_files = [resolve_database_file(p).resolve() for p in supplied]
             logger.info("Using user-specified databases: %s", database_files)
         elif codec:
             # _get_codec raises ValueError on unknown codec — propagated
             # verbatim by the pass-through handler below.
-            database_files = list(_get_codec(codec).catalog.database_files)
+            catalog = _get_codec(codec).catalog
+            database_files = list(catalog.database_files)
+            cluster = cluster or catalog.cluster
             logger.info("Using codec '%s' databases: %s", codec, database_files)
         else:
             database_files = []
@@ -680,6 +691,7 @@ def convert_trace_file(
             emit_schemas_on_init=emit_all_schemas,
             j1939=j1939,
             canopen="on" if canopen else "auto",
+            cluster=cluster,
         )
         return {
             "status": "success",
@@ -1139,8 +1151,8 @@ def _where(adapter: dict[str, Any]) -> str:
 # ─── Standalone (runs with the extension stopped) ───────────────────────────
 
 
-def _configured_database_files() -> list[str]:
-    """The first configured bus's database list, if any.
+def _configured_databases() -> tuple[list[str], str | None]:
+    """The first configured bus's database list, if any, and its ARXML cluster.
 
     Config is at-rest state — it is written on Start and persists across stop —
     so this resolves whether or not the extension is running. It is applied in
@@ -1154,11 +1166,11 @@ def _configured_database_files() -> list[str]:
 
         buses = (load_config() or {}).get("buses") or []
     except Exception:  # no config yet, or schema mismatch — not an error here
-        return []
+        return [], None
     for bus in buses:
         if isinstance(bus, dict) and (files := bus_database_files(bus)):
-            return files
-    return []
+            return files, bus.get("cluster") or None
+    return [], None
 
 
 def _open_in_app(path: Path) -> None:
@@ -1221,7 +1233,7 @@ def _open_in_app(path: Path) -> None:
 )
 @action.text(
     "database_file",
-    title="Database (.dbc)",
+    title="Database (.dbc, .arxml)",
     description=(
         "One path or several, in precedence order. Defaults to the databases "
         "configured for this extension's first bus; with none, only raw frames "
@@ -1230,6 +1242,13 @@ def _open_in_app(path: Path) -> None:
     required=False,
     default="",
     widget="file_path_picker",
+)
+@action.text(
+    "cluster",
+    title="ARXML CAN Cluster",
+    description="Required when the ARXML describes several CAN clusters. Empty: the first bus's",
+    required=False,
+    default="",
 )
 @action.text(
     "output_file",
@@ -1274,6 +1293,7 @@ def convert(
     open_on_complete: bool = False,
     j1939: bool = False,
     canopen: bool = False,
+    cluster: str = "",
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
@@ -1286,7 +1306,9 @@ def convert(
         raise ValueError(f"Unsupported format: {source.suffix}. Supported: {_LOG_FORMATS}")
 
     supplied = _as_paths(database_file)
-    database_paths = [resolve_database_file(p) for p in supplied or _configured_database_files()]
+    configured, configured_cluster = ([], None) if supplied else _configured_databases()
+    database_paths = [resolve_database_file(p) for p in supplied or configured]
+    cluster = cluster.strip() or configured_cluster
 
     # Resolved, not just expanded. Two reasons: a relative path would otherwise
     # resolve against the extension's working directory rather than the caller's,
@@ -1298,7 +1320,12 @@ def convert(
     _clear_destination(destination, force)
 
     stats = convert_can_trace(
-        source, database_paths, destination, j1939=j1939, canopen="on" if canopen else "auto"
+        source,
+        database_paths,
+        destination,
+        j1939=j1939,
+        canopen="on" if canopen else "auto",
+        cluster=cluster,
     )
 
     # The trace exists on disk from here on. Failing to open it is a worse

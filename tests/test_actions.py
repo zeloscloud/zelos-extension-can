@@ -184,9 +184,18 @@ class TestStandaloneConvert:
 
     def test_no_database_anywhere_converts_raw_only(self, tmp_path):
         src = self._log(tmp_path)
-        with patch.object(actions, "_configured_database_files", return_value=[]):
+        with patch.object(actions, "_configured_databases", return_value=([], None)):
             result = actions.convert(input_file=str(src))
         assert result["database_files"] == []
+        assert Path(result["output_file"]).is_file()
+
+    def test_a_multi_cluster_arxml_needs_its_cluster(self, tmp_path):
+        src, arxml = self._log(tmp_path), str(DBC_PATH.parent / "someip-system-00048.arxml")
+        with pytest.raises(Exception, match="select one with `cluster`"):
+            actions.convert(input_file=str(src), database_file=arxml)
+        result = actions.convert(
+            input_file=str(src), database_file=arxml, cluster="Can1", force=True
+        )
         assert Path(result["output_file"]).is_file()
 
     def test_missing_database_raises(self, tmp_path):
