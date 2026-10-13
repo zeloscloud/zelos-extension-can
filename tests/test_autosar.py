@@ -1,15 +1,20 @@
 """AUTOSAR ARXML end to end through the extension: two buses on zelos-can's
-in-memory bus, cantools-encoded frames in, decoded PDUs and E2E status out.
+in-memory bus, cantools-encoded frames in, decoded PDUs and E2E status out;
+and a python-can bus decoding a real ECU's capture.
 
 system-4.2.arxml (cantools' fixture) has one CAN cluster; the generated
-someip-system-00048.arxml has two, so its bus names `cluster`.
+someip-system-00048.arxml has two, so its bus names `cluster`. can-full.arxml
+describes the zelos-examples CAN bench, and can-full-10s.candump is 10 s of it.
 """
 
 import json
 import time
+from collections import Counter
 from pathlib import Path
 
+import can
 import cantools
+import pyarrow as pa
 import pytest
 import zelos_sdk
 from cantools.autosar.end_to_end import apply_profile2_crc, apply_profile5_crc
@@ -20,6 +25,8 @@ from zelos_extension_can.cli.app import _create_codecs, resolve_advanced
 FILES = Path(__file__).parent / "files"
 SYSTEM = FILES / "system-4.2.arxml"
 SOMEIP = FILES / "someip-system-00048.arxml"
+CAN_FULL = FILES / "can-full.arxml"
+TEST_DBC = FILES / "test.dbc"
 E2E_OK = 0
 
 
@@ -117,3 +124,114 @@ def test_arxml_pdus_decode_by_pdu_name_with_e2e_status(buses):
     assert _wait(cache, "can1/1f000000_C0_1/C0_1_0") == 7
     assert _wait(cache, "can1/1f000000_C0_0/C0_0_1") == 6
     assert _wait(cache, "can1/1e000000_SEC0/secoc") == 0
+
+
+def test_a_python_can_bus_decodes_arxml_on_the_rust_decoder(tmp_path):
+    """python-can's `virtual` bus with an ARXML database: the frames reach
+    zelos-can's Rust decoder, so 10 s of the can-full ECU decode as on
+    zelos-virtual (container, multiplexed, E2E, SecOC), at the frames' own
+    timestamps, and its messages are addressed by PDU name."""
+    frames = []
+    for line in (FILES / "can-full-10s.candump").read_text().splitlines():
+        stamp, _, frame = line.split()
+        can_id, data = frame.split("#")
+        frames.append((float(stamp.strip("()")), int(can_id, 16), bytes.fromhex(data)))
+    config = {
+        "buses": [
+            {
+                "interface": "Other (python-can)",
+                "name": "pycan",
+                "config_json": json.dumps({"interface": "virtual", "channel": "autosar_pycan"}),
+                "database_files": [str(CAN_FULL)],
+            }
+        ],
+        "advanced": {"timestamp_mode": "absolute"},
+    }
+    namespace = zelos_sdk.TraceNamespace("autosar_pycan")
+    trz = tmp_path / "pycan.trz"
+    with zelos_sdk.TraceWriter(str(trz), namespace=namespace):
+        source = zelos_sdk.TraceSource("CAN", namespace=namespace)
+        ((codec, _),) = _create_codecs(config, SYSTEM, resolve_advanced(config), source)
+        codec.start()
+        codec._start_notifier()
+        peer = can.Bus(interface="virtual", channel="autosar_pycan", preserve_timestamps=True)
+        try:
+            for stamp, can_id, data in frames:
+                peer.send(
+                    can.Message(
+                        timestamp=stamp, arbitration_id=can_id, data=data, is_extended_id=False
+                    )
+                )
+            deadline = time.monotonic() + 10
+            while codec.get_tx_state()["bus"]["metrics"]["messages_received"] < len(frames):
+                assert time.monotonic() < deadline, codec.get_tx_state()["bus"]["metrics"]
+                time.sleep(0.01)
+            assert codec.describe_message("0310_DcdcOutputP1")["message"]["can_id"] == 0x310
+        finally:
+            peer.shutdown()
+            codec.stop()
+
+    with zelos_sdk.TraceReader(str(trz)) as reader:
+        segments = [s.id for s in reader.list_data_segments()]
+        span = reader.time_range()
+
+        def column(field, name=None):
+            result = reader.query(
+                data_segment_ids=segments,
+                fields=[f"*/CAN/pycan/{field}"],
+                start=span.start,
+                end=span.end,
+            )
+            table = pa.ipc.open_stream(result.to_arrow()).read_all()
+            return table.column(name or f"CAN/pycan/{field}").to_pylist()
+
+        e2e = {"0310_DcdcOutputP1": 503, "0311_DcdcThermalP2": 201, "0312_DcdcPowerP5": 503}
+        for event, rows in e2e.items():
+            assert Counter(column(f"{event}.e2e_status")) == {E2E_OK: rows}, event
+        assert Counter(column("0315_DcdcSecured.secoc")) == {0: 100}  # unverified
+        # the container's three PDUs, the multiplexed PDU's two dynamic parts
+        counts = {
+            "0313_DcdcHealth.UptimeS": 167,
+            "0313_DcdcInput.InputVoltage": 168,
+            "0313_DcdcRail.OutputVoltage": 168,
+            "0314_DcdcMux/DcdcMuxCurrents.OutputCurrent": 100,
+            "0314_DcdcMux/DcdcMuxLimits.AuxCurrentLimit": 101,
+        }
+        assert {field: len(column(field)) for field in counts} == counts
+        stamps = column("Frame.arbitration_id", "time_s")
+        assert (stamps[0], stamps[-1]) == pytest.approx((frames[0][0], frames[-1][0]), abs=1e-6)
+
+
+@pytest.mark.parametrize("receive_own", [False, True])
+def test_zelos_virtual_decodes_its_own_periodic_only_with_receive_own_messages(receive_own):
+    """A periodic this bus sends decodes only with Receive Own Messages; a
+    peer's frame always does."""
+    channel = f"autosar_own_{receive_own}"
+    config = {
+        "buses": [_bus("own", channel, TEST_DBC)],
+        "advanced": {"receive_own_messages": receive_own},
+    }
+    ((codec, _),) = _create_codecs(
+        config, TEST_DBC, resolve_advanced(config), zelos_sdk.TraceSourceCache("CAN")
+    )
+    peer = VirtualBus(channel)
+    codec.start()
+    try:
+        codec.start_periodic_raw("0x64", "0102030405060708", period_ms=10)
+        sent = 0
+        while sent < 5:
+            frame = peer.recv(timeout=2.0)
+            assert frame is not None
+            sent += frame.arbitration_id == 0x64
+        # A peer's frame of no message: decoded once everything before it is.
+        peer.send(id=0x7FF, data=bytes(1))
+        deadline = time.monotonic() + 5
+        while (metrics := codec.get_tx_state()["bus"]["metrics"])["unknown_messages"] < 1:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+    finally:
+        codec.stop()
+    if receive_own:
+        assert metrics["messages_received"] > sent
+    else:
+        assert metrics["messages_received"] == 1

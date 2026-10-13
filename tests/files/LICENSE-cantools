@@ -1,4 +1,4 @@
-Files *.arxml in this directory except someip-*.arxml are copied unmodified from
+Files *.arxml in this directory except someip-*.arxml and can-full.arxml are copied unmodified from
 https://github.com/cantools/cantools/tree/29bc44be34029f319dc9f31473860f11da51e59a/tests/files/arxml
 
 The MIT License (MIT)

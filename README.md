@@ -66,7 +66,7 @@ before the extension has ever started.
   | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
   | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
   | gs_usb (USB) | `gs_usb` | candleLight and CANable (gs_usb firmware) over libusb; classic CAN; needs the `gs_usb` extra |
-  | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface. `{"interface": "zelos-virtual", "channel": ...}` is zelos-can's in-memory bus, decoded on the Rust path as SocketCAN is |
+  | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface. `{"interface": "zelos-virtual", "channel": ...}` is zelos-can's in-memory bus, decoded on the Rust path as SocketCAN is; it decodes the frames it sends only with **Receive Own Messages** |
   | Demo | | Built-in EV simulator |
 
 - **Channel**: Specify the CAN channel/device name. For slcan (serial) (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
@@ -157,8 +157,10 @@ Other interfaces log a warning and decode nothing.
 
 ### AUTOSAR ARXML
 
-`.arxml` files decode natively on SocketCAN, SocketCAN over SSH and zelos-can's
-in-memory bus (Other with `zelos-virtual`), and in `convert`. A bus's ARXML files
+`.arxml` files decode natively on every interface and in `convert`. On PCAN,
+Kvaser, Vector, slcan and other python-can buses, python-can stays the adapter and
+the transmit path and hands each frame, with its adapter timestamp, to zelos-can's
+decoder; a bus with DBC files only decodes as before. A bus's ARXML files
 load as one system, references resolved across files; a system with several CAN
 clusters needs **ARXML CAN Cluster** (`--cluster` in the CLI). On small edge
 machines prefer the ECU extract (the ECU's own slice of the system) to a
@@ -175,7 +177,6 @@ whole-vehicle file: about 0.2 s and 0.5 GB of transient memory per 80 MB of ARXM
 | **CanTp** | ISO 15765-2 single, first and consecutive frames on the N-PDUs the ARXML maps to CanTp, normal and extended (or mixed) addressing, CAN FD lengths. The reassembled I-PDU decodes as any other, under the N-PDU's frame id. A wrong sequence number drops the transfer. Counters `cantp_completed`, `cantp_dropped`. |
 | **Raw only, with a warning** | Static-layout containers, frames carrying several PDUs, signals over 64 bits. 1C and sign-magnitude signals read as two's complement. |
 | **Transmit and describe** | ARXML messages are addressed by their table name (`0005_message1`) and encoded per frame, as DBC messages. A transmit does not fill in E2E or SecOC fields. |
-| **Other interfaces** | PCAN, Kvaser, Vector, slcan and other python-can buses decode ARXML signals without the PDU handling above. |
 
 ### Advanced Settings
 
@@ -317,7 +318,7 @@ uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --prefix ''
 # Launch trace process and record to .trz file
 uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --file
 
-# Convert a CAN log to Zelos trace format (.asc, .blf, .trc, .log, .csv, .mf4; MF4 needs no asammdf)
+# Convert a CAN log to Zelos trace format (.asc, .blf, .trc, candump .log/.candump, .csv, .mf4; MF4 needs no asammdf)
 # A .csv needs python-can's header: timestamp,arbitration_id,extended,remote,error,dlc,data
 uv run main.py convert capture.log vehicle.dbc
 
