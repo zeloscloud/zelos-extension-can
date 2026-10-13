@@ -62,7 +62,7 @@ def convert(
 ) -> None:
     """Convert CAN log files to Zelos trace format.
 
-    Supported formats: .asc, .blf, .trc, .log, .csv, .mf4
+    Supported formats: .asc, .blf, .trc, .log / .candump, .csv, .mf4
 
     Databases are applied in order; a later file wins a message id defined
     differently by an earlier one. With none, only raw frames are written.
