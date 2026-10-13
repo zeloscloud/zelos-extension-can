@@ -7,7 +7,7 @@ description = "Capture, decode (DBC) and send CAN and CAN-FD frames live, and co
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
 homepage = "https://github.com/zeloscloud/zelos-extension-can"
-keywords = ["can", "can-bus", "can-fd", "automotive", "vehicle", "dbc", "decode", "convert", "log", "candump", "asc", "blf", "trc", "csv", "mf4", "trz"]
+keywords = ["can", "can-bus", "can-fd", "automotive", "vehicle", "dbc", "decode", "convert", "log", "candump", "asc", "blf", "trc", "csv", "mf4", "trz", "demo", "simulator", "simulation", "ev"]
 categories = ["Automotive", "Networking", "Industrial", "IoT"]
 
 # File references (relative paths in archive)
