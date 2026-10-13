@@ -620,6 +620,13 @@
           ],
           "default": "auto"
         },
+        "send_timeout": {
+          "type": "number",
+          "title": "Send Timeout (s)",
+          "description": "SocketCAN and SocketCAN over SSH: how long a send waits for room in the host's transmit queue before failing with 'Transmit buffer full'. 0 tries once.",
+          "minimum": 0,
+          "default": 1.0
+        },
         "j1939": {
           "type": "boolean",
           "title": "J1939",

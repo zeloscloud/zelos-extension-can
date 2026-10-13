@@ -145,6 +145,7 @@ One value each, applied to every bus.
 | **Receive Own Messages** | Receive frames this host transmits. |
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
 | **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
+| **Send Timeout (s)** | SocketCAN / SocketCAN over SSH: how long a send waits for room in the host's transmit queue before failing (default 1 s; 0 tries once). |
 | **J1939** | Every 29-bit message on a SocketCAN / SocketCAN over SSH bus is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
 | **J1939 Node** | The DBC node the SocketCAN / SocketCAN over SSH buses claim and send as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
 | **CANopen** | Decode CANopen for every node-id on a SocketCAN / SocketCAN over SSH bus with no CANopen nodes listed (default off). See [CANopen](#canopen). |
