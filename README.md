@@ -29,6 +29,21 @@ In the app:
 3. **Start** the extension to begin streaming data
 4. **View** real-time data in your Zelos App
 
+### Extras
+
+Optional dependencies, installed only when selected:
+
+| Extra | Adds | For |
+|---|---|---|
+| `gs_usb` | `gs-usb`, `libusb-package` | the gs_usb (USB) interface |
+
+```bash
+zelos extensions install zeloscloud/zelos-extension-can --extras gs_usb
+zelos extensions reinstall zeloscloud.zelos-extension-can --extras gs_usb   # add to an install
+```
+
+A reinstall or update installs only the extras it names; omit them and none are installed.
+
 ## Configuration
 
 ### Filling in the form
