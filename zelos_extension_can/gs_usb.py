@@ -17,7 +17,7 @@ INTERFACE = "gs_usb"
 
 MISSING_EXTRA = (
     "gs_usb (USB) needs this extension's gs_usb extra (gs-usb, libusb-package), "
-    "which is not installed"
+    "which is not installed. Reinstall the extension with the gs_usb extra"
 )
 
 
