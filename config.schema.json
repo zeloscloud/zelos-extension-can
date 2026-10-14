@@ -38,14 +38,20 @@
           },
           "database_files": {
             "type": "array",
-            "title": "Database Files (.dbc)",
-            "description": "CAN database files (.dbc, .arxml, .kcd, .sym). Order is precedence: a later file wins a message an earlier one defines differently. Two files naming one message id differently both decode, each into its own table. Leave empty for a raw-frames-only bus.",
+            "title": "Database Files (.dbc, .arxml)",
+            "description": "CAN database files: DBC and AUTOSAR ARXML. Order is precedence: a later file wins a message an earlier one defines differently. Two files naming one message id differently both decode, each into its own table. The ARXML files of a bus load as one system. Leave empty for a raw-frames-only bus.",
             "items": {
               "type": "string",
               "ui:widget": "file-picker"
             },
             "default": [],
             "ui:orderable": true
+          },
+          "cluster": {
+            "type": "string",
+            "title": "ARXML CAN Cluster",
+            "description": "The CAN cluster of this bus's ARXML files, by short-name. Required when they describe more than one CAN cluster; the start error then lists them. Ignored without an .arxml file.",
+            "ui:placeholder": "the only CAN cluster"
           },
           "canopen_nodes": {
             "type": "array",
@@ -569,6 +575,7 @@
           "remote_channel",
           "name",
           "database_files",
+          "cluster",
           "canopen_nodes",
           "*"
         ]

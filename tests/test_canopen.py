@@ -31,7 +31,7 @@ def test_schema_takes_a_node_by_id_or_by_dcf_and_refuses_an_id_out_of_range():
 
 def test_convert_cli_passes_the_nodes_to_the_decoder(tmp_path, monkeypatch):
     passed = []
-    monkeypatch.setattr(converter, "_convert_with_progress", lambda *args: passed.append(args))
+    monkeypatch.setattr(converter, "_convert_with_progress", lambda *args, **_: passed.append(args))
     log = tmp_path / "bus.log"
     log.write_text("")
 

@@ -5,7 +5,7 @@
 - 📊 **Visualizing CAN frames** - Real-time decoding of CAN messages
 - 📤 **Sending CAN frames** - Send CAN messages directly from the Zelos App
 - ⚙️ **Supports any CAN HW/SW stack** - Support for SocketCAN, PCAN, Kvaser, Vector, and virtual interfaces
-- 📄 **Multiple database formats** - Supports DBC, ARXML, KCD, and SYM formats
+- 📄 **DBC and AUTOSAR ARXML** - Container, multiplexed and secured PDUs, E2E status, CanTp
 - 📡 **All CAN Protocols** - CANopen, J1939, CAN FD, CAN2.0 A/B
 - 📁 **Trace file conversion** - Convert CAN logs to Zelos format for offline analysis
 - 🚗 **Demo mode** - Built-in EV simulation for testing without hardware
@@ -25,7 +25,7 @@ zelos extensions start zeloscloud.zelos-extension-can \
 In the app:
 
 1. **Install** the extension from the Zelos App
-2. **Configure** your CAN connection and add your database files (.dbc, .arxml, .kcd, or .sym)
+2. **Configure** your CAN connection and add your database files (.dbc or .arxml)
 3. **Start** the extension to begin streaming data
 4. **View** real-time data in your Zelos App
 
@@ -50,7 +50,7 @@ before the extension has ever started.
   | SocketCAN over SSH | `zelos-ssh-socketcan` | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh) |
   | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
   | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
-  | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface |
+  | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface. `{"interface": "zelos-virtual", "channel": ...}` is zelos-can's in-memory bus, decoded on the Rust path as SocketCAN is; it decodes the frames it sends only with **Receive Own Messages** |
   | Demo | | Built-in EV simulator |
 
 - **Channel**: Specify the CAN channel/device name. For slcan (serial) (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
@@ -58,7 +58,8 @@ before the extension has ever started.
 ### Per-Bus Settings
 | Setting | What it does |
 |---|---|
-| **Database Files (.dbc)** | Ordered list of CAN databases. Order is precedence: a later file wins a message an earlier one defines differently. Leave empty for a raw-frames-only bus. |
+| **Database Files (.dbc, .arxml)** | Ordered list of CAN databases. Order is precedence: a later file wins a message an earlier one defines differently. Leave empty for a raw-frames-only bus. |
+| **ARXML CAN Cluster** | The CAN cluster the bus's ARXML files decode, by short-name. Required when they describe several; the start error lists them. See [AUTOSAR ARXML](#autosar-arxml). |
 | **Name** | Trace segment for this bus. Letters, digits, space, `_`, `-` only. Defaults to the sanitized channel. |
 | **Bitrate** | CAN bus bitrate (default 500000). |
 | **FD Mode** | Enable CAN-FD support. |
@@ -133,6 +134,29 @@ Other interfaces log a warning and decode nothing.
 | **Status** | `CANopen Nodes`: per node, `configured`, NMT `state`, `last_heartbeat_ns`, `heartbeat_period_ms`, `heartbeat_lost`, `emcy_count`, `last_emcy_code`, `sdo_count`. `Get TX State` carries the `canopen_*` counters: frames, SDO completed / aborted / resync / CRC error, short frames, heartbeat late / lost, unknown nodes, PDO short / remapped / reverted / unlearned, client SDO / timeout / stale. |
 | **Transmit** | `CANopen SDO Read` / `SDO Write` / `NMT` [actions](#actions), on a running bus with CANopen decode on (nodes listed or the Advanced toggle): the SDO client matches answers through the decoder. The extension is the SDO client and NMT master, never a node. SDO Write and NMT change device state with no confirmation, like `Send Raw`. |
 | **Demo** | **Simulated CANopen node** on a Demo bus adds node `0x20`, a power distribution unit described by the bundled `pdu.eds`, and decodes the demo bus on the Rust path. |
+
+### AUTOSAR ARXML
+
+`.arxml` files decode natively on every interface and in `convert`. On PCAN,
+Kvaser, Vector, slcan and other python-can buses, python-can stays the adapter and
+the transmit path and hands each frame, with its adapter timestamp, to zelos-can's
+decoder; a bus with DBC files only decodes as before. A bus's ARXML files
+load as one system, references resolved across files; a system with several CAN
+clusters needs **ARXML CAN Cluster** (`--cluster` in the CLI). On small edge
+machines prefer the ECU extract (the ECU's own slice of the system) to a
+whole-vehicle file: about 0.2 s and 0.5 GB of transient memory per 80 MB of ARXML.
+
+| What | Behavior |
+|---|---|
+| **Naming** | As DBC messages, a table per frame named `<id>_<frame short-name>`: frame `Message1` carrying PDU `message1` is `0005_Message1`. PDUs a frame carries nest under it by name. |
+| **Signal PDUs** | As DBC messages, including a PDU that starts past byte 0 of its frame. |
+| **Container PDUs** | Short (24-bit id, 8-bit length) and long (32 + 32) headers, in the system's header byte order. Each contained PDU decodes into its own table under the frame: `0066_OneToContainThemAll/message2`; the container frame itself has none. An unknown header id is skipped, warned once and counted (`pdu_unknown_contained`). |
+| **Multiplexed PDUs** | The static part under the frame's name, the selected dynamic part under `<frame>/<dynamic PDU>`: `0004_MultiplexedMessage/multiplexed_message_1`. A selector with no dynamic part is counted (`pdu_unknown_selector`). |
+| **Secured PDUs** | The freshness value and authenticator are cut by the ARXML lengths and the authentic PDU decodes under the frame's name (`0064_Message3`), with a `secoc` column reading `unverified`: keys are never in the config, so the MAC is not checked. |
+| **E2E** | Profiles 1, 2, 4, 5, 6, 7, 11 and 22, checked from the ARXML protection (data ids, offsets, counter, CRC). Each protected PDU gets an `e2e_status` column: `ok`, `wrong_crc` (CRC, data id or length), `wrong_sequence`, `repeated` or `not_checked` (a profile or setting not verified). The first frame after start sets the counter. |
+| **CanTp** | ISO 15765-2 single, first and consecutive frames on the N-PDUs the ARXML maps to CanTp, normal and extended (or mixed) addressing, CAN FD lengths. The reassembled I-PDU decodes as any other, under the N-PDU's frame (`<id>_<frame>`; `<id>_<frame>/<I-PDU>` each when the frame carries several connections). A wrong sequence number drops the transfer. Counters `cantp_completed`, `cantp_dropped`. |
+| **Raw only, with a warning** | Static-layout containers, frames carrying several PDUs, signals over 64 bits. 1C and sign-magnitude signals read as two's complement. |
+| **Transmit and describe** | ARXML messages are addressed by frame (`0005_Message1`) and encoded per frame, as DBC messages. A transmit does not fill in E2E or SecOC fields. |
 
 ### Advanced Settings
 
@@ -273,7 +297,7 @@ uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --prefix ''
 # Launch trace process and record to .trz file
 uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --file
 
-# Convert a CAN log to Zelos trace format (.asc, .blf, .trc, .log, .csv, .mf4; MF4 needs no asammdf)
+# Convert a CAN log to Zelos trace format (.asc, .blf, .trc, candump .log/.candump, .csv, .mf4; MF4 needs no asammdf)
 # A .csv needs python-can's header: timestamp,arbitration_id,extended,remote,error,dlc,data
 uv run main.py convert capture.log vehicle.dbc
 
@@ -289,6 +313,9 @@ uv run main.py convert capture.log vehicle.dbc --j1939
 
 # CANopen node 0x20 with its EDS, and node 5 without one, named left
 uv run main.py convert capture.log --canopen-node 0x20:pdu.eds --canopen-node 5::left
+
+# AUTOSAR ARXML: pick the CAN cluster when the system has several
+uv run main.py convert capture.blf system.arxml --cluster Powertrain
 ```
 
 ## Support
