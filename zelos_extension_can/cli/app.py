@@ -109,8 +109,12 @@ def _create_codecs(
             bus = gs_usb.bus_config(bus)
         prepared_configs.append(_prepare_bus_config(bus, demo_dbc_path, advanced))
     # Also covers gs_usb through "Other (python-can)".
-    if any(p["interface"] == gs_usb.INTERFACE for p in prepared_configs):
+    gs_buses = [p for p in prepared_configs if p["interface"] == gs_usb.INTERFACE]
+    if gs_buses:
         gs_usb.prime_libusb()
+    for prepared in gs_buses:
+        # Host receive time: the adapter's 32-bit us counter wraps every 71.6 min.
+        prepared["timestamp_mode"] = "ignore"
     for prepared in prepared_configs:
         for key in EXTENSION_BUS_KEYS:
             prepared.setdefault(key, advanced[key])
