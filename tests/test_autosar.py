@@ -1,5 +1,6 @@
 """AUTOSAR ARXML end to end through the extension: two buses on zelos-can's
-in-memory bus, cantools-encoded frames in, decoded PDUs and E2E status out;
+in-memory bus, cantools-encoded frames in, decoded PDUs under their frames and
+E2E status out;
 and a python-can bus decoding a real ECU's capture.
 
 system-4.2.arxml (cantools' fixture) has one CAN cluster; the generated
@@ -67,7 +68,7 @@ def buses():
         codec.stop()
 
 
-def test_arxml_pdus_decode_by_pdu_name_with_e2e_status(buses):
+def test_arxml_pdus_decode_under_their_frame_with_e2e_status(buses):
     cache, vbus = buses
     db = cantools.database.load_file(str(SYSTEM))
 
@@ -101,12 +102,13 @@ def test_arxml_pdus_decode_by_pdu_name_with_e2e_status(buses):
         box.encode([(m2, {"signal3": 2, "signal2": -100, "signal4": 9}), (mux, mux_values)]),
     )
 
-    assert _wait(cache, "sys42/0005_message1/signal1") == 15
-    assert _wait(cache, "sys42/0005_message1/e2e_status") == E2E_OK
-    assert _wait(cache, "sys42/0064_message3_secured/e2e_status") == E2E_OK
-    assert _wait(cache, "sys42/0064_message3_secured/secoc") == 0  # unverified
-    assert _wait(cache, "sys42/0066_message2/signal2") == -100
-    assert _wait(cache, "sys42/0066_multiplexed_message/multiplexed_message_1/World1") == 1
+    box_event = "sys42/0066_OneToContainThemAll"
+    assert _wait(cache, "sys42/0005_Message1/signal1") == 15
+    assert _wait(cache, "sys42/0005_Message1/e2e_status") == E2E_OK
+    assert _wait(cache, "sys42/0064_Message3/e2e_status") == E2E_OK
+    assert _wait(cache, "sys42/0064_Message3/secoc") == 0  # unverified
+    assert _wait(cache, f"{box_event}/message2/signal2") == -100
+    assert _wait(cache, f"{box_event}/multiplexed_message/multiplexed_message_1/World1") == 1
 
     # the cluster-selected bus: Can1's container and secured PDU
     can1 = cantools.database.load_file(str(SOMEIP))
@@ -121,16 +123,16 @@ def test_arxml_pdus_decode_by_pdu_name_with_e2e_status(buses):
     )
     sf0 = next(m for m in can1.messages if m.name == "SF0")
     send("can1", sf0, bytes(range(16)))
-    assert _wait(cache, "can1/1f000000_C0_1/C0_1_0") == 7
-    assert _wait(cache, "can1/1f000000_C0_0/C0_0_1") == 6
-    assert _wait(cache, "can1/1e000000_SEC0/secoc") == 0
+    assert _wait(cache, "can1/1f000000_CF0/C0_1/C0_1_0") == 7
+    assert _wait(cache, "can1/1f000000_CF0/C0_0/C0_0_1") == 6
+    assert _wait(cache, "can1/1e000000_SF0/secoc") == 0
 
 
 def test_a_python_can_bus_decodes_arxml_on_the_rust_decoder(tmp_path):
     """python-can's `virtual` bus with an ARXML database: the frames reach
     zelos-can's Rust decoder, so 10 s of the can-full ECU decode as on
     zelos-virtual (container, multiplexed, E2E, SecOC), at the frames' own
-    timestamps, and its messages are addressed by PDU name."""
+    timestamps, and its messages are addressed by frame name."""
     frames = []
     for line in (FILES / "can-full-10s.candump").read_text().splitlines():
         stamp, _, frame = line.split()
@@ -191,9 +193,9 @@ def test_a_python_can_bus_decodes_arxml_on_the_rust_decoder(tmp_path):
         assert Counter(column("0315_DcdcSecured.secoc")) == {0: 100}  # unverified
         # the container's three PDUs, the multiplexed PDU's two dynamic parts
         counts = {
-            "0313_DcdcHealth.UptimeS": 167,
-            "0313_DcdcInput.InputVoltage": 168,
-            "0313_DcdcRail.OutputVoltage": 168,
+            "0313_DcdcContainer/DcdcHealth.UptimeS": 167,
+            "0313_DcdcContainer/DcdcInput.InputVoltage": 168,
+            "0313_DcdcContainer/DcdcRail.OutputVoltage": 168,
             "0314_DcdcMux/DcdcMuxCurrents.OutputCurrent": 100,
             "0314_DcdcMux/DcdcMuxLimits.AuxCurrentLimit": 101,
         }
