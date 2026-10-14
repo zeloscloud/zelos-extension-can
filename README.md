@@ -168,15 +168,15 @@ whole-vehicle file: about 0.2 s and 0.5 GB of transient memory per 80 MB of ARXM
 
 | What | Behavior |
 |---|---|
-| **Naming** | A table per I-PDU, named by its short-name under the id of the frame it arrived on: `0005_message1`. The frame's name is not used. |
+| **Naming** | As DBC messages, a table per frame named `<id>_<frame short-name>`: frame `Message1` carrying PDU `message1` is `0005_Message1`. PDUs a frame carries nest under it by name. |
 | **Signal PDUs** | As DBC messages, including a PDU that starts past byte 0 of its frame. |
-| **Container PDUs** | Short (24-bit id, 8-bit length) and long (32 + 32) headers, in the system's header byte order. Each contained PDU decodes into its own table: `0066_message2`. An unknown header id is skipped, warned once and counted (`pdu_unknown_contained`). |
-| **Multiplexed PDUs** | The static part under the PDU's name, the selected dynamic part under `<PDU>/<dynamic PDU>`: `0004_multiplexed_message/multiplexed_message_1`. A selector with no dynamic part is counted (`pdu_unknown_selector`). |
-| **Secured PDUs** | The freshness value and authenticator are cut by the ARXML lengths and the authentic PDU decodes under the secured PDU's name, with a `secoc` column reading `unverified`: keys are never in the config, so the MAC is not checked. |
+| **Container PDUs** | Short (24-bit id, 8-bit length) and long (32 + 32) headers, in the system's header byte order. Each contained PDU decodes into its own table under the frame: `0066_OneToContainThemAll/message2`; the container frame itself has none. An unknown header id is skipped, warned once and counted (`pdu_unknown_contained`). |
+| **Multiplexed PDUs** | The static part under the frame's name, the selected dynamic part under `<frame>/<dynamic PDU>`: `0004_MultiplexedMessage/multiplexed_message_1`. A selector with no dynamic part is counted (`pdu_unknown_selector`). |
+| **Secured PDUs** | The freshness value and authenticator are cut by the ARXML lengths and the authentic PDU decodes under the frame's name (`0064_Message3`), with a `secoc` column reading `unverified`: keys are never in the config, so the MAC is not checked. |
 | **E2E** | Profiles 1, 2, 4, 5, 6, 7, 11 and 22, checked from the ARXML protection (data ids, offsets, counter, CRC). Each protected PDU gets an `e2e_status` column: `ok`, `wrong_crc` (CRC, data id or length), `wrong_sequence`, `repeated` or `not_checked` (a profile or setting not verified). The first frame after start sets the counter. |
-| **CanTp** | ISO 15765-2 single, first and consecutive frames on the N-PDUs the ARXML maps to CanTp, normal and extended (or mixed) addressing, CAN FD lengths. The reassembled I-PDU decodes as any other, under the N-PDU's frame id. A wrong sequence number drops the transfer. Counters `cantp_completed`, `cantp_dropped`. |
+| **CanTp** | ISO 15765-2 single, first and consecutive frames on the N-PDUs the ARXML maps to CanTp, normal and extended (or mixed) addressing, CAN FD lengths. The reassembled I-PDU decodes as any other, under the N-PDU's frame (`<id>_<frame>`; `<id>_<frame>/<I-PDU>` each when the frame carries several connections). A wrong sequence number drops the transfer. Counters `cantp_completed`, `cantp_dropped`. |
 | **Raw only, with a warning** | Static-layout containers, frames carrying several PDUs, signals over 64 bits. 1C and sign-magnitude signals read as two's complement. |
-| **Transmit and describe** | ARXML messages are addressed by their table name (`0005_message1`) and encoded per frame, as DBC messages. A transmit does not fill in E2E or SecOC fields. |
+| **Transmit and describe** | ARXML messages are addressed by frame (`0005_Message1`) and encoded per frame, as DBC messages. A transmit does not fill in E2E or SecOC fields. |
 
 ### Advanced Settings
 
