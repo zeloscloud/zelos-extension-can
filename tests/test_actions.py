@@ -254,7 +254,7 @@ class TestCsvHeader:
 
         result = actions.convert(input_file=str(src), database_file=str(DBC_PATH))
 
-        assert result["messages_converted"] == 3
+        assert (result["frames"], result["frames_decoded"], result["frames_undefined"]) == (3, 3, 0)
         assert Path(result["output_file"]).is_file()
 
 
