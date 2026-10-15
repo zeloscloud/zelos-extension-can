@@ -955,6 +955,7 @@ def _slcan_adapters() -> list[dict[str, str]]:
     # wants the list before the extension has ever run.
     standalone=True,
     read_only=True,
+    hidden=True,
 )
 def list_interfaces() -> dict[str, Any]:
     """The app's `action-choices` contract: `choices` in the order to show."""
@@ -1026,6 +1027,7 @@ def _apply_form(
     # Detection enumerates adapters and opens none (a gs_usb product string read
     # aside); the config it returns is a proposal the form applies only when saved.
     read_only=True,
+    hidden=True,
 )
 @action.object(
     "config",
