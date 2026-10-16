@@ -43,6 +43,30 @@ def filter_archive_files(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
     return tarinfo
 
 
+def agent_spec(manifest: dict) -> dict:
+    """The agent table: `[agent]`, or the legacy `[runtime]` of older manifests.
+
+    :param manifest: Parsed extension.toml
+    :return: The table, or an empty dict when the extension has no agent
+    """
+    return manifest.get("agent") or manifest.get("runtime") or {}
+
+
+def require_panel_files(manifest: dict) -> None:
+    """Exit when a declared panel's entry, icon or options schema is missing.
+
+    A panel whose built document is missing installs and then fails to load.
+
+    :param manifest: Parsed extension.toml
+    """
+    for panel in manifest.get("app", {}).get("panels", []):
+        for key in ("entry", "icon", "options_schema"):
+            file_path = panel.get(key)
+            if file_path and not Path(file_path).is_file():
+                print(f"ERROR: Panel file missing: {file_path} (run `just web-build` first)")
+                sys.exit(1)
+
+
 def generate_actions_inventory(manifest: dict) -> str | None:
     """Generate `actions.json` from the SDK's standalone-action harness.
 
@@ -57,7 +81,7 @@ def generate_actions_inventory(manifest: dict) -> str | None:
     :param manifest: Parsed extension.toml
     :return: Archive-relative path to include, or None when nothing was written
     """
-    entry = manifest.get("runtime", {}).get("entry")
+    entry = agent_spec(manifest).get("entry")
     if not entry:
         return None
 
@@ -134,11 +158,11 @@ def main() -> None:
     # Collect files to package
     files = ["extension.toml"]  # Always required
 
-    runtime = manifest.get("runtime", {})
-    if "entry" in runtime:
-        files.append(runtime["entry"])
-    if "requirements" in runtime:
-        req_file = runtime["requirements"]
+    agent = agent_spec(manifest)
+    if "entry" in agent:
+        files.append(agent["entry"])
+    if "requirements" in agent:
+        req_file = agent["requirements"]
         if Path(req_file).exists():
             files.append(req_file)
 
@@ -179,6 +203,11 @@ def main() -> None:
     for path in Path().iterdir():
         if path.is_dir() and path.name not in exclude_dirs and (path / "__init__.py").exists():
             files.append(path.name)
+
+    # Everything the manifest asks for, the built web project (dist/) included
+    files.extend(manifest.get("package", {}).get("paths", []))
+
+    require_panel_files(manifest)
 
     inventory = generate_actions_inventory(manifest)
     if inventory:
