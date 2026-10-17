@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import sys
+import time
 from collections.abc import Collection
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ import zelos_sdk
 from zelos_can.bus import BUS_DEFAULTS, BusConfigError, prepare_bus_config
 from zelos_can.codec import CanCodec
 from zelos_can.naming import DEFAULT_PREFIX, LOG_SOURCE_NAME, name_error, trace_layout
+from zelos_can.ssh_socketcan import SshPermanentError
 from zelos_sdk.extensions import load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
@@ -33,6 +35,7 @@ ADVANCED_DEFAULTS: dict = {
     "j1939": False,
     "j1939_node": "",
     "canopen": False,
+    "retry_unreachable_at_start": False,
     "log_level": "INFO",
 }
 
@@ -42,6 +45,10 @@ EXTENSION_BUS_KEYS = ("j1939", "canopen")
 
 #: Interfaces whose bus runs zelos-can's Rust codec, the only ones with a J1939 node.
 RUST_INTERFACES = ("zelos-socketcan", "zelos-ssh-socketcan")
+
+#: `retry_unreachable_at_start` backoff: the ssh supervisor's cadence.
+_RETRY_START_INTERVAL = 5.0
+_RETRY_START_MAX = 60.0
 
 
 def resolve_advanced(config: dict) -> dict:
@@ -158,24 +165,80 @@ def _create_codecs(
     return codecs
 
 
-async def _run_codecs_async(codecs: list[CanCodec]) -> None:
+def _transient_start_error(error: BaseException) -> bool:
+    """A start failure a retry can fix: the link is down, not the config or the host."""
+    return isinstance(error, can.exceptions.CanError) and not isinstance(
+        error, (SshPermanentError, can.exceptions.CanInterfaceNotImplementedError)
+    )
+
+
+async def _retry_start(codec: CanCodec, error: Exception) -> None:
+    """Retry `codec.start()` after a transient failure (an edge that is off, an
+    adapter not plugged in yet) on a 5 s doubling to 60 s backoff: ERROR once,
+    then once a minute. A failure retrying cannot fix propagates.
+
+    The retries stay on the event loop: a start that succeeded on a thread
+    after shutdown began would never be stopped, and an ssh bus owns
+    non-daemon threads.
+    """
+    interval = _RETRY_START_INTERVAL
+    attempts = 1
+    logged_at = time.monotonic()
+    logger.error("[%s] Cannot start: %s; retrying in %.0f s", codec.bus_name, error, interval)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            codec.start(quiet=True)
+        except Exception as e:
+            if not _transient_start_error(e):
+                raise
+            attempts += 1
+            interval = min(interval * 2, _RETRY_START_MAX)
+            if time.monotonic() - logged_at >= 60:
+                logged_at = time.monotonic()
+                logger.error(
+                    "[%s] Still cannot start after %d attempts: %s", codec.bus_name, attempts, e
+                )
+            continue
+        logger.info("[%s] Started after %d attempts", codec.bus_name, attempts)
+        return
+
+
+async def _run_codecs_async(codecs: list[CanCodec], retry_unreachable: bool = False) -> None:
     """Run multiple codecs concurrently.
 
     :param codecs: List of CanCodec instances to run
+    :param retry_unreachable: Retry a bus that cannot start instead of stopping
     """
     # Start buses inside the try so that if one start() raises, the finally
     # stops the buses already started. Otherwise an already-started bus owning
     # non-daemon ssh threads (with a live remote candump session) is never torn
     # down and the process hangs forever.
     started: list[CanCodec] = []
+    # (codec, its start error): retried beside the running buses.
+    pending: list[tuple[CanCodec, Exception]] = []
+
+    async def retry_then_run(codec: CanCodec, error: Exception) -> None:
+        await _retry_start(codec, error)
+        started.append(codec)
+        await codec._run_async()
+
     try:
         for codec in codecs:
-            codec.start()
+            try:
+                codec.start()
+            except Exception as e:
+                if not (retry_unreachable and _transient_start_error(e)):
+                    raise
+                pending.append((codec, e))
+                continue
             started.append(codec)
 
         # Run all codecs concurrently using their async run method
-        tasks = [asyncio.create_task(codec._run_async()) for codec in codecs]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(
+            *[codec._run_async() for codec in started],
+            *[retry_then_run(codec, error) for codec, error in pending],
+        )
     except asyncio.CancelledError:
         logger.info("Codec tasks cancelled")
     finally:
@@ -300,7 +363,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         # _run_codecs_async's try/finally has already stopped every bus it
         # started, so cleanup is complete by the time we get here.
         try:
-            asyncio.run(_run_codecs_async(codecs))
+            asyncio.run(_run_codecs_async(codecs, advanced["retry_unreachable_at_start"]))
         except (can.exceptions.CanError, ValueError, FileNotFoundError, RuntimeError) as e:
             logger.error("CAN bus failed: %s", e)
             sys.exit(1)
