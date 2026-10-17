@@ -712,6 +712,13 @@
           "minimum": 0,
           "default": 1.0
         },
+        "retry_unreachable_at_start": {
+          "type": "boolean",
+          "title": "Retry Unreachable at Start",
+          "description": "Off: a bus that cannot start stops the extension. On: it logs an ERROR and is retried like a dropped link while the other buses run. A failure an operator must fix still stops the extension: a permanent ssh failure (the log says how to fix it), or a SocketCAN interface that does not exist.",
+          "default": false,
+          "ui:widget": "toggle"
+        },
         "j1939": {
           "type": "boolean",
           "title": "J1939",

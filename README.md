@@ -180,6 +180,7 @@ One value each, applied to every bus.
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
 | **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
 | **Send Timeout (s)** | SocketCAN / SocketCAN over SSH: how long a send waits for room in the host's transmit queue before failing (default 1 s; 0 tries once). |
+| **Retry Unreachable at Start** | A bus that cannot start is retried with backoff while the other buses run, instead of stopping the extension (default off). A failure retrying cannot fix still stops it: a permanent ssh failure, or a SocketCAN interface that does not exist. |
 | **J1939** | Every 29-bit message is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
 | **J1939 Node** | The DBC node every bus claims and sends as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
 | **J1939 NAME**, **J1939 Address** | Instead of J1939 Node: the NAME (hex) and address every bus claims, no DBC node needed (default empty: none). |
@@ -249,7 +250,8 @@ loopback, so every transmit is traced exactly once.
   once with the exact command that fixes it (resolved for this bus and your OS)
   and the bus stops, rather than retrying behind your back.
 - Such a permanent failure on ONE ssh bus stops the extension, and so every
-  other bus with it — the same as a bus that cannot start at all.
+  other bus with it — the same as a bus that cannot start at all, unless
+  **Advanced > Retry Unreachable at Start** is on.
 - Transient failures (unreachable, DNS, a dropped link, or a CAN interface that
   went away after a working session — a rebooting edge, a re-enumerating
   adapter) reconnect automatically with backoff; decoded state and any armed

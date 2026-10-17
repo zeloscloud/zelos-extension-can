@@ -10,7 +10,7 @@ import logging
 import time
 from importlib.resources import files
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import can.exceptions
 import pytest
@@ -376,6 +376,63 @@ def test_run_codecs_async_propagates_can_error_and_cleans_up(monkeypatch):
     finally:
         with contextlib.suppress(Exception):
             codec.stop()
+
+
+def test_run_codecs_async_retries_a_transient_start_failure_when_enabled(monkeypatch, caplog):
+    """retry_unreachable: a bus that cannot start is retried until it does, then run."""
+    monkeypatch.setattr(app_mod, "_RETRY_START_INTERVAL", 0.01)
+    # Autospec: the retry's start() call must match the real codec's signature.
+    codec = create_autospec(CanCodec, instance=True, bus_name="edge")
+    down = can.exceptions.CanInitializationError("cannot reach edge:22")
+    codec.start.side_effect = [down, down, None]
+
+    asyncio.run(_run_codecs_async([codec], retry_unreachable=True))
+
+    assert codec.start.call_count == 3
+    codec._run_async.assert_awaited_once()
+    codec.stop.assert_called_once()
+    assert "[edge] Cannot start: cannot reach edge:22; retrying in" in caplog.text
+
+
+def test_run_codecs_async_retry_still_stops_on_a_permanent_failure(monkeypatch):
+    """retry_unreachable does not retry what an operator must fix, and a bus
+    another retry was about to start is not left running."""
+    monkeypatch.setattr(app_mod, "_RETRY_START_INTERVAL", 0.05)
+    down = can.exceptions.CanInitializationError("cannot reach edge:22")
+    auth = ssh_socketcan.SshPermanentError("ssh authentication to edge failed")
+
+    def edge_start(**kwargs):
+        if edge.start.call_count < 3:
+            raise down
+        time.sleep(0.3)  # the other bus's timer expires meanwhile
+        raise auth
+
+    def other_start(**kwargs):
+        if other.start.call_count < 3:
+            time.sleep(0.02)
+            raise down
+
+    edge = MagicMock(bus_name="edge")
+    edge.start.side_effect = edge_start
+    other = MagicMock(bus_name="other")
+    other.start.side_effect = other_start
+    other._run_async = AsyncMock(side_effect=lambda: asyncio.sleep(3600))
+
+    with pytest.raises(ssh_socketcan.SshPermanentError):
+        asyncio.run(_run_codecs_async([edge, other], retry_unreachable=True))
+    assert edge.start.call_count == 3
+    # Either never started, or started and stopped.
+    assert other.stop.call_count == (1 if other.start.call_count == 3 else 0)
+
+
+def test_run_codecs_async_retry_leaves_a_missing_socketcan_interface_fatal():
+    """The Rust codec reports a missing interface as a RuntimeError: not retried."""
+    codec = MagicMock(bus_name="can9")
+    codec.start.side_effect = RuntimeError("Failed to find interface 'can9'")
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(_run_codecs_async([codec], retry_unreachable=True))
+    codec.start.assert_called_once()
 
 
 def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
