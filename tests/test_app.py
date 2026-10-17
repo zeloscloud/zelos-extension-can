@@ -9,7 +9,7 @@ import json
 import logging
 from importlib.resources import files
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import can.exceptions
 import pytest
@@ -347,6 +347,33 @@ def test_run_codecs_async_propagates_can_error_and_cleans_up(monkeypatch):
     finally:
         with contextlib.suppress(Exception):
             codec.stop()
+
+
+def test_run_codecs_async_retries_a_transient_start_failure_when_enabled(monkeypatch, caplog):
+    """retry_unreachable: a bus that cannot start is retried until it does, then run."""
+    monkeypatch.setattr(app_mod, "_RETRY_START_INTERVAL", 0.01)
+    codec = MagicMock(bus_name="edge")
+    down = can.exceptions.CanInitializationError("cannot reach edge:22")
+    codec.start.side_effect = [down, down, None]
+    codec._run_async = AsyncMock()
+
+    asyncio.run(_run_codecs_async([codec], retry_unreachable=True))
+
+    assert codec.start.call_count == 3
+    codec._run_async.assert_awaited_once()
+    codec.stop.assert_called_once()
+    assert "[edge] Cannot start: cannot reach edge:22; retrying in" in caplog.text
+
+
+def test_run_codecs_async_retry_still_stops_on_a_permanent_failure():
+    """retry_unreachable does not retry what an operator must fix."""
+    codec = MagicMock(bus_name="edge")
+    codec.start.side_effect = ssh_socketcan.SshPermanentError("ssh authentication to edge failed")
+
+    with pytest.raises(can.exceptions.CanError):
+        asyncio.run(_run_codecs_async([codec], retry_unreachable=True))
+    codec.start.assert_called_once()
+    codec.stop.assert_not_called()
 
 
 def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
