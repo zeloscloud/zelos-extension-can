@@ -294,13 +294,10 @@ def test_advanced_j1939_and_canopen_reach_each_bus_and_a_bus_value_wins():
     assert [codec.canopen for codec, _ in pairs] == [True, False]
 
 
-def test_advanced_j1939_node_reaches_the_rust_buses_only():
+def test_advanced_j1939_node_reaches_every_bus():
     advanced = resolve_advanced({"advanced": {"j1939_node": "NoSuchNode"}})
-    with patch("zelos_sdk.TraceSource"):
+    with patch("zelos_sdk.TraceSource"), pytest.raises(ValueError, match="no DBC node"):
         _create_codecs({"buses": [_vbus("vcan0")]}, TEST_DBC, advanced)
-        ssh = {"interface": "SocketCAN over SSH", "remote_host": "h", "ssh_user": "u"}
-        with pytest.raises(ValueError, match="no DBC node 'NoSuchNode'"):
-            _create_codecs({"buses": [ssh]}, TEST_DBC, advanced)
 
 
 def test_create_codecs_shares_one_source_across_buses():
