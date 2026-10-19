@@ -103,7 +103,7 @@ def test_libusb_shim_runs_only_for_gs_usb():
         prime.assert_called_once()
     assert [name for _, name in pairs] == ["gs_usb0"]
     # gs_usb stamps on host receive; other buses keep the advanced setting.
-    assert [c.timestamp_mode.name for c, _ in pairs + other] == ["IGNORE", "AUTO"]
+    assert [c.timestamp_mode for c, _ in pairs + other] == ["ignore", "auto"]
 
 
 def test_prime_libusb_loads_libusb_package_library():

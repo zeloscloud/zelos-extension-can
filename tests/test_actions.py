@@ -7,6 +7,7 @@ discovery action) is its own thing and worth covering directly.
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import sys
@@ -16,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import zelos_sdk
 from zelos_can.codec import CanCodec
 from zelos_sdk.actions import Action
 from zelos_sdk.extensions.actions import get_standalone_actions
@@ -27,25 +29,31 @@ _REAL_DISCOVER = actions.gs_usb.discover
 DBC_PATH = Path(__file__).parent / "files" / "test.dbc"
 
 
-def _make_codec(bus_name: str, channel: str) -> CanCodec:
-    with patch("zelos_sdk.TraceSource"), patch("can.Bus"):
-        cfg = {
-            "interface": "virtual",
-            "channel": channel,
-            "bitrate": 500_000,
-            "database_files": [str(DBC_PATH)],
-        }
-        codec = CanCodec(cfg, bus_name=bus_name)
-        codec.start()
-        return codec
+_channels = itertools.count()
+
+
+def _make_codec(bus_name: str) -> CanCodec:
+    """A started codec on its own python-can virtual channel and trace namespace."""
+    channel = f"ext-actions-{next(_channels)}"
+    cfg = {"interface": "virtual", "channel": channel, "database_files": [str(DBC_PATH)]}
+    codec = CanCodec(cfg, namespace=zelos_sdk.TraceNamespace(channel), bus_name=bus_name)
+    codec.start()
+    return codec
+
+
+def _eventually(pred, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while not pred() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return pred()
 
 
 @pytest.fixture
 def two_codecs():
     """Two registered codecs ('busA', 'busB') in actions.CAN_CODECS; both
     cleaned up + the registry drained on teardown."""
-    a = _make_codec("busA", "vcan0")
-    b = _make_codec("busB", "vcan1")
+    a = _make_codec("busA")
+    b = _make_codec("busB")
     actions.CAN_CODECS["busA"] = a
     actions.CAN_CODECS["busB"] = b
     yield a, b
@@ -61,8 +69,8 @@ class TestRegistry:
 
     def test_list_codecs_returns_sorted_output_regardless_of_insert_order(self):
         # Insert in reverse to prove the sort isn't an artifact of dict order.
-        b = _make_codec("busB", "vcan1")
-        a = _make_codec("busA", "vcan0")
+        b = _make_codec("busB")
+        a = _make_codec("busA")
         actions.CAN_CODECS["busB"] = b
         actions.CAN_CODECS["busA"] = a
         try:
@@ -109,12 +117,13 @@ class TestDispatch:
         assert "can_id" in result
 
     def test_send_raw_routes_to_named_codec(self, two_codecs):
-        # Mutating action — confirms the dispatch landed on the right CanCodec
-        # by inspecting which mocked bus saw the `send()` call.
-        a, b = two_codecs
+        # Each codec receives its own sends, on its own channel only.
+        def received(bus):
+            return actions.get_tx_state(bus)["bus"]["metrics"]["messages_received"]
+
         actions.send_raw("busA", "0x100", "01 02 03 04")
-        assert a.bus.send.call_count == 1  # type: ignore[attr-defined]
-        assert b.bus.send.call_count == 0  # type: ignore[attr-defined]
+        assert _eventually(lambda: received("busA") == 1)
+        assert received("busB") == 0
 
     def test_stop_periodic_routes_to_named_codec(self, two_codecs):
         # stop_periodic on an unknown task_id is a no-op success — we only need
