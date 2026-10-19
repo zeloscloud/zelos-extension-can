@@ -40,9 +40,6 @@ ADVANCED_DEFAULTS: dict = {
 #: onto each bus config the same way.
 EXTENSION_BUS_KEYS = ("j1939", "canopen")
 
-#: Interfaces whose bus runs zelos-can's Rust codec, the only ones with a J1939 node.
-RUST_INTERFACES = ("zelos-socketcan", "zelos-ssh-socketcan")
-
 
 def resolve_advanced(config: dict) -> dict:
     """Merge the `advanced` object over its defaults.
@@ -118,7 +115,7 @@ def _create_codecs(
     for prepared in prepared_configs:
         for key in EXTENSION_BUS_KEYS:
             prepared.setdefault(key, advanced[key])
-        if advanced["j1939_node"] and prepared["interface"] in RUST_INTERFACES:
+        if advanced["j1939_node"]:
             prepared.setdefault("j1939_node", advanced["j1939_node"])
 
     seen_names: set[str] = set()
