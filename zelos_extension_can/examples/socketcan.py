@@ -1,89 +1,41 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = [
-#     "zelos-can[python-can]>=0.0.11a3",
-#     "zelos-sdk",
-# ]
+# dependencies = ["zelos-can[python-can]>=0.0.11a10", "zelos-sdk"]
 # ///
+"""Trace a SocketCAN bus against the demo DBC to a .trz, sending 0x100 every 100 ms.
 
-import asyncio
+Linux only. Bring up vcan0 first (`ip link add vcan0 type vcan && ip link set vcan0 up`),
+or set the channel to can0. Ctrl+C stops.
+"""
+
 import contextlib
 import logging
-from pathlib import Path
+import time
 
-from zelos_can import demo
+import zelos_sdk
+from zelos_can.bus.config import DEMO_DBC, prepare_bus_config
 from zelos_can.codec import CanCodec
-from zelos_can.demo.demo import run_demo_ev_simulation
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)8s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+ENTRY = {"interface": "zelos-socketcan", "channel": "vcan0", "database_files": [str(DEMO_DBC)]}
 
 
-async def main():
-    """Run SocketCAN example with EV simulation."""
-    # Path to demo DBC file
-    demo_dbc = Path(demo.__file__).parent / "demo.dbc"
-
-    # Configuration for SocketCAN
-    config = {
-        "interface": "zelos-socketcan",
-        "channel": "vcan0",  # Change to 'can0' for real hardware
-        "database_files": [str(demo_dbc)],
-        "log_raw_frames": False,  # Set True to see raw CAN frames
-        "emit_schemas_on_init": False,  # Lazy schema generation
-        "timestamp_mode": "ignore",  # Use system time for trace events
-    }
-
-    logger.info("=" * 80)
-    logger.info("SocketCAN Example - EV Simulation")
-    logger.info("=" * 80)
-    logger.info("Interface: %s", config["interface"])
-    logger.info("Channel: %s", config["channel"])
-    logger.info("Database: %s", demo_dbc.name)
-    logger.info("=" * 80)
-
-    try:
-        # Create and start CAN codec
-        codec = CanCodec(config)
-        codec.start()
-
-        logger.info("CAN bus started successfully")
-        logger.info("Starting EV simulation (press Ctrl+C to stop)...")
-
-        # Start EV simulation task
-        sim_task = asyncio.create_task(run_demo_ev_simulation(codec.bus, codec.catalog, codec))
-
-        # Periodically print metrics
-        while True:
-            await asyncio.sleep(10)
-            metrics = codec.get_metrics()
-            logger.info(
-                "Metrics: RX=%d decoded=%d errors=%d unknown=%d rate=%.1f msg/s",
-                metrics["messages_received"],
-                metrics["messages_decoded"],
-                metrics["decode_errors"],
-                metrics["unknown_messages"],
-                metrics["messages_per_second"],
-            )
-
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-    except Exception as e:
-        logger.exception("Error: %s", e)
-    finally:
-        if sim_task:
-            sim_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await sim_task
-        codec.stop()
-        logger.info("Shutdown complete")
+def main() -> None:
+    codec = CanCodec(prepare_bus_config(ENTRY), bus_name="vcan0")
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    with zelos_sdk.TraceWriter(f"socketcan-{stamp}.trz"):
+        try:
+            codec.start()
+            task = codec.start_periodic_raw("0x100", "01 02", period_ms=100)["task_id"]
+            with contextlib.suppress(KeyboardInterrupt):
+                codec.run()  # decode and trace until Ctrl+C
+            codec.stop_periodic(task)
+            bus = codec.get_tx_state()["bus"]
+            print(bus["status"], bus["metrics"])
+        finally:
+            codec.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    logging.basicConfig(level=logging.INFO)
+    main()
