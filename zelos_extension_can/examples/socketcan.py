@@ -57,7 +57,7 @@ async def main():
         logger.info("Starting EV simulation (press Ctrl+C to stop)...")
 
         # Start EV simulation task
-        sim_task = asyncio.create_task(run_demo_ev_simulation(codec.bus, codec.db, codec))
+        sim_task = asyncio.create_task(run_demo_ev_simulation(codec.bus, codec.catalog, codec))
 
         # Periodically print metrics
         while True:
