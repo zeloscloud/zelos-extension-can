@@ -258,10 +258,11 @@ The extension provides several actions accessible from the Zelos App:
 - **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
 - **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
 
-A **Send Raw** or **Send Message** that fails shows on **Get TX State** (`tx_errors`,
-`health.detail`), not as an action error. On adapters that cannot echo their own
-frames (PCAN on macOS and Linux, slcan), a sent frame is traced as handed to the
-adapter, and `tx_errors` counts the ones the adapter refused.
+A **Send Raw** or **Send Message** while the adapter is being reopened is refused
+("bus is reconnecting"). One the adapter accepts and then refuses shows on **Get TX
+State** (`tx_errors`, `health.detail`), not as an action error. On adapters that
+cannot echo their own frames (PCAN on macOS and Linux, slcan), a sent frame is traced
+as handed to the adapter, and `tx_errors` counts the ones the adapter refused.
 
 ## What is CAN?
 [See this tutorial](https://www.csselectronics.com/pages/can-bus-simple-intro-tutorial)
