@@ -97,10 +97,9 @@ name refuses and names the keys.
 
 ### J1939
 
-On a SocketCAN or SocketCAN over SSH bus, and in `convert`, the messages the
-DBC marks J1939 (`VFrameFormat` = `J1939PG` per message, or `ProtocolType` = `J1939` on
-the database, which SAE, CSS and Vector J1939
-DBCs do) are J1939 parameter groups. **Advanced > J1939** (off by default)
+On every bus, and in `convert`, the messages the DBC marks J1939 (`VFrameFormat` =
+`J1939PG` per message, or `ProtocolType` = `J1939` on the database, which SAE, CSS
+and Vector J1939 DBCs do) are J1939 parameter groups. **Advanced > J1939** (off by default)
 makes every 29-bit message one, for a DBC without that attribute. `convert`
 and `trace` have `--j1939` for the same.
 
@@ -116,21 +115,19 @@ and `trace` have `--j1939` for the same.
 | **J1939-22 (CAN FD)** | `fd` on a send, with CAN-FD Mode on: a Multi-PG frame up to 60 bytes, FD.TP beyond, every frame with BRS. The claim stays on classic frames. |
 | **Periodic** | A period whose previous transfer is still running, or whose claim is still settling, is skipped and counted (`skipped` on the periodic). A send that fails, busy or aborted included, counts in `failed` / `last_error` on the periodic and in `tx_errors`. |
 | **Counters** | `j1939_tx_completed`, `j1939_tx_aborted`, `j1939_claim_lost`, and `fdtp_*`, `j1939_22_*` on receive. |
-| **python-can buses** | No node: the J1939 transmit actions refuse; Encode Preview still works. |
 
 ### J1939 node identity
 
-**Advanced > J1939 Node** names the DBC node (`BU_`) every SocketCAN and SocketCAN
-over SSH bus acts as. Each such bus claims it when it starts and again when it
-reopens. The node's identity comes from its J1939 node attributes, as other J1939 tools
-read them:
+**Advanced > J1939 Node** names the DBC node (`BU_`) every bus acts as. Each bus
+claims it when it starts and again when it reopens. The node's identity comes from
+its J1939 node attributes, as other J1939 tools read them:
 
 | Attribute | Identity |
 |---|---|
 | `NmStationAddress` | Address claimed, 0..253. The default 254 (no address) refuses. |
 | `NmJ1939AAC`, `NmJ1939IndustryGroup`, `NmJ1939System`, `NmJ1939SystemInstance`, `NmJ1939Function`, `NmJ1939FunctionInstance`, `NmJ1939ECUInstance`, `NmJ1939ManufacturerCode`, `NmJ1939IdentityNumber` | The 64-bit NAME. Unset ones take the DBC's default. |
 
-The node must be in each such bus's DBCs. A bad identity (unknown node, no address, a field
+The node must be in each bus's DBCs. A bad identity (unknown node, no address, a field
 out of range) fails the start with the reason. Empty (the default): no claim until the
 `J1939 Claim` action, and J1939 sends refuse. The J1939 address registry reserves source
 address 249 for Function 129 (off-board diagnostic-service tool) in Industry Group 0,
@@ -138,13 +135,12 @@ instances 0.
 
 ### CANopen
 
-On a SocketCAN or SocketCAN over SSH bus, the bus's **CANopen nodes** decode
-as CANopen (CiA 301). **Advanced > CANopen** (off by default) decodes the
-protocol messages of every node-id, for a bus that lists none. The CLI `trace`
-and `convert` have `--canopen` and a repeatable `--canopen-node ID[:FILE[:NAME]]`
-(`--canopen-node 0x20:pdu.eds:pdu`, `--canopen-node 5::left`); the in-app
-Convert actions have only the **CANopen** toggle, every node-id without files.
-Other interfaces log a warning and decode nothing.
+A bus's **CANopen nodes** decode as CANopen (CiA 301). **Advanced > CANopen**
+(off by default) decodes the protocol messages of every node-id, for a bus that
+lists none. The CLI `trace` and `convert` have `--canopen` and a repeatable
+`--canopen-node ID[:FILE[:NAME]]` (`--canopen-node 0x20:pdu.eds:pdu`,
+`--canopen-node 5::left`); the in-app Convert actions have only the **CANopen**
+toggle, every node-id without files.
 
 | What | Behavior |
 |---|---|
@@ -166,9 +162,9 @@ One value each, applied to every bus.
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
 | **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
 | **Send Timeout (s)** | SocketCAN / SocketCAN over SSH: how long a send waits for room in the host's transmit queue before failing (default 1 s; 0 tries once). |
-| **J1939** | Every 29-bit message on a SocketCAN / SocketCAN over SSH bus is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
-| **J1939 Node** | The DBC node the SocketCAN / SocketCAN over SSH buses claim and send as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
-| **CANopen** | Decode CANopen for every node-id on a SocketCAN / SocketCAN over SSH bus with no CANopen nodes listed (default off). See [CANopen](#canopen). |
+| **J1939** | Every 29-bit message is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
+| **J1939 Node** | The DBC node every bus claims and sends as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
+| **CANopen** | Decode CANopen for every node-id on a bus with no CANopen nodes listed (default off). See [CANopen](#canopen). |
 | **Log Level** | Logging verbosity for all buses. |
 
 ### Trace layout
@@ -252,7 +248,7 @@ The extension provides several actions accessible from the Zelos App:
 - **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key` (`0334_Merge_Moved`: its id and name, and the name of its trace event). The transmit actions take a key, or a name only one definition carries.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
-- **J1939 Claim**: Claim an address for a NAME on a SocketCAN / SocketCAN over SSH bus; the J1939 sends go from it
+- **J1939 Claim**: Claim an address for a NAME on a bus; the J1939 sends go from it
 - **J1939 Send** / **J1939 Encode Preview** / **J1939 Start Periodic**: A DBC-encoded parameter group; destination (PDU1) and priority default to the DBC's, `fd` sends J1939-22
 - **J1939 Send Raw**: A PGN and its bytes, any length
 - **J1939 Request**: Ask a node, or everyone, for a PGN (Request, `0xEA00`); the answer decodes like any other frame
@@ -261,6 +257,11 @@ The extension provides several actions accessible from the Zelos App:
 - **CANopen NMT**: start, stop, pre_operational, reset_node or reset_communication, to one node or all (node 0, entered explicitly)
 - **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
 - **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
+
+A **Send Raw** or **Send Message** that fails shows on **Get TX State** (`tx_errors`,
+`health.detail`), not as an action error. On adapters that cannot echo their own
+frames (PCAN on macOS and Linux, slcan), a sent frame is traced as handed to the
+adapter, and `tx_errors` counts the ones the adapter refused.
 
 ## What is CAN?
 [See this tutorial](https://www.csselectronics.com/pages/can-bus-simple-intro-tutorial)
