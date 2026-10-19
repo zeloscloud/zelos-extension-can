@@ -237,10 +237,10 @@ def start_periodic_message(
 
 # ─── J1939 ──────────────────────────────────────────────────────────────────
 #
-# The bus's J1939 node (zelos-socketcan and zelos-ssh-socketcan buses): it
-# claims an address, then sends from it. Up to 8 bytes is one frame; longer
-# goes by the transport protocol, BAM to everyone or RTS/CTS to one node. A
-# send waits up to 5 s for the transfer and returns {completed, error}.
+# The bus's J1939 node: it claims an address, then sends from it. Up to 8
+# bytes is one frame; longer goes by the transport protocol, BAM to everyone or
+# RTS/CTS to one node. A send waits up to 5 s for the transfer and returns
+# {completed, error}.
 
 _J1939_SENT = (
     "Returns the addressing and payload sent, plus {completed, error}: completed false "

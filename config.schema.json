@@ -51,7 +51,7 @@
           "canopen_nodes": {
             "type": "array",
             "title": "CANopen nodes",
-            "description": "CANopen devices on this bus, decoded on SocketCAN and SocketCAN over SSH: NMT state, heartbeat, EMCY and SDO, plus the node's PDOs and object names from its EDS or DCF. Leave empty for none.",
+            "description": "CANopen devices on this bus: NMT state, heartbeat, EMCY and SDO, plus the node's PDOs and object names from its EDS or DCF. Leave empty for none.",
             "items": {
               "type": "object",
               "title": "Node",
@@ -708,21 +708,21 @@
         "j1939": {
           "type": "boolean",
           "title": "J1939",
-          "description": "Every 29-bit message on a SocketCAN or SocketCAN over SSH bus is a J1939 parameter group, for a DBC that does not mark them (VFrameFormat). Off, the messages the DBC marks J1939 still are: matched by PGN from any sender, one table per sender, transport protocol transfers (BAM, RTS/CTS) rebuilt, reserved raw values (not available, error) decoded to empty.",
+          "description": "Every 29-bit message is a J1939 parameter group, for a DBC that does not mark them (VFrameFormat). Off, the messages the DBC marks J1939 still are: matched by PGN from any sender, one table per sender, transport protocol transfers (BAM, RTS/CTS) rebuilt, reserved raw values (not available, error) decoded to empty.",
           "default": false,
           "ui:widget": "toggle"
         },
         "j1939_node": {
           "type": "string",
           "title": "J1939 Node",
-          "description": "The DBC node (BU_) every SocketCAN and SocketCAN over SSH bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each such bus's DBCs. Empty: no claim until the J1939 Claim action, and J1939 sends refuse.",
+          "description": "The DBC node (BU_) every bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each bus's DBCs. Empty: no claim until the J1939 Claim action, and J1939 sends refuse.",
           "default": "",
           "ui:placeholder": "Tester"
         },
         "canopen": {
           "type": "boolean",
           "title": "CANopen",
-          "description": "Decode CANopen (NMT, heartbeat, EMCY, SYNC, TIME, SDO) for every node-id on a SocketCAN or SocketCAN over SSH bus, for a bus with no CANopen nodes configured. Off, a bus decodes CANopen only when it lists nodes.",
+          "description": "Decode CANopen (NMT, heartbeat, EMCY, SYNC, TIME, SDO) for every node-id, on a bus with no CANopen nodes configured. Off, a bus decodes CANopen only when it lists nodes.",
           "default": false,
           "ui:widget": "toggle"
         },
