@@ -148,7 +148,7 @@ toggle, every node-id without files.
 | **Node** | **Node ID** 1-127, empty for a DCF that sets `NodeID`. **EDS or DCF file** optional. **Name** names the node's events (default `node<id hex>`); same characters as a bus name. A DBC message on a configured node's COB-ID or PDO is an error, except on its SYNC or TIME COB-ID: there the DBC wins, with a warning. |
 | **Status** | `CANopen Nodes`: per node, `configured`, NMT `state`, `last_heartbeat_ns`, `heartbeat_period_ms`, `heartbeat_lost`, `emcy_count`, `last_emcy_code`, `sdo_count`. `Get TX State` carries the `canopen_*` counters: frames, SDO completed / aborted / resync / CRC error, short frames, heartbeat late / lost, unknown nodes, PDO short / remapped / reverted / unlearned, client SDO / timeout / stale. |
 | **Transmit** | `CANopen SDO Read` / `SDO Write` / `NMT` [actions](#actions), on a running bus with CANopen decode on (nodes listed or the Advanced toggle): the SDO client matches answers through the decoder. The extension is the SDO client and NMT master, never a node. SDO Write and NMT change device state with no confirmation, like `Send Raw`. |
-| **Demo** | **Simulated CANopen node** on a Demo bus adds node `0x20`, a power distribution unit described by the bundled `pdu.eds`, and decodes the demo bus on the Rust path. |
+| **Demo** | **Simulated CANopen node** on a Demo bus adds node `0x20`, a power distribution unit described by the bundled `pdu.eds`. |
 
 ### Advanced Settings
 
