@@ -9,6 +9,7 @@ import { useZelosBridge, ZelosBridgeProvider } from "@zeloscloud/app-extension-s
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ColDef } from "ag-grid-community";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import schema from "../../../../public/panels/bus-monitor.options.json";
 import { type CanRow, canRowHeight } from "../data";
 import { forgetLatches, latchKey } from "../latch";
 import { gridRowHeight, resolveFontSizePx } from "../options";
@@ -81,7 +82,11 @@ function frameWindow(timeS: number, data: string, producer: string | null = null
 type Call = { method: string; params: unknown };
 
 /** Mounts the panel against the SDK's mock host, and hands back the mock and every call the panel made. */
-async function mountPanel(menuChoice: string | null = null, signals: AppBridgePanelSignal[] = FRAME_SIGNALS) {
+async function mountPanel(
+  menuChoice: string | null = null,
+  signals: AppBridgePanelSignal[] = FRAME_SIGNALS,
+  options: Record<string, unknown> | null = null,
+) {
   const calls: Call[] = [];
   let bridge: MockBridge | null = null;
 
@@ -104,7 +109,7 @@ async function mountPanel(menuChoice: string | null = null, signals: AppBridgePa
       showDevelopmentBanner={false}
       connectOptions={{
         extensionId: "local.zelos-extension-can",
-        panel: { panelId: "bus-monitor", instanceId: "test-panel", signals },
+        panel: { panelId: "bus-monitor", instanceId: "test-panel", signals, options },
         workspace: { id: "ws", modeKind: "TRACE" },
         time: { playback: "PAUSED", cursorS: 100, viewRange: { startS: 0, endS: 100 } },
       }}
@@ -290,6 +295,31 @@ describe("BusMonitorPanel", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Error loading data");
     expect(alert.textContent).toContain("query timed out");
+  });
+
+  // Layouts saved by Zelos 26.0.9 and earlier refer to this panel by these option keys.
+  it("reads every option a saved layout holds", async () => {
+    expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["flashChanges", "showSource", "fontSize"]));
+    // Whole px; null is the default size.
+    expect(schema.properties.fontSize.type).toBe("integer");
+    expect(resolveFontSizePx(null)).toBe(resolveFontSizePx(undefined));
+
+    const filterModel = { message: { filterType: "text", type: "contains", filter: "0x064" } };
+    const saved = { flashChanges: true, showSource: true, fontSize: 24, grid: { filterModel } };
+    await mountPanel(null, FRAME_SIGNALS, saved);
+    const props = grid.props as {
+      columnDefs: ColDef<CanRow>[];
+      rowHeight: number;
+      onGridReady: (event: unknown) => void;
+    };
+    const column = (colId: string) => props.columnDefs.find((def) => def.colId === colId);
+    expect(column("data")?.cellRendererParams).toEqual({ flash: true });
+    expect(column("source")?.hide).toBe(false);
+    expect(props.rowHeight).toBe(gridRowHeight(24));
+
+    const setFilterModel = vi.fn();
+    props.onGridReady({ api: { setFilterModel } });
+    expect(setFilterModel).toHaveBeenCalledWith(filterModel);
   });
 
   it("asks for a drop while nothing is bound", async () => {
