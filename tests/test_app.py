@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from importlib.resources import files
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -76,7 +77,7 @@ def test_schema_is_valid_and_carries_the_per_bus_block():
     advanced = schema["properties"]["advanced"]
     assert advanced["additionalProperties"] is False
     assert advanced["default"] == {}
-    assert {k: v["default"] for k, v in advanced["properties"].items()} == ADVANCED_DEFAULTS
+    assert {k: v.get("default") for k, v in advanced["properties"].items()} == ADVANCED_DEFAULTS
     # An emptied text field is saved as "" rather than dropped, so the prefix
     # can be cleared from the app.
     assert advanced["properties"]["prefix"]["ui:emptyValue"] == ""
@@ -298,6 +299,25 @@ def test_advanced_j1939_node_reaches_every_bus():
     advanced = resolve_advanced({"advanced": {"j1939_node": "NoSuchNode"}})
     with patch("zelos_sdk.TraceSource"), pytest.raises(ValueError, match="no DBC node"):
         _create_codecs({"buses": [_vbus("vcan0")]}, TEST_DBC, advanced)
+
+
+def test_advanced_j1939_identity_claims_on_every_bus_without_a_dbc_node():
+    name = 0x0000F50000012345
+    config = {"buses": [{**_vbus("vcan0"), "database_files": [str(TEST_DBC)]}, _vbus("vcan1")]}
+    advanced = resolve_advanced({"advanced": {"j1939_name": hex(name), "j1939_address": 0xF5}})
+    pairs = _create_codecs(config, TEST_DBC, advanced)
+    try:
+        for codec, _ in pairs:
+            codec.start()
+        deadline = time.monotonic() + 3  # the claim settles after 250 ms
+        for codec, _ in pairs:
+            while (j1939 := codec.get_tx_state()["bus"]["j1939"])["address"] is None:
+                assert time.monotonic() < deadline
+                time.sleep(0.02)
+            assert (int(j1939["name"], 16), j1939["address"]) == (name, 0xF5)
+    finally:
+        for codec, _ in pairs:
+            codec.stop()
 
 
 def test_create_codecs_shares_one_source_across_buses():

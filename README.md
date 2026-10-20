@@ -111,7 +111,7 @@ and `trace` have `--j1939` for the same.
 | **One message, several definitions** | A sender decodes under its own definition, whatever the destination. A sender the DBC does not name decodes under the first definition when they all share one layout, and is left undecoded when layouts differ. |
 | **Messages over 8 bytes** | Transport protocol transfers (BAM, RTS/CTS) are rebuilt and decoded, stamped with their last packet. |
 | **Not available, error** | A raw value J1939 reserves for these (above `0xFA` at 8 bits, `0xFAFF` at 16, and so on) decodes to empty. It stays a value when the DBC's range for the signal takes it in, or a `VAL_` labels it. |
-| **Address claim** | Off until **Advanced > J1939 Node** names a DBC node (see [J1939 node identity](#j1939-node-identity)), or the `J1939 Claim` action runs. The node defends its address against a higher NAME and yields to a lower one; NAME bit 63 (arbitrary address capable) lets it move to a free address in 128..247. Claimed again when the bus reopens. `get_tx_state` shows `j1939.address` (empty while claiming, or lost). |
+| **Address claim** | Off until **Advanced > J1939 Node** names a DBC node, or J1939 NAME and Address are set (see [J1939 node identity](#j1939-node-identity)), or the `J1939 Claim` action runs. The node defends its address against a higher NAME and yields to a lower one; NAME bit 63 (arbitrary address capable) lets it move to a free address in 128..247. Claimed again when the bus reopens. `get_tx_state` shows `j1939.address` (empty while claiming, or lost). |
 | **Transmit** | From the claimed address only. Up to 8 bytes is one frame; longer goes by the transport protocol, BAM to everyone or RTS/CTS to one node. A send waits up to 5 s and returns `completed` / `error`. |
 | **J1939-22 (CAN FD)** | `fd` on a send, with CAN-FD Mode on: a Multi-PG frame up to 60 bytes, FD.TP beyond, every frame with BRS. The claim stays on classic frames. |
 | **Periodic** | A period whose previous transfer is still running, or whose claim is still settling, is skipped and counted (`skipped` on the periodic). A send that fails, busy or aborted included, counts in `failed` / `last_error` on the periodic and in `tx_errors`. |
@@ -128,7 +128,9 @@ its J1939 node attributes, as other J1939 tools read them:
 | `NmStationAddress` | Address claimed, 0..253. The default 254 (no address) refuses. |
 | `NmJ1939AAC`, `NmJ1939IndustryGroup`, `NmJ1939System`, `NmJ1939SystemInstance`, `NmJ1939Function`, `NmJ1939FunctionInstance`, `NmJ1939ECUInstance`, `NmJ1939ManufacturerCode`, `NmJ1939IdentityNumber` | The 64-bit NAME. Unset ones take the DBC's default. |
 
-The node must be in each bus's DBCs. A bad identity (unknown node, no address, a field
+The node must be in each bus's DBCs. Without a DBC node, set **J1939 NAME** (64-bit,
+hex) and **J1939 Address** (0..253) instead: every bus claims that identity, whatever
+its DBCs. Set one form, not both. A bad identity (unknown node, no address, a field
 out of range) fails the start with the reason. Empty (the default): no claim until the
 `J1939 Claim` action, and J1939 sends refuse. The J1939 address registry reserves source
 address 249 for Function 129 (off-board diagnostic-service tool) in Industry Group 0,
@@ -188,6 +190,7 @@ One value each, applied to every bus.
 | **Send Timeout (s)** | SocketCAN / SocketCAN over SSH: how long a send waits for room in the host's transmit queue before failing (default 1 s; 0 tries once). |
 | **J1939** | Every 29-bit message is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
 | **J1939 Node** | The DBC node every bus claims and sends as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
+| **J1939 NAME**, **J1939 Address** | Instead of J1939 Node: the NAME (hex) and address every bus claims, no DBC node needed (default empty: none). |
 | **CANopen** | Decode CANopen for every node-id on a bus with no CANopen nodes listed (default off). See [CANopen](#canopen). |
 | **Log Level** | Logging verbosity for all buses. |
 
