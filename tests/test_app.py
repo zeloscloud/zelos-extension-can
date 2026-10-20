@@ -295,6 +295,18 @@ def test_advanced_j1939_and_canopen_reach_each_bus_and_a_bus_value_wins():
     assert [codec.canopen for codec, _ in pairs] == [True, False]
 
 
+def test_advanced_bus_settings_reach_each_bus():
+    advanced = resolve_advanced(
+        {"advanced": {"receive_own_messages": False, "timestamp_mode": "ignore"}}
+    )
+    with patch("zelos_sdk.TraceSource"):
+        ((codec, _),) = _create_codecs({"buses": [_vbus("vcan0")]}, TEST_DBC, advanced)
+    assert (codec.config["receive_own_messages"], codec.config["timestamp_mode"]) == (
+        False,
+        "ignore",
+    )
+
+
 def test_advanced_j1939_node_reaches_every_bus():
     advanced = resolve_advanced({"advanced": {"j1939_node": "NoSuchNode"}})
     with patch("zelos_sdk.TraceSource"), pytest.raises(ValueError, match="no DBC node"):

@@ -60,8 +60,6 @@ dev = [
     "pre-commit>=4.3.0",
     "ruff>=0.14.2",
     "jsonschema>=4.0.0",
-    # Independent truth source for the ARXML tests; zelos-can no longer brings it.
-    "cantools>=40.0.0",
     "tomli>=2.3.0; python_version < '3.11'",
 ]
 
