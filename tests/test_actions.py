@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import can
 import pytest
 import zelos_sdk
 from zelos_can.codec import CanCodec
@@ -406,10 +407,12 @@ class TestConfigFormHooks:
 
     @pytest.fixture(autouse=True)
     def _no_adapters(self, monkeypatch):
-        """Hide this machine's adapters, serial ports and gs_usb devices; a test adds its own."""
+        """Hide this machine's adapters, serial ports and gs_usb devices; a test adds its own.
+        A found adapter hears no traffic."""
         monkeypatch.setattr(actions, "_vendor_adapters", list)
         monkeypatch.setattr(actions, "_slcan_adapters", list)
         monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {}, ""))
+        monkeypatch.setattr(actions, "_detect_bitrate", lambda *_: None)
 
     def test_list_interfaces_offers_can_devices_only_hardware_first(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "linux")
@@ -491,7 +494,8 @@ class TestConfigFormHooks:
             },
             "message": (
                 "Found PCAN-USB Pro FD on PCAN_USBBUS1, PCAN-USB Pro FD on PCAN_USBBUS2. "
-                "Each is set to 500 kbit/s. Change Bitrate to match your bus."
+                "No traffic was seen on PCAN_USBBUS1, PCAN_USBBUS2, so the bitrate could not be "
+                "detected. Each is set to 500 kbit/s. Change Bitrate to match your bus."
             ),
         }
 
@@ -528,8 +532,9 @@ class TestConfigFormHooks:
             },
         ]
         assert result["message"] == (
-            "Found PCAN-USB FD on PCAN_USBBUS2, PCAN-USB FD on PCAN_USBBUS1. Running buses "
-            "keep their bitrate; new ones are set to 500 kbit/s. Change Bitrate to match your bus."
+            "Found PCAN-USB FD on PCAN_USBBUS2, PCAN-USB FD on PCAN_USBBUS1. No traffic was seen "
+            "on PCAN_USBBUS2, so the bitrate could not be detected. Running buses keep their "
+            "bitrate; new ones are set to 500 kbit/s. Change Bitrate to match your bus."
         )
 
     def test_auto_config_keeps_the_bitrate_of_a_detected_running_bus(self, monkeypatch, tmp_path):
@@ -716,10 +721,238 @@ class TestConfigFormHooks:
         assert actions.auto_config(form) == expected
 
 
+_FRAME = can.Message(arbitration_id=0x123, data=b"\x01\x02", is_extended_id=False)
+_ERROR_FRAME = can.Message(is_error_frame=True)
+
+_PCAN_USB = {"interface": "pcan", "channel": "PCAN_USBBUS1", "name": "PCAN-USB"}
+
+
+class TestBitrateDetection:
+    """Auto-configure listens on each PCAN and Kvaser channel, a bitrate at a time, with
+    python-can's bus replaced by one that hears `traffic[bitrate]` and then nothing."""
+
+    @pytest.fixture(autouse=True)
+    def _machine(self, monkeypatch):
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        monkeypatch.setattr(actions, "_local_can_interfaces", list)
+        monkeypatch.setattr(actions, "_slcan_adapters", list)
+        monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {}, ""))
+        monkeypatch.setattr(actions, "_pcan_free", lambda channel: True)
+        monkeypatch.setattr(actions, "_LISTEN_SECONDS", 0.05)
+
+    def _adapters(self, monkeypatch, *adapters):
+        monkeypatch.setattr(actions, "_vendor_adapters", lambda: [dict(a) for a in adapters])
+
+    def _bus(self, monkeypatch, traffic):
+        """Every open's kwargs, in order; each bus records whether it was shut down."""
+        opened = []
+
+        def open_bus(**kwargs):
+            frames = list(traffic.get(kwargs["bitrate"], []))
+            bus = SimpleNamespace(kwargs=kwargs, closed=False)
+
+            def recv(timeout=None):
+                if frames:
+                    return frames.pop(0)
+                time.sleep(timeout)
+                return None
+
+            def shutdown():
+                bus.closed = True
+
+            bus.recv, bus.shutdown = recv, shutdown
+            opened.append(bus)
+            return bus
+
+        monkeypatch.setattr(can, "Bus", open_bus)
+        return opened
+
+    @pytest.mark.parametrize(
+        ("adapter", "label", "listen_only"),
+        [
+            (_PCAN_USB, "PCAN", {"state": can.BusState.PASSIVE}),
+            (
+                {"interface": "kvaser", "channel": "0", "name": "Kvaser Leaf Light v2"},
+                "Kvaser",
+                {"driver_mode": False, "single_handle": True, "exclusive": True},
+            ),
+        ],
+    )
+    def test_the_bitrate_that_hears_frames_is_chosen(
+        self, monkeypatch, adapter, label, listen_only
+    ):
+        self._adapters(monkeypatch, adapter)
+        opened = self._bus(monkeypatch, {250_000: [_FRAME, _FRAME]})
+
+        result = actions.auto_config()
+
+        assert result["config"]["buses"] == [
+            {
+                "interface": label,
+                "channel": adapter["channel"],
+                "bitrate": 250_000,
+                "database_files": [],
+            }
+        ]
+        assert result["message"] == (
+            f"Found {adapter['name']} on {adapter['channel']} at 250 kbit/s "
+            "(detected from bus traffic)."
+        )
+        channel = {"interface": adapter["interface"], "channel": adapter["channel"]}
+        assert [bus.kwargs for bus in opened] == [
+            {**channel, "bitrate": 500_000, **listen_only},
+            {**channel, "bitrate": 250_000, **listen_only},
+        ]
+        assert all(bus.closed for bus in opened)
+
+    def test_a_quiet_bus_stays_at_500k_and_says_why(self, monkeypatch):
+        self._adapters(monkeypatch, _PCAN_USB)
+        opened = self._bus(monkeypatch, {})
+
+        result = actions.auto_config()
+
+        assert [bus.kwargs["bitrate"] for bus in opened] == [500_000, 250_000, 1_000_000, 125_000]
+        assert result["config"]["buses"][0]["bitrate"] == 500_000
+        assert result["message"] == (
+            "Found PCAN-USB on PCAN_USBBUS1. No traffic was seen on PCAN_USBBUS1, so the bitrate "
+            "could not be detected. Each is set to 500 kbit/s. Change Bitrate to match your bus."
+        )
+
+    def test_an_adapter_that_fails_to_open_stays_at_500k_and_is_released(self, monkeypatch):
+        import zelos_can.pcan
+
+        self._adapters(monkeypatch, _PCAN_USB)
+        tries, released = [], []
+
+        def refuse(**kwargs):
+            tries.append(kwargs["bitrate"])
+            raise can.CanInitializationError("PCAN_ERROR_CAUTION")
+
+        monkeypatch.setattr(can, "Bus", refuse)
+        monkeypatch.setattr(zelos_can.pcan, "release_pcan_channel", released.append)
+
+        result = actions.auto_config()
+
+        assert tries == [500_000]
+        assert released == ["PCAN_USBBUS1"]
+        assert result["config"]["buses"][0]["bitrate"] == 500_000
+        assert "No traffic was seen on PCAN_USBBUS1" in result["message"]
+
+    def test_a_busy_pcan_channel_is_not_opened(self, monkeypatch):
+        self._adapters(monkeypatch, _PCAN_USB)
+        monkeypatch.setattr(actions, "_pcan_free", lambda channel: False)
+        opened = self._bus(monkeypatch, {500_000: [_FRAME]})
+
+        result = actions.auto_config()
+
+        assert opened == []
+        assert result["config"]["buses"][0]["bitrate"] == 500_000
+        assert "No traffic was seen on PCAN_USBBUS1" in result["message"]
+
+    @pytest.mark.parametrize(
+        ("traffic", "controller"),
+        [
+            ({500_000: [_FRAME, _ERROR_FRAME, _FRAME], 250_000: [_FRAME]}, "ok"),
+            ({500_000: [_FRAME], 250_000: [_FRAME]}, "warning"),
+        ],
+        ids=["error-frame", "bus-error-state"],
+    )
+    def test_a_bitrate_with_bus_errors_is_rejected(self, monkeypatch, traffic, controller):
+        import zelos_can.pcan
+
+        self._adapters(monkeypatch, _PCAN_USB)
+        self._bus(monkeypatch, traffic)
+        monkeypatch.setattr(
+            zelos_can.pcan,
+            "pcan_controller_state",
+            lambda bus: controller if bus.kwargs["bitrate"] == 500_000 else "ok",
+        )
+
+        buses = actions.auto_config()["config"]["buses"]
+
+        assert buses[0]["bitrate"] == 250_000
+
+    def test_vector_and_slcan_are_never_opened(self, monkeypatch):
+        self._adapters(monkeypatch, {"interface": "vector", "channel": "0", "name": "VN1610"})
+        monkeypatch.setattr(
+            actions,
+            "_slcan_adapters",
+            lambda: [{"interface": "slcan", "channel": "COM3", "name": "CANable"}],
+        )
+        opened = self._bus(monkeypatch, {500_000: [_FRAME]})
+
+        result = actions.auto_config()
+
+        assert opened == []
+        assert [bus["bitrate"] for bus in result["config"]["buses"]] == [500_000, 500_000]
+        assert result["message"] == (
+            "Found VN1610 on 0, CANable on COM3. Each is set to 500 kbit/s. "
+            "Change Bitrate to match your bus."
+        )
+
+    def test_others_beside_a_detected_bus_keep_500k(self, monkeypatch):
+        self._adapters(
+            monkeypatch, _PCAN_USB, {"interface": "vector", "channel": "0", "name": "VN1610"}
+        )
+        self._bus(monkeypatch, {1_000_000: [_FRAME]})
+
+        result = actions.auto_config()
+
+        assert [bus["bitrate"] for bus in result["config"]["buses"]] == [1_000_000, 500_000]
+        assert result["message"] == (
+            "Found PCAN-USB on PCAN_USBBUS1 at 1000 kbit/s (detected from bus traffic), "
+            "VN1610 on 0. The others are set to 500 kbit/s. Change Bitrate to match your bus."
+        )
+
+    def test_a_running_bus_keeps_its_bitrate_and_is_not_opened(self, monkeypatch):
+        self._adapters(monkeypatch, _PCAN_USB)
+        running = SimpleNamespace(
+            config={"interface": "pcan", "channel": "PCAN_USBBUS1", "bitrate": 125_000}
+        )
+        monkeypatch.setitem(actions.CAN_CODECS, "PCAN_USBBUS1", running)
+        opened = self._bus(monkeypatch, {500_000: [_FRAME]})
+
+        buses = actions.auto_config()["config"]["buses"]
+
+        assert opened == []
+        assert buses[0]["bitrate"] == 125_000
+
+    def test_a_bus_the_form_has_is_not_opened(self, monkeypatch):
+        self._adapters(monkeypatch, _PCAN_USB)
+        opened = self._bus(monkeypatch, {500_000: [_FRAME]})
+        mine = {"interface": "PCAN", "channel": "PCAN_USBBUS1", "bitrate": 250_000}
+
+        buses = actions.auto_config({"buses": [mine]})["config"]["buses"]
+
+        assert opened == []
+        assert buses == [mine]
+
+    def test_the_sweep_stops_at_its_deadline(self, monkeypatch):
+        """Twelve quiet tries would take 1.2 s; the sweep gives up at 0.3 s."""
+        self._adapters(
+            monkeypatch,
+            *(
+                {"interface": "pcan", "channel": f"PCAN_USBBUS{n}", "name": "PCAN-USB"}
+                for n in (1, 2, 3)
+            ),
+        )
+        monkeypatch.setattr(actions, "_LISTEN_SECONDS", 0.1)
+        monkeypatch.setattr(actions, "_DETECT_SECONDS", 0.3)
+        opened = self._bus(monkeypatch, {})
+
+        start = time.monotonic()
+        result = actions.auto_config()
+
+        assert time.monotonic() - start < 0.6
+        assert len(opened) <= 4
+        assert [bus["bitrate"] for bus in result["config"]["buses"]] == [500_000] * 3
+
+
 def test_only_actions_that_read_are_declared_read_only():
     """Zelos AI runs a read-only action without asking, so the set is pinned: each
-    declaration is a deliberate choice. Detection enumerates adapters and opens none;
-    the rest read the registered buses, their DBCs and counters. Everything else
+    declaration is a deliberate choice. Detection enumerates adapters and opens PCAN and
+    Kvaser channels listen-only, which transmits nothing; the rest read the registered
+    buses, their DBCs and counters. Everything else
     sends frames, starts or stops periodics, or writes a file."""
     if "read_only" not in Action.__slots__:
         pytest.skip("this zelos-sdk predates read_only and ignores the declaration")
@@ -747,8 +980,9 @@ class TestAdapterDetection:
 
     @pytest.fixture(autouse=True)
     def _no_gs_usb(self, monkeypatch):
-        """Hide this machine's gs_usb devices; they would join every message."""
+        """Hide this machine's gs_usb devices; they would join every message. Open no adapter."""
         monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {}, ""))
+        monkeypatch.setattr(actions, "_detect_bitrate", lambda *_: None)
 
     def test_vendor_adapters_list_each_channel_as_the_interface_enum_names_it(self, monkeypatch):
         answers = {
@@ -843,6 +1077,49 @@ class TestAdapterDetection:
 
         monkeypatch.setattr(basic, "PCANBasic", missing)
         assert actions._pcan_hardware_name("PCAN_USBBUS1") is None
+
+    @pytest.mark.parametrize(
+        ("condition", "set_status", "free"),
+        [
+            ("PCAN_CHANNEL_AVAILABLE", "PCAN_ERROR_OK", True),
+            ("PCAN_CHANNEL_OCCUPIED", "PCAN_ERROR_OK", False),
+            ("PCAN_CHANNEL_PCANVIEW", "PCAN_ERROR_OK", False),
+            ("PCAN_CHANNEL_AVAILABLE", "PCAN_ERROR_ILLPARAMTYPE", False),
+        ],
+    )
+    def test_a_pcan_channel_is_free_when_available_and_set_listen_only(
+        self, monkeypatch, condition, set_status, free
+    ):
+        """python-can ignores a refused listen-only, so it is set and checked before opening."""
+        from can.interfaces.pcan import basic
+
+        handle = basic.PCAN_CHANNEL_NAMES["PCAN_USBBUS1"]
+        calls = []
+
+        class FakeBasic:
+            def GetValue(self, channel, parameter):  # noqa: N802 - PCAN-Basic's name
+                calls.append(("get", channel, parameter))
+                return basic.PCAN_ERROR_OK, getattr(basic, condition)
+
+            def SetValue(self, channel, parameter, value):  # noqa: N802 - PCAN-Basic's name
+                calls.append(("set", channel, parameter, value))
+                return getattr(basic, set_status)
+
+        monkeypatch.setattr(basic, "PCANBasic", FakeBasic)
+
+        assert actions._pcan_free("PCAN_USBBUS1") is free
+        assert calls[0] == ("get", handle, basic.PCAN_CHANNEL_CONDITION)
+        listen_only = ("set", handle, basic.PCAN_LISTEN_ONLY, basic.PCAN_PARAMETER_ON)
+        assert (listen_only in calls) is (condition == "PCAN_CHANNEL_AVAILABLE")
+
+    def test_a_pcan_driver_that_fails_to_load_frees_nothing(self, monkeypatch):
+        from can.interfaces.pcan import basic
+
+        def missing():
+            raise OSError("libPCBUSB.dylib not found")
+
+        monkeypatch.setattr(basic, "PCANBasic", missing)
+        assert actions._pcan_free("PCAN_USBBUS1") is False
 
     def test_a_failing_vendor_library_hides_only_its_own_adapters(self, monkeypatch):
         def detect(interfaces):
