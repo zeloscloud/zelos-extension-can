@@ -199,11 +199,11 @@ class TestStandaloneConvert:
         assert Path(result["output_file"]).is_file()
 
     def test_a_multi_cluster_arxml_needs_its_cluster(self, tmp_path):
-        src, arxml = self._log(tmp_path), str(DBC_PATH.parent / "someip-system-00048.arxml")
+        src, arxml = self._log(tmp_path), str(DBC_PATH.parent / "two-clusters.arxml")
         with pytest.raises(Exception, match="select one with `cluster`"):
             actions.convert(input_file=str(src), database_file=arxml)
         result = actions.convert(
-            input_file=str(src), database_file=arxml, cluster="Can1", force=True
+            input_file=str(src), database_file=arxml, cluster="CanB", force=True
         )
         assert Path(result["output_file"]).is_file()
 
