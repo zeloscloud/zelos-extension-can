@@ -25,6 +25,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -874,8 +875,13 @@ _SLCAN_USB_IDS = frozenset({(0x16D0, 0x117E), (0x0403, 0xFFA8)})
 #: Only these: in a live extension the running bus logs through its own logger meanwhile.
 _MISSING_LIBRARY_LOGGERS = ("can.kvaser", "can.interfaces.vector.canlib")
 
-#: What a found adapter's bus starts at. The bus's real bitrate cannot be read off the adapter.
+#: What a found adapter's bus starts at when its bitrate is not heard on the bus.
 _ADAPTER_BITRATE = 500_000
+#: The bitrates listened for, most common first: those the form offers PCAN and Kvaser.
+_DETECT_BITRATES = (500_000, 250_000, 1_000_000, 125_000)
+#: How long each bitrate listens, and the deadline for the whole sweep across adapters.
+_LISTEN_SECONDS = 0.3
+_DETECT_SECONDS = 8.0
 # The PEAK adapters PCBUSB, the only macOS PCAN driver, supports. It opens only
 # the first channel of others, such as a PCAN-USB Pro FD.
 _PCBUSB_SUPPORTED = {"PCAN-USB", "PCAN-USB FD"}
@@ -937,6 +943,73 @@ def _pcan_hardware_name(channel: str) -> str | None:
     if status != PCAN_ERROR_OK:
         return None
     return name.decode(errors="replace").strip() or None
+
+
+def _pcan_free(channel: str) -> bool:
+    """Whether no other client holds a PCAN channel, which is then set to open listen-only."""
+    try:
+        from can.interfaces.pcan.basic import (
+            PCAN_CHANNEL_AVAILABLE,
+            PCAN_CHANNEL_CONDITION,
+            PCAN_CHANNEL_NAMES,
+            PCAN_ERROR_OK,
+            PCAN_LISTEN_ONLY,
+            PCAN_PARAMETER_ON,
+            PCANBasic,
+        )
+
+        basic, handle = PCANBasic(), PCAN_CHANNEL_NAMES[channel]
+        status, condition = basic.GetValue(handle, PCAN_CHANNEL_CONDITION)
+        if status != PCAN_ERROR_OK or condition != PCAN_CHANNEL_AVAILABLE:
+            return False
+        # python-can sets listen-only the same way but ignores a refusal and opens active.
+        return basic.SetValue(handle, PCAN_LISTEN_ONLY, PCAN_PARAMETER_ON) == PCAN_ERROR_OK
+    except Exception:
+        return False
+
+
+def _detect_bitrate(interface: str, channel: str, deadline: float) -> int | None:
+    """The first bitrate at which a listen-only bus hears a valid frame and no bus error.
+
+    None for a quiet bus, one that will not open listen-only, or a sweep out of time.
+    """
+    import can
+    from zelos_can.pcan import pcan_controller_state, release_pcan_channel
+
+    if interface == "pcan":
+        if not _pcan_free(channel):
+            return None
+        listen_only: dict[str, Any] = {"state": can.BusState.PASSIVE}
+    else:
+        # One handle, as python-can makes only its write handle silent; exclusive, so none shares.
+        listen_only = {"driver_mode": False, "single_handle": True, "exclusive": True}
+    for bitrate in _DETECT_BITRATES:
+        if time.monotonic() >= deadline:
+            return None
+        try:
+            bus = can.Bus(interface=interface, channel=channel, bitrate=bitrate, **listen_only)
+        except Exception:
+            logger.debug("Listen-only open failed for %s %s", interface, channel, exc_info=True)
+            if interface == "pcan":
+                release_pcan_channel(channel)
+            return None
+        end = min(time.monotonic() + _LISTEN_SECONDS, deadline)
+        heard = errors = False
+        try:
+            while not errors and (left := end - time.monotonic()) > 0:
+                msg = bus.recv(left)
+                if msg is not None:
+                    errors |= msg.is_error_frame
+                    heard = True
+            errors |= pcan_controller_state(bus) not in (None, "ok")
+        except Exception:
+            logger.debug("Listening failed on %s %s", interface, channel, exc_info=True)
+            return None
+        finally:
+            bus.shutdown()
+        if heard and not errors:
+            return bitrate
+    return None
 
 
 _LABELS = {name: label for label, name in INTERFACES.items()}
@@ -1042,11 +1115,12 @@ def _apply_form(
     "interfaces on Linux, PCAN, Kvaser, Vector and slcan adapters on any OS, and "
     "gs_usb adapters the kernel does not hold when the gs_usb extra is installed. "
     "A demo bus where there is none. A bus the form already has for a found "
-    "adapter keeps its settings. For the config form's Auto-configure button. "
-    "Review it, then save and start.",
+    "adapter keeps its settings. A PCAN or Kvaser bus that is neither running nor "
+    "already in the form gets the bitrate heard on it in listen-only mode, 500 kbit/s "
+    "when none is detected. For the config form's Auto-configure button. Review it, "
+    "then save and start.",
     standalone=True,
-    # Detection enumerates adapters and opens none (a gs_usb product string read
-    # aside); the config it returns is a proposal the form applies only when saved.
+    # Transmits nothing: PCAN and Kvaser channels open listen-only, and the config is a proposal.
     read_only=True,
     hidden=True,
 )
@@ -1107,33 +1181,66 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         {"interface": "SocketCAN", "channel": iface["name"], "database_files": []}
         for iface in interfaces
     ]
+    form = _form_buses(config)
+    # Only PCAN and Kvaser report a refused listen-only; Vector, slcan and gs_usb are never opened.
+    heard: dict[tuple[str, str], int] = {}
+    quiet = []
+    deadline = time.monotonic() + _DETECT_SECONDS
+    for adapter in adapters:
+        key = (adapter["interface"], adapter["channel"])
+        if (
+            key[0] not in ("pcan", "kvaser")
+            or key in running
+            or (_LABELS[key[0]], str(key[1])) in form
+        ):
+            continue
+        if (bitrate := _detect_bitrate(*key, deadline)) is None:
+            quiet.append(_where(adapter))
+        else:
+            heard[key] = bitrate
+    rates = {**heard, **running}
     buses += [
         {
             "interface": _LABELS[adapter["interface"]],
             "channel": adapter["channel"],
-            "bitrate": running.get((adapter["interface"], adapter["channel"]), _ADAPTER_BITRATE),
+            "bitrate": rates.get((adapter["interface"], adapter["channel"]), _ADAPTER_BITRATE),
             "database_files": [],
         }
         for adapter in adapters
     ]
-    form = _form_buses(config)
     if form:
         buses = _apply_form(buses, form, gs_held)
     result: dict[str, Any] = {"status": "success", "config": {"buses": buses}}
     if adapters:
-        found = ", ".join(f"{a['name']} on {_where(a)}" for a in adapters)
+        noted = {k: f" at {r // 1000} kbit/s (detected from bus traffic)" for k, r in heard.items()}
+        found = ", ".join(
+            f"{a['name']} on {_where(a)}{noted.get((a['interface'], a['channel']), '')}"
+            for a in adapters
+        )
         rate = f"{_ADAPTER_BITRATE // 1000} kbit/s"
         kept = []
         if {(_LABELS[a["interface"]], str(a["channel"])) for a in adapters} & form.keys():
             kept.append("buses already in the form keep their settings")
         if running:
             kept.append("running buses keep their bitrate")
-        setting = (
-            f"{'; '.join(kept).capitalize()}; new ones are set to {rate}."
-            if kept
-            else f"Each is set to {rate}."
+        # Every bus has its bitrate when each one not kept was heard.
+        settled = all(
+            (a["interface"], a["channel"]) in rates
+            or (_LABELS[a["interface"]], str(a["channel"])) in form
+            for a in adapters
         )
-        result["message"] = f"Found {found}. {setting} Change Bitrate to match your bus."
+        rest = "the others" if heard else "new ones"
+        if settled:
+            setting = f"{'; '.join(kept).capitalize()}." if kept else ""
+        elif kept:
+            setting = f"{'; '.join(kept).capitalize()}; {rest} are set to {rate}."
+        else:
+            setting = f"{'The others are' if heard else 'Each is'} set to {rate}."
+        if quiet:
+            setting = f"No bitrate was detected on {', '.join(quiet)}. {setting}"
+        result["message"] = f"Found {found}. {setting}".strip()
+        if not settled:
+            result["message"] += " Change Bitrate to match your bus."
         limited = sorted(
             {
                 a["name"]
