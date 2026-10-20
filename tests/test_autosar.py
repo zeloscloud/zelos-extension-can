@@ -155,7 +155,6 @@ def test_a_python_can_bus_decodes_arxml_on_the_rust_decoder(tmp_path):
         source = zelos_sdk.TraceSource("CAN", namespace=namespace)
         ((codec, _),) = _create_codecs(config, SYSTEM, resolve_advanced(config), source)
         codec.start()
-        codec._start_notifier()
         peer = can.Bus(interface="virtual", channel="autosar_pycan", preserve_timestamps=True)
         try:
             for stamp, can_id, data in frames:
