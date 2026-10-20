@@ -66,7 +66,7 @@ before the extension has ever started.
   | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
   | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
   | gs_usb (USB) | `gs_usb` | candleLight and CANable (gs_usb firmware) over libusb; classic CAN; needs the `gs_usb` extra |
-  | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface. `{"interface": "zelos-virtual", "channel": ...}` is zelos-can's in-memory bus, decoded on the Rust path as SocketCAN is; it decodes the frames it sends only with **Receive Own Messages** |
+  | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface. `{"interface": "zelos-virtual", "channel": ...}` is zelos-can's in-memory bus; it decodes the frames it sends only with **Receive Own Messages** |
   | Demo | | Built-in EV simulator |
 
 - **Channel**: Specify the CAN channel/device name. For slcan (serial) (CANable, CANUSB and other LAWICEL serial adapters), this is the serial port: `/dev/ttyACM0`, `/dev/tty.usbmodem...`, `COM3`.
