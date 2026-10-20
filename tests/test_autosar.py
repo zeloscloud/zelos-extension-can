@@ -45,9 +45,11 @@ def _wait(cache, path, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            return cache[path].get()
+            if (value := cache[path].get()) is not None:  # None until first logged
+                return value
         except (KeyError, AttributeError):
-            time.sleep(0.02)
+            pass
+        time.sleep(0.02)
     pytest.fail(f"no value at {path}")
 
 
