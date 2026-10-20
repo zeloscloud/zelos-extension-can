@@ -32,6 +32,8 @@ ADVANCED_DEFAULTS: dict = {
     **BUS_DEFAULTS,
     "j1939": False,
     "j1939_node": "",
+    "j1939_name": "",
+    "j1939_address": None,
     "canopen": False,
     "log_level": "INFO",
 }
@@ -39,6 +41,18 @@ ADVANCED_DEFAULTS: dict = {
 #: Bus-level keys this extension owns (not zelos-can's `BUS_DEFAULTS`), copied
 #: onto each bus config the same way.
 EXTENSION_BUS_KEYS = ("j1939", "canopen")
+
+
+def _j1939_node(advanced: dict) -> str | dict | None:
+    """The node every bus claims as: a DBC node name, or an explicit NAME and
+    address. zelos-can parses and validates either."""
+    node = (advanced["j1939_node"] or "").strip()
+    name, address = (advanced["j1939_name"] or "").strip(), advanced["j1939_address"]
+    if not name and address is None:
+        return node or None
+    if node:
+        raise ValueError("set J1939 Node, or J1939 NAME and J1939 Address, not both")
+    return {"name": name, "address": address}
 
 
 def resolve_advanced(config: dict) -> dict:
@@ -115,8 +129,8 @@ def _create_codecs(
     for prepared in prepared_configs:
         for key in EXTENSION_BUS_KEYS:
             prepared.setdefault(key, advanced[key])
-        if advanced["j1939_node"]:
-            prepared.setdefault("j1939_node", advanced["j1939_node"])
+        if node := _j1939_node(advanced):
+            prepared.setdefault("j1939_node", node)
 
     seen_names: set[str] = set()
 
