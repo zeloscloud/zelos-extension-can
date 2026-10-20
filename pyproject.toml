@@ -30,10 +30,10 @@ dependencies = [
     # `cli/export.py` reads trace queries as Arrow IPC.
     "pyarrow>=14.0.0",
     # The CAN runtime: codec, DBC decode, bus config, ssh-socketcan, converter,
-    # demo. The python-can extra brings python-can[serial] and cantools. Wheels
-    # cover all platforms, so there is no sys_platform marker. 0.0.11a8 carries
-    # the J1939 runtime with j1939_node identity. Floor (not exact) pin.
-    "zelos-can[python-can]>=0.0.11a12",
+    # demo. Wheels cover all platforms, so there is no sys_platform marker.
+    # 0.0.11a13 runs every python-can interface on the Rust codec (J1939, CANopen,
+    # ARXML on all of them). Floor (not exact) pin.
+    "zelos-can[python-can]>=0.0.11a13",
 ]
 
 [project.scripts]
@@ -60,6 +60,8 @@ dev = [
     "pre-commit>=4.3.0",
     "ruff>=0.14.2",
     "jsonschema>=4.0.0",
+    # Independent truth source for the ARXML tests; zelos-can no longer brings it.
+    "cantools>=40.0.0",
     "tomli>=2.3.0; python_version < '3.11'",
 ]
 

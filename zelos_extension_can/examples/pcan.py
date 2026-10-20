@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["zelos-can[python-can]>=0.0.11a10", "zelos-sdk"]
+# dependencies = ["zelos-can[python-can]>=0.0.11a13", "zelos-sdk"]
 # ///
 """Trace a PCAN bus against the demo DBC to a .trz, sending 0x100 every 100 ms.
 
