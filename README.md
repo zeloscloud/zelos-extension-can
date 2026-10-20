@@ -155,26 +155,18 @@ toggle, every node-id without files.
 
 ### AUTOSAR ARXML
 
-`.arxml` files decode natively on every interface and in `convert`. On PCAN,
-Kvaser, Vector, slcan and other python-can buses, python-can stays the adapter and
-the transmit path and hands each frame, with its adapter timestamp, to zelos-can's
-decoder; a bus with DBC files only decodes as before. A bus's ARXML files
-load as one system, references resolved across files; a system with several CAN
-clusters needs **ARXML CAN Cluster** (`--cluster` in the CLI). On small edge
-machines prefer the ECU extract (the ECU's own slice of the system) to a
-whole-vehicle file: about 0.2 s and 0.5 GB of transient memory per 80 MB of ARXML.
+`.arxml` files decode natively on every interface and in `convert`. A bus's ARXML
+files load as one system; a system with several CAN clusters needs **ARXML CAN
+Cluster** (`--cluster` in the CLI). On small machines prefer an ECU extract to a
+whole-vehicle file.
 
 | What | Behavior |
 |---|---|
-| **Naming** | As DBC messages, a table per frame named `<id>_<frame short-name>`: frame `Message1` carrying PDU `message1` is `0005_Message1`. PDUs a frame carries nest under it by name. |
-| **Signal PDUs** | As DBC messages, including a PDU that starts past byte 0 of its frame. |
-| **Container PDUs** | Short (24-bit id, 8-bit length) and long (32 + 32) headers, in the system's header byte order. Each contained PDU decodes into its own table under the frame: `0066_OneToContainThemAll/message2`; the container frame itself has none. An unknown header id is skipped, warned once and counted (`pdu_unknown_contained`). |
-| **Multiplexed PDUs** | The static part under the frame's name, the selected dynamic part under `<frame>/<dynamic PDU>`: `0004_MultiplexedMessage/multiplexed_message_1`. A selector with no dynamic part is counted (`pdu_unknown_selector`). |
-| **Secured PDUs** | The freshness value and authenticator are cut by the ARXML lengths and the authentic PDU decodes under the frame's name (`0064_Message3`), with a `secoc` column reading `unverified`: keys are never in the config, so the MAC is not checked. |
-| **E2E** | Profiles 1, 2, 4, 5, 6, 7, 11 and 22, checked from the ARXML protection (data ids, offsets, counter, CRC). Each protected PDU gets an `e2e_status` column: `ok`, `wrong_crc` (CRC, data id or length), `wrong_sequence`, `repeated` or `not_checked` (a profile or setting not verified). The first frame after start sets the counter. |
-| **CanTp** | ISO 15765-2 single, first and consecutive frames on the N-PDUs the ARXML maps to CanTp, normal and extended (or mixed) addressing, CAN FD lengths. The reassembled I-PDU decodes as any other, under the N-PDU's frame (`<id>_<frame>`; `<id>_<frame>/<I-PDU>` each when the frame carries several connections). A wrong sequence number drops the transfer. Counters `cantp_completed`, `cantp_dropped`. |
-| **Raw only, with a warning** | Static-layout containers, frames carrying several PDUs, signals over 64 bits. 1C and sign-magnitude signals read as two's complement. |
-| **Transmit and describe** | ARXML messages are addressed by frame (`0005_Message1`) and encoded per frame, as DBC messages. A transmit does not fill in E2E or SecOC fields. |
+| **Naming** | A table per frame, `<id>_<frame>`, as for DBC messages. The PDUs a frame carries (contained, multiplexed dynamic parts, CanTp I-PDUs) nest under it by name. |
+| **PDUs** | Signal, container (short and long headers), multiplexed, secured (the authentic PDU decodes; `secoc` reads `unverified`, the MAC is not checked) and CanTp (ISO 15765-2). |
+| **E2E** | Profiles 1, 2, 4, 5, 6, 7, 11 and 22: each protected PDU gets an `e2e_status` column, `ok`, `wrong_crc`, `wrong_sequence`, `repeated` or `not_checked`. |
+| **Counters** | `pdu_unknown_contained`, `pdu_unknown_selector`, `cantp_completed`, `cantp_dropped`. |
+| **Limits** | Raw only, with a warning: static-layout containers, several PDUs per frame, signals over 64 bits. Transmit encodes per frame and does not fill in E2E or SecOC fields. |
 
 ### Advanced Settings
 
