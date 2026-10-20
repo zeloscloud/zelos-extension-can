@@ -1159,7 +1159,7 @@ def _configured_databases() -> tuple[list[str], str | None]:
     the action body rather than as a schema default because the inventory is
     dumped at package time, before any config exists.
     """
-    from zelos_can.dbc import bus_database_files  # deferred: pulls in can/cantools
+    from zelos_can.dbc import bus_database_files  # deferred: pulls in can
 
     try:
         from zelos_sdk.extensions.config import load_config
