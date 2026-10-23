@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--data-bitrate",
     type=int,
-    help="CAN-FD data phase bitrate",
+    help="CAN-FD data phase bitrate; SocketCAN takes it from the interface (ip link)",
 )
 @click.option(
     "--prefix",
@@ -91,7 +91,7 @@ def trace(
 
       # Trace CAN-FD
 
-      zelos-extension-can trace zelos-socketcan can0 vehicle.dbc --fd --data-bitrate 2000000
+      zelos-extension-can trace zelos-socketcan can0 vehicle.dbc --fd
 
       # Several databases, later files win a conflicting message id
 
