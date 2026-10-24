@@ -17,21 +17,49 @@ format:
     uv run ruff format .
     uv run ruff check --fix .
 
-# Run checks
-check:
+# Run checks: ruff on the agent, tsc on the panels
+check: web-check
     uv run ruff check .
 
-# Run tests
-test:
+# Run tests: the agent's, then the panels'
+test: web-test
     uv run pytest
 
 # Run extension locally
 dev:
     uv run python main.py
 
-# Package extension
-package:
+# Package extension (builds the panels first)
+package: web-build
     uv run python scripts/package_extension.py
+
+# Install the panels' npm dependencies
+web-install:
+    (cd web && npm install --no-package-lock)
+
+# Install the panels' dependencies against a local SDK tarball (package.json keeps its ^ range)
+web-install-local SDK_TGZ:
+    cd web && npm install --no-save --no-package-lock "$(realpath "{{SDK_TGZ}}")"
+
+# Build the panels into dist/panels/
+web-build:
+    (cd web && npm run build)
+
+# Type-check the panels
+web-check:
+    (cd web && npm run check)
+
+# Run the panels' unit tests
+web-test:
+    (cd web && npm test)
+
+# Serve the panels against the SDK's mock host: http://localhost:5173/panels/bus-monitor.html
+web-dev:
+    (cd web && npm run dev)
+
+# Rebuild dist/ on every change, for a local install in Zelos
+web-watch:
+    (cd web && npm run watch)
 
 # Release new version
 release VERSION:

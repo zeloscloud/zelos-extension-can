@@ -19,6 +19,9 @@ htmlcov/
 # Build artifacts
 build/
 dist/
+# The web project's dependencies. Its lockfile is committed only once every dependency it pins is on npm.
+web/node_modules/
+web/package-lock.json
 *.egg-info/
 pip-wheel-metadata/
 zelos_extension_can.egg-info/
