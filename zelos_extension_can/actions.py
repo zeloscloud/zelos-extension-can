@@ -87,6 +87,7 @@ def _clear_destination(destination: Path, overwrite: bool) -> None:
     "Names of all CAN codecs (buses) currently registered on this extension. "
     "Consumers use this to discover what `codec` values the other actions accept.",
     read_only=True,
+    hidden=True,
 )
 def list_codecs() -> dict[str, Any]:
     return {"codecs": _available_codecs()}
@@ -102,6 +103,7 @@ def list_codecs() -> dict[str, Any]:
     "error (error-passive, bus-off, adapter unreachable or down, or sends failing), stopped, "
     "or unknown; `health` says why.",
     read_only=True,
+    hidden=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 def get_tx_state(codec: str) -> dict[str, Any]:
@@ -116,6 +118,7 @@ def get_tx_state(codec: str) -> dict[str, Any]:
     "describe_message to fetch a specific message's full signal detail on "
     "demand.",
     read_only=True,
+    hidden=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 def list_messages(codec: str) -> dict[str, Any]:
@@ -129,6 +132,7 @@ def list_messages(codec: str) -> dict[str, Any]:
     "`message` is a key from list_messages, or a name only one "
     "definition carries.",
     read_only=True,
+    hidden=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.text("message", title="DBC message key or name")
@@ -203,6 +207,7 @@ def send_message(codec: str, message: str, signals_json: str, mux: str = "") -> 
     "`message` is a key from list_messages, or a name only one "
     "definition carries.",
     read_only=True,
+    hidden=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.text("message", title="DBC message key or name")
@@ -322,6 +327,7 @@ def j1939_send(
     "J1939 Encode Preview",
     "Encode a J1939 parameter group without sending it: its PGN, addressing and bytes.",
     read_only=True,
+    hidden=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.text("message", title="DBC message key or name")
@@ -464,6 +470,7 @@ def _canopen_sdo(fn):
     "The CANopen nodes a bus has configured or seen: NMT state, heartbeat, EMCY and "
     "SDO counts. `warnings` are the decoder's.",
     read_only=True,
+    hidden=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 def canopen_nodes(codec: str) -> dict[str, Any]:
@@ -475,6 +482,7 @@ def canopen_nodes(codec: str) -> dict[str, Any]:
     "A configured node's object dictionary entry at `index`, from its EDS/DCF; "
     "without an index, its PDOs and communication objects.",
     read_only=True,
+    hidden=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @action.integer("node_id", title="Node ID (1-127)", minimum=1, maximum=127)
@@ -487,6 +495,7 @@ def canopen_describe(codec: str, node_id: int, index: str = "") -> dict[str, Any
     "CANopen SDO Read",
     "Read one object from a node (SDO upload). Transmits on the bus. An abort, or no "
     "answer in time, is an error.",
+    read_only=True,
 )
 @action.select("codec", title="CAN bus", choices=_available_codecs)
 @_canopen_sdo

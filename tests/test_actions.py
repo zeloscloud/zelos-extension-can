@@ -19,7 +19,6 @@ from unittest.mock import patch
 import pytest
 import zelos_sdk
 from zelos_can.codec import CanCodec
-from zelos_sdk.actions import Action
 from zelos_sdk.extensions.actions import get_standalone_actions
 
 from zelos_extension_can import ACTION_PREFIX, actions
@@ -716,29 +715,40 @@ class TestConfigFormHooks:
         assert actions.auto_config(form) == expected
 
 
-def test_only_actions_that_read_are_declared_read_only():
-    """Zelos AI runs a read-only action without asking, so the set is pinned: each
-    declaration is a deliberate choice. Detection enumerates adapters and opens none;
-    the rest read the registered buses, their DBCs and counters. Everything else
-    sends frames, starts or stops periodics, or writes a file."""
-    if "read_only" not in Action.__slots__:
-        pytest.skip("this zelos-sdk predates read_only and ignores the declaration")
+def test_every_action_declares_its_flags():
+    """Pins each action's flags, so a new action or a changed flag is a deliberate choice."""
     declared = {
-        name
+        name: (obj._action.read_only, obj._action.hidden)
         for name, obj in vars(actions).items()
-        if callable(obj) and hasattr(obj, "_action") and obj._action.read_only
+        if callable(obj) and hasattr(obj, "_action")
     }
     assert declared == {
-        "auto_config",
-        "list_interfaces",
-        "list_codecs",
-        "get_tx_state",
-        "list_messages",
-        "describe_message",
-        "encode_preview",
-        "j1939_encode_preview",
-        "canopen_nodes",
-        "canopen_describe",
+        "list_codecs": (True, True),
+        "get_tx_state": (True, True),
+        "list_messages": (True, True),
+        "describe_message": (True, True),
+        "send_raw": (False, False),
+        "start_periodic_raw": (False, False),
+        "send_message": (False, False),
+        "encode_preview": (True, True),
+        "start_periodic_message": (False, False),
+        "j1939_claim": (False, False),
+        "j1939_send": (False, False),
+        "j1939_encode_preview": (True, True),
+        "j1939_send_periodic": (False, False),
+        "j1939_send_raw": (False, False),
+        "j1939_request": (False, False),
+        "canopen_nodes": (True, True),
+        "canopen_describe": (True, True),
+        "canopen_sdo_read": (True, False),
+        "canopen_sdo_write": (False, False),
+        "canopen_nmt": (False, False),
+        "stop_periodic": (False, False),
+        "convert_trace_file": (False, False),
+        "export_trace_to_log": (False, False),
+        "list_interfaces": (True, True),
+        "auto_config": (True, True),
+        "convert": (False, False),
     }
 
 
