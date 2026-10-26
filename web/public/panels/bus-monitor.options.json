@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "title": "CAN Bus Monitor",
+  "properties": {
+    "flashChanges": {
+      "type": "boolean",
+      "title": "Flash changes",
+      "description": "Briefly highlight a byte or value that changed",
+      "default": false
+    },
+    "showSource": {
+      "type": "boolean",
+      "title": "Show Source",
+      "description": "Display the table each row came from",
+      "default": false
+    },
+    "fontSize": {
+      "type": "integer",
+      "title": "Font size",
+      "description": "Font size in pixels",
+      "minimum": 6,
+      "maximum": 128,
+      "default": 14,
+      "ui:options": {
+        "unit": "px"
+      }
+    }
+  }
+}

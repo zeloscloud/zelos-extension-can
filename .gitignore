@@ -19,6 +19,7 @@ htmlcov/
 # Build artifacts
 build/
 dist/
+web/node_modules/
 *.egg-info/
 pip-wheel-metadata/
 zelos_extension_can.egg-info/
