@@ -1,10 +1,17 @@
 """Tests for TRZ to candump log export functionality."""
 
+import json
+import subprocess
+import sys
+import time
 from pathlib import Path
 
+import can
 import pytest
 import zelos_sdk
 
+from zelos_extension_can import actions
+from zelos_extension_can.cli.app import _create_codecs, resolve_advanced
 from zelos_extension_can.cli.export import (
     _derive_channel_name,
     _format_candump_line,
@@ -110,12 +117,7 @@ class TestChannelNameDerivation:
 class TestExportIntegration:
     """Integration tests for TRZ export."""
 
-    @pytest.fixture
-    def test_dbc_path(self):
-        """Get path to test DBC file."""
-        return Path(__file__).parent / "files" / "test.dbc"
-
-    def test_export_creates_log_file(self, test_dbc_path, tmp_path):
+    def test_export_creates_log_file(self, tmp_path):
         """Test that export creates a valid log file from a TRZ with raw frames."""
         trz_file = tmp_path / "test_recording.trz"
         log_file = tmp_path / "test_output.log"
@@ -176,7 +178,7 @@ class TestExportIntegration:
         assert "can0" in lines[0]
         assert "100#" in lines[0]
 
-    def test_export_with_named_bus(self, test_dbc_path, tmp_path):
+    def test_export_with_named_bus(self, tmp_path):
         """Test export with a named bus (e.g., chassis_raw)."""
         trz_file = tmp_path / "named_bus.trz"
         log_file = tmp_path / "named_bus.log"
@@ -348,12 +350,7 @@ class TestExportIntegration:
 class TestRoundtrip:
     """Tests for log -> trz -> log roundtrip conversion."""
 
-    @pytest.fixture
-    def test_dbc_path(self):
-        """Get path to test DBC file."""
-        return Path(__file__).parent / "files" / "test.dbc"
-
-    def test_log_trz_log_roundtrip(self, test_dbc_path, tmp_path):
+    def test_log_trz_log_roundtrip(self, tmp_path):
         """Test that log -> trz -> log produces equivalent output.
 
         This verifies the workflow:
@@ -432,3 +429,97 @@ class TestRoundtrip:
             assert orig_data.upper() == exported_data.upper(), (
                 f"Frame mismatch: {orig_data} vs {exported_data}"
             )
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TEST_DBC = Path(__file__).parent / "files" / "test.dbc"
+
+#: (bus, arbitration id, data) in the order the buses receive them; 0x064 is in the DBC.
+RECORDED = [
+    ("chassis", 0x064, bytes(range(8))),
+    ("body", 0x7FF, b"\xaa\xbb"),
+    ("chassis", 0x12C, b"\x01\x02"),
+]
+
+
+def _received(codec) -> int:
+    return codec.get_tx_state()["bus"]["metrics"]["messages_received"]
+
+
+def _record(trz: Path, prefix: str) -> None:
+    """Record RECORDED as app mode does: a bus per name, its frames under the prefix's layout."""
+    channels = {bus: f"export-{prefix or 'cleared'}-{bus}" for bus, _, _ in RECORDED}
+    config = {
+        "buses": [
+            {
+                "name": bus,
+                "interface": "Other (python-can)",
+                "config_json": json.dumps({"interface": "virtual", "channel": channel}),
+                "database_files": [str(TEST_DBC)],
+            }
+            for bus, channel in channels.items()
+        ]
+    }
+    advanced = resolve_advanced({"advanced": {"prefix": prefix}})
+    with zelos_sdk.TraceWriter(str(trz)):
+        source = zelos_sdk.init_global_source(prefix) if prefix else None
+        pairs = _create_codecs(config, TEST_DBC, advanced, source)
+        peers = {bus: can.Bus(interface="virtual", channel=ch) for bus, ch in channels.items()}
+        try:
+            for codec, _ in pairs:
+                codec.start()
+            for bus, arb_id, data in RECORDED:
+                peers[bus].send(can.Message(arbitration_id=arb_id, data=data, is_extended_id=False))
+            deadline = time.monotonic() + 5
+            for codec, bus in pairs:
+                want = sum(1 for name, _, _ in RECORDED if name == bus)
+                while _received(codec) < want:
+                    assert time.monotonic() < deadline, f"{bus} received {_received(codec)}"
+                    time.sleep(0.02)
+        finally:
+            for peer in peers.values():
+                peer.shutdown()
+            for codec, _ in pairs:
+                codec.stop()
+
+
+def _frames(log: Path) -> list[tuple[str, int, bytes]]:
+    """(channel, arbitration id, data) of each candump line, sorted."""
+    frames = []
+    for line in log.read_text().splitlines():
+        _, channel, frame = line.split()
+        arb_id, data = frame.split("#")
+        frames.append((channel, int(arb_id, 16), bytes.fromhex(data)))
+    return sorted(frames)
+
+
+@pytest.fixture(scope="module", params=["CAN", ""], ids=["prefixed", "prefix-cleared"])
+def recorded(request, tmp_path_factory) -> Path:
+    """A trace recorded by this version's buses: `CAN/<bus>/Frame`, or `<bus>/Frame`."""
+    trz = tmp_path_factory.mktemp("recorded") / "recording.trz"
+    # A process of its own, as app mode has: trace sources live as long as their process.
+    code = (
+        "import sys, pathlib, test_export as t; t._record(pathlib.Path(sys.argv[1]), sys.argv[2])"
+    )
+    cmd = [sys.executable, "-c", code, str(trz), request.param]
+    run = subprocess.run(cmd, cwd=Path(__file__).parent, capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stdout + run.stderr
+    return trz
+
+
+class TestRecordedTrace:
+    """Export reads the raw frames of a trace this version records, on the bus it came from."""
+
+    def test_export_trace_to_log_action(self, recorded, tmp_path):
+        log = tmp_path / "exported.log"
+        params = {"input_path": str(recorded), "output_path": str(log)}
+        result = zelos_sdk.actions_registry.execute(actions.export_trace_to_log.__name__, params)
+        assert result.value["frame_count"] == len(RECORDED)
+        assert _frames(log) == sorted(RECORDED)
+
+    def test_main_export_command(self, recorded, tmp_path):
+        log = tmp_path / "exported.log"
+        cmd = [sys.executable, str(ROOT / "main.py"), "export", str(recorded), "-o", str(log)]
+        run = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=60)
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert _frames(log) == sorted(RECORDED)

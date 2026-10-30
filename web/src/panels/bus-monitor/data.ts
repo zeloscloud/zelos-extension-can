@@ -39,7 +39,9 @@ function tablePath(signal: { source: string; message: string }): string {
 
 /** The bound frame signals the window projects — the four fields above, out of the six an event drop binds. */
 export function canFrameQuerySignals<S extends BoundSignal>(signals: readonly S[]): S[] {
-  return signals.filter((signal) => isCanFrameSignal(signal) && CAN_FRAME_FIELD_SET.has(signal.signal));
+  return signals.filter(
+    (signal) => isCanFrameSignal(signal) && CAN_FRAME_FIELD_SET.has(signal.signal),
+  );
 }
 
 /** The latest-value feed's signals: whatever the frame window leaves out, unless frame rows speak for its table. */
@@ -53,7 +55,8 @@ export function canEventQuerySignals<S extends BoundSignal>(signals: readonly S[
 /** A scope axis the bound signal leaves unset admits every value on it. */
 function scopeAdmitsColumn(column: ColumnMetadata, signal: BoundSignal): boolean {
   if (signal.producer !== undefined && (column.producer ?? null) !== signal.producer) return false;
-  if (signal.tracePath !== undefined && (column.tracePath ?? null) !== signal.tracePath) return false;
+  if (signal.tracePath !== undefined && (column.tracePath ?? null) !== signal.tracePath)
+    return false;
   if (signal.dataSegmentId && signal.dataSegmentId !== (column.dataSegmentId ?? null)) return false;
   return true;
 }
@@ -152,7 +155,9 @@ export function formatArbitrationId(id: number, isExtended: boolean): string {
 /** `0x0011ff` → `["00", "11", "FF"]`. */
 export function canDataBytes(value: QueryCellValue): string[] {
   if (typeof value !== "string") return [];
-  return Array.from(parseFrameHex(value), (byte) => byte.toString(16).toUpperCase().padStart(2, "0"));
+  return Array.from(parseFrameHex(value), (byte) =>
+    byte.toString(16).toUpperCase().padStart(2, "0"),
+  );
 }
 
 /** The Data cell as TEXT — bytes spaced, decoded fields one per line. What "Copy value" copies. */
@@ -174,9 +179,16 @@ function canEventLinePx(fontSizePx: number): number {
 const CAN_EVENT_PADDING_PX = 6;
 
 /** A row's height in px: one grid row for a frame, its own lines plus one padding for an event. */
-export function canRowHeight(row: Pick<CanRow, "kind" | "tokens">, gridRowHeight: number, fontSizePx: number): number {
+export function canRowHeight(
+  row: Pick<CanRow, "kind" | "tokens">,
+  gridRowHeight: number,
+  fontSizePx: number,
+): number {
   if (row.kind === "frame") return gridRowHeight;
-  return Math.max(gridRowHeight, row.tokens.length * canEventLinePx(fontSizePx) + CAN_EVENT_PADDING_PX);
+  return Math.max(
+    gridRowHeight,
+    row.tokens.length * canEventLinePx(fontSizePx) + CAN_EVENT_PADDING_PX,
+  );
 }
 
 /** Decoded messages first, raw frames last. */
@@ -212,11 +224,22 @@ export function compareCanMessage(
 }
 
 /** A row's identity, without the segment: a producer restart opens a new segment for the same bus. */
-function rowTableKey(table: { tracePath: string | null; producer: string | null; source: string; message: string }) {
-  return [table.tracePath, table.producer, table.source, table.message].map((part) => part ?? "").join("\0");
+function rowTableKey(table: {
+  tracePath: string | null;
+  producer: string | null;
+  source: string;
+  message: string;
+}) {
+  return [table.tracePath, table.producer, table.source, table.message]
+    .map((part) => part ?? "")
+    .join("\0");
 }
 
-function cellAt(data: readonly QueryCellValue[][], columnIndex: number, row: number): QueryCellValue {
+function cellAt(
+  data: readonly QueryCellValue[][],
+  columnIndex: number,
+  row: number,
+): QueryCellValue {
   return columnIndex >= 0 ? (data[columnIndex]?.[row] ?? null) : null;
 }
 
@@ -324,7 +347,10 @@ export function buildCanEventRows(
 ): CanRow[] {
   if (!values?.length) return [];
 
-  const groups = new Map<string, { row: CanRow; fields: { name: string; text: string; order: number }[] }>();
+  const groups = new Map<
+    string,
+    { row: CanRow; fields: { name: string; text: string; order: number }[] }
+  >();
 
   for (const value of values) {
     const key = rowTableKey({
@@ -378,7 +404,9 @@ function changedTokens(previous: readonly string[], next: readonly string[]): nu
 
 function sameCanRow(a: CanRow, b: CanRow): boolean {
   return (
-    a.timeS === b.timeS && a.tokens.length === b.tokens.length && a.tokens.every((token, i) => token === b.tokens[i])
+    a.timeS === b.timeS &&
+    a.tokens.length === b.tokens.length &&
+    a.tokens.every((token, i) => token === b.tokens[i])
   );
 }
 
@@ -386,12 +414,20 @@ function sameCanRow(a: CanRow, b: CanRow): boolean {
 export type CanRowCache = Map<string, CanRow>;
 
 /** A row replaces only an older one (not an equal time: list order is the backend's); `replaceAny`: any change. */
-export function mergeCanRows(cache: CanRowCache, incoming: readonly CanRow[], replaceAny = false): boolean {
+export function mergeCanRows(
+  cache: CanRowCache,
+  incoming: readonly CanRow[],
+  replaceAny = false,
+): boolean {
   let changed = false;
   for (const row of incoming) {
     const previous = cache.get(row.id);
-    if (previous && (replaceAny ? sameCanRow(previous, row) : previous.timeS >= row.timeS)) continue;
-    cache.set(row.id, previous ? { ...row, flash: changedTokens(previous.tokens, row.tokens) } : row);
+    if (previous && (replaceAny ? sameCanRow(previous, row) : previous.timeS >= row.timeS))
+      continue;
+    cache.set(
+      row.id,
+      previous ? { ...row, flash: changedTokens(previous.tokens, row.tokens) } : row,
+    );
     changed = true;
   }
   return changed;
@@ -497,7 +533,8 @@ export function advanceCanScope(state: CanPanelState, inputs: CanScopeInputs): C
   const scope = state.scope;
   // Kept apart: one makes the rows another panel's, the other only puts them ahead of the cursor.
   const describesSomethingElse =
-    scope !== null && (scope.scopeKey !== inputs.scopeKey || pathsDropped(scope.pathsKey, inputs.pathsKey));
+    scope !== null &&
+    (scope.scopeKey !== inputs.scopeKey || pathsDropped(scope.pathsKey, inputs.pathsKey));
   const soughtBack = scope !== null && windowRetreated(scope, inputs);
   const cleared = describesSomethingElse || soughtBack;
 

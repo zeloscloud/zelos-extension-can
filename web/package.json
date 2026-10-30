@@ -1,35 +1,49 @@
 {
-  "name": "zelos-extension-can-web",
+  "name": "zelos-extension-can",
   "private": true,
+  "version": "0.4.0",
   "type": "module",
-  "description": "The CAN extension's panels",
+  "description": "Capture, decode (DBC) and send CAN and CAN-FD frames live, and convert CAN logs (.asc, .blf, .trc, .log, .csv, .mf4) to Zelos traces (.trz), with or without a DBC.",
+  "author": "Zelos",
+  "packageManager": "npm@11.19.0",
   "engines": {
-    "node": ">=22.12.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0",
+    "npm": ">=10"
   },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "watch": "vite build --watch",
-    "check": "tsc --noEmit",
+    "lint": "eslint src/",
+    "tsc": "tsc --noEmit && tsc -p tsconfig.node.json",
+    "check": "npm run lint && npm run tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@zeloscloud/app-extension-sdk": "^0.4.1",
     "ag-grid-community": "^36.2.0",
     "ag-grid-react": "^36.2.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
-    "@testing-library/dom": "^10.4.1",
-    "@testing-library/react": "^16.3.2",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^4.7.0",
-    "happy-dom": "^20.10.6",
-    "typescript": "^5.9.3",
-    "vite": "^5.4.21",
-    "vitest": "^3.2.7"
+    "@eslint/js": "^10.0.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "jsdom": "^30.1.2",
+    "prettier": "^3.9.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^8.3.3",
+    "vitest": "^5.0.3"
   }
 }

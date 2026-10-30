@@ -20,7 +20,9 @@ describe("the measured column floors", () => {
         return { width: text.length * fontPx(this.font) * em };
       },
     };
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(measure as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      measure as unknown as CanvasRenderingContext2D,
+    );
   });
 
   it("holds a whole wall-clock time, and grows with the font", () => {
@@ -31,8 +33,12 @@ describe("the measured column floors", () => {
   });
 
   it("holds a whole elapsed time at either end of the data", () => {
-    expect(canColumnWidths("relative", 20, 0, 432_000.5)?.timestamp).toBe(cell(formatTime(432_000.5, "relative"), 20));
-    expect(canColumnWidths("relative", 20, -36_000, 5)?.timestamp).toBe(cell(formatTime(-36_000, "relative"), 20));
+    expect(canColumnWidths("relative", 20, 0, 432_000.5)?.timestamp).toBe(
+      cell(formatTime(432_000.5, "relative"), 20),
+    );
+    expect(canColumnWidths("relative", 20, -36_000, 5)?.timestamp).toBe(
+      cell(formatTime(-36_000, "relative"), 20),
+    );
   });
 
   it("holds the Timestamp header and its icons when every time is shorter", () => {
@@ -51,7 +57,9 @@ describe("the measured column floors", () => {
 
   it.each([10, 14, 20])("holds a classic frame's 8 bytes in the Data column at %ipx", (px) => {
     const bytes = Math.ceil(8 * 2 * px * MONO_EM + 7 * 6) + 32;
-    expect(canColumnWidths("absolute", px, 0, 0)?.data).toBe(Math.max(bytes, header("Data", px, false)));
+    expect(canColumnWidths("absolute", px, 0, 0)?.data).toBe(
+      Math.max(bytes, header("Data", px, false)),
+    );
   });
 
   it("starts each measured column at its width, and never narrows a floored one below", () => {
@@ -62,8 +70,16 @@ describe("the measured column floors", () => {
       widths,
     });
 
-    expect([timestamp?.initialWidth, timestamp?.minWidth, timestamp?.width]).toEqual([400, 400, undefined]);
-    expect([message?.initialWidth, message?.minWidth, message?.width]).toEqual([220, undefined, undefined]);
+    expect([timestamp?.initialWidth, timestamp?.minWidth, timestamp?.width]).toEqual([
+      400,
+      400,
+      undefined,
+    ]);
+    expect([message?.initialWidth, message?.minWidth, message?.width]).toEqual([
+      220,
+      undefined,
+      undefined,
+    ]);
     expect([dlc?.initialWidth, dlc?.minWidth, dlc?.width]).toEqual([90, 90, undefined]);
     expect([data?.initialFlex, data?.minWidth, data?.flex]).toEqual([1, 260, undefined]);
   });

@@ -1,97 +1,114 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
+# Each shared recipe acts on the parts this project has:
+# the agent runtime when pyproject.toml exists, the web project when web/package.json exists.
+
 default:
     @just --list
 
-# Install dependencies
+# Install dependencies and the pre-commit hooks
 install:
-    uv sync --extra dev
-    uv run pre-commit install
-
-# Install dependencies for CI (no pre-commit hooks)
-ci-install:
-    uv sync --extra dev
-
-# Format code
-format:
-    uv run ruff format .
-    uv run ruff check --fix .
-
-# Run checks: ruff on the agent, tsc on the panels
-check: web-check
-    uv run ruff check .
-
-# Run tests: the agent's, then the panels'
-test: web-test
-    uv run pytest
-
-# Run extension locally
-dev:
-    uv run python main.py
-
-# Package extension (builds the panels first)
-package: web-build
-    uv run python scripts/package_extension.py
-
-# Install the panels' npm dependencies, as the lockfile pins them
-web-install:
-    (cd web && npm ci)
-
-# Install the panels' dependencies against a local SDK tarball (package.json keeps its ^ range)
-web-install-local SDK_TGZ:
-    cd web && npm install --no-save --no-package-lock "$(realpath "{{SDK_TGZ}}")"
-
-# Build the panels into dist/panels/
-web-build:
-    (cd web && npm run build)
-
-# Type-check the panels
-web-check:
-    (cd web && npm run check)
-
-# Run the panels' unit tests
-web-test:
-    (cd web && npm test)
-
-# Serve the panels against the SDK's mock host: http://localhost:5173/panels/bus-monitor.html
-web-dev:
-    (cd web && npm run dev)
-
-# Rebuild dist/ on every change, for a local install in Zelos
-web-watch:
-    (cd web && npm run watch)
-
-# Release new version
-release VERSION:
     #!/usr/bin/env bash
-    set -euo pipefail
+    set -eu -o pipefail
+    if [[ -f pyproject.toml ]]; then
+      uv sync
+      if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        uv run pre-commit install
+      else
+        echo "Not a git repository: skipped the pre-commit hooks. Run git init, then just install."
+      fi
+    fi
+    if [[ -f web/package.json ]]; then (cd web && npm install); fi
 
-    VERSION="{{VERSION}}"
+# Install dependencies from the lockfiles when they exist (CI, no pre-commit hooks)
+ci-install:
+    if [[ -f pyproject.toml ]]; then if [[ -f uv.lock ]]; then uv sync --locked; else uv sync; fi; fi
+    just _web-install
 
-    # Ensure clean working directory
-    git diff --quiet && git diff --staged --quiet || (echo "Error: Uncommitted changes" && exit 1)
+_web-install:
+    if [[ -f web/package-lock.json ]]; then (cd web && npm ci); elif [[ -f web/package.json ]]; then (cd web && npm install); fi
 
-    # Update versions
-    uv run python scripts/bump_version.py "$VERSION"
+# Install the web project's dependencies only when web/node_modules is missing
+_deps:
+    if [[ -f web/package.json && ! -d web/node_modules ]]; then just _web-install; fi
 
-    # Format and update dependencies
+# Format code (ruff, Prettier)
+format: _deps
+    if [[ -f pyproject.toml ]]; then uv run ruff format . && uv run ruff check --fix .; fi
+    if [[ -f web/package.json ]]; then (cd web && npm run format); fi
+
+# Check formatting and lint (ruff, Prettier, ESLint), and type-check the web project (tsc)
+check: _deps
+    if [[ -f pyproject.toml ]]; then uv run ruff format --check . && uv run ruff check .; fi
+    if [[ -f web/package.json ]]; then (cd web && npm run format:check && npm run check); fi
+
+# Run tests
+test: _deps
+    if [[ -f pyproject.toml ]]; then uv run pytest; fi
+    if [[ -f web/package.json ]]; then (cd web && npm test); fi
+
+# Build the web project into dist/
+build: _deps
+    if [[ -f web/package.json ]]; then (cd web && npm run build); fi
+
+# Build and package for the Zelos marketplace
+package: build
+    zelos extensions package .
+
+# Run all CI checks
+ci: ci-install check test package
+
+# Release: bump version, format, check, test, build, commit, tag
+release VERSION: _deps
+    #!/usr/bin/env bash
+    set -eux -o pipefail
+    git diff-index --quiet HEAD || (echo "Uncommitted changes! Commit or stash first." && exit 1)
+    zelos extensions bump "{{VERSION}}"
+    if [[ -f pyproject.toml ]]; then uv lock; fi
     just format
-    uv lock
-
-    # Run tests
+    just check
     just test
-
-    # Commit everything
+    just build
     git add -A
-    git commit -m "Release v$VERSION"
-    git tag -a "v$VERSION" -m "Release v$VERSION"
-
+    git commit -m "Release v{{VERSION}}"
+    git tag -a "v{{VERSION}}" -m "Release v{{VERSION}}"
     echo ""
-    echo "✓ Release v$VERSION ready!"
+    echo "✓ Release v{{VERSION}} ready!"
     echo ""
     echo "Push with: git push --follow-tags"
 
-# Clean build artifacts
+# Delete a GitHub release and its remote and local tag
+delete-release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="v{{VERSION}}"
+    gh release delete "$tag" --yes 2>/dev/null && echo "✓ release deleted" || echo "- no release found"
+    git push origin --delete "$tag" 2>/dev/null && echo "✓ remote tag deleted" || echo "- no remote tag"
+    git tag -d "$tag" 2>/dev/null && echo "✓ local tag deleted" || echo "- no local tag"
+    echo ""
+    echo "✓ Cleaned up $tag — ready to re-release"
+
+# Remove build output, caches and packages
 clean:
-    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts actions.json
-    find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    rm -rf dist web/node_modules .pytest_cache .ruff_cache *.tar.gz actions.json
+    find . -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
+
+# Run the agent runtime locally
+run:
+    uv run python main.py
+
+# Update uv.lock after changing dependencies
+lock:
+    uv lock
+
+# Start the Vite dev server: /tab/ and /panels/<id>.html run against a mock host
+dev: _deps
+    (cd web && npm run dev)
+
+# Rebuild dist/ on every change, for a local install in Zelos
+watch: _deps
+    (cd web && npm run watch)
+
+# Run the web tests in watch mode
+test-watch: _deps
+    (cd web && npm run test:watch)

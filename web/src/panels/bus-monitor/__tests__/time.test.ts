@@ -15,7 +15,7 @@ describe("formatTime", () => {
 
   it("writes a wall-clock time with six microsecond digits, cut rather than rounded, and the zone's offset", () => {
     const wallClock = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:36\.(\d{6})[+-]\d{2}:\d{2}$/;
-    expect(formatTime(1_792_613_016.0000425, "absolute").match(wallClock)?.[1]).toBe("000042");
+    expect(formatTime(1_792_613_016.0000424, "absolute").match(wallClock)?.[1]).toBe("000042");
     expect(formatTime(1_792_613_016.9999995, "absolute").match(wallClock)?.[1]).toBe("999999");
   });
 

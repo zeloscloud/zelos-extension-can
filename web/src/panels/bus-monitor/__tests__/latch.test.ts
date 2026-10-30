@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { type CanRow, type CanScopeInputs, canPathsKey } from "../data";
-import { advanceLatch, forgetLatches, LATCH_MAX_ROWS, latchKey, markDeepReadDone, panelLatch } from "../latch";
+import {
+  advanceLatch,
+  forgetLatches,
+  LATCH_MAX_ROWS,
+  latchKey,
+  markDeepReadDone,
+  panelLatch,
+} from "../latch";
 
 /** sessionStorage as the latch sees it, without a browser. */
 class MemoryStorage implements Storage {
@@ -105,7 +112,9 @@ describe("latch", () => {
   it("clears a restored latch whose signal set no longer matches", () => {
     advanceLatch("p1", poll([frameRow("a", 10)]), storage);
     forgetLatches();
-    expect(advanceLatch("p1", poll([], { pathsKey: canPathsKey(["CAN/can1/Frame.data"]) }), storage)).toHaveLength(0);
+    expect(
+      advanceLatch("p1", poll([], { pathsKey: canPathsKey(["CAN/can1/Frame.data"]) }), storage),
+    ).toHaveLength(0);
   });
 
   it("keeps two panel instances apart", () => {

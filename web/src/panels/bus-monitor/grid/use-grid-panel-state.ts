@@ -12,7 +12,16 @@ import {
   type GridReadyEvent,
   ModuleRegistry,
 } from "ag-grid-community";
-import { type ChangeEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useInsertionEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { buildGridTheme } from "../ag-grid-theme";
 import { compareNaturalMixed } from "../natural-compare";
 import { gridRowHeight, resolveFontSizePx } from "../options";
@@ -99,7 +108,9 @@ function sameState(a: ColumnState, b: ColumnState): boolean {
 }
 
 function columnStatesEqual(a: ColumnState[], b: ColumnState[]): boolean {
-  return a.length === b.length && a.every((state, i) => b[i] !== undefined && sameState(state, b[i]));
+  return (
+    a.length === b.length && a.every((state, i) => b[i] !== undefined && sameState(state, b[i]))
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -111,14 +122,23 @@ function savedFilterModel(options: Record<string, unknown> | null): FilterModel 
   const grid = options?.grid;
   if (!isPlainObject(grid)) return undefined;
   const model = grid.filterModel;
-  return isPlainObject(model) && Object.values(model).every(isPlainObject) ? (model as FilterModel) : undefined;
+  return isPlainObject(model) && Object.values(model).every(isPlainObject)
+    ? (model as FilterModel)
+    : undefined;
 }
 
 /** A right-clicked row id against the latest rows, scanned on demand: the lookup fires only on right-click. */
-export function useGridRowLookup<TRow extends { id: string }>(rows: readonly TRow[]): (rowId: string) => TRow | null {
+export function useGridRowLookup<TRow extends { id: string }>(
+  rows: readonly TRow[],
+): (rowId: string) => TRow | null {
   const rowsRef = useRef(rows);
-  rowsRef.current = rows;
-  return useCallback((rowId: string) => rowsRef.current.find((row) => row.id === rowId) ?? null, []);
+  useInsertionEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+  return useCallback(
+    (rowId: string) => rowsRef.current.find((row) => row.id === rowId) ?? null,
+    [],
+  );
 }
 
 const NO_OPTION_DEFAULTS = {};
@@ -153,7 +173,9 @@ export function useGridPanelState<TRow extends { id: string }>(
 
   // Read live: the grid can remount inside a living panel, and a mount-time copy would drop every change since.
   const columnStateRef = useRef(session.columnState);
-  columnStateRef.current = session.columnState;
+  useInsertionEffect(() => {
+    columnStateRef.current = session.columnState;
+  }, [session.columnState]);
 
   const onGridReady = useCallback(
     (event: GridReadyEvent<TRow>) => {
@@ -166,7 +188,9 @@ export function useGridPanelState<TRow extends { id: string }>(
   );
 
   // Debounced, and flushed on unmount and on unload, which runs no React cleanup, so the last click still lands.
-  const pendingFilter = useRef<{ model: FilterModel; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const pendingFilter = useRef<{ model: FilterModel; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
   const flushFilter = useCallback(() => {
     const pending = pendingFilter.current;
     if (!pending) return;
@@ -198,9 +222,15 @@ export function useGridPanelState<TRow extends { id: string }>(
   const persistColumnState = useCallback(() => {
     const api = getGridApi();
     if (!api) return;
-    const next = api.getColumnState().map(({ hide: _hide, ...rest }) => rest);
+    const next = api.getColumnState().map((state) => {
+      const copy = { ...state };
+      delete copy.hide;
+      return copy;
+    });
     setSession((prev) =>
-      prev.columnState && columnStatesEqual(prev.columnState, next) ? prev : { ...prev, columnState: next },
+      prev.columnState && columnStatesEqual(prev.columnState, next)
+        ? prev
+        : { ...prev, columnState: next },
     );
   }, [getGridApi]);
 
@@ -227,7 +257,8 @@ export function useGridPanelState<TRow extends { id: string }>(
   const quickFilterMatcher = useCallback((parts: string[], rowText: string) => {
     const pattern = parts[0];
     if (pattern === undefined) return true;
-    if (compiled.current?.pattern !== pattern) compiled.current = { pattern, matcher: createSearchMatcher(pattern) };
+    if (compiled.current?.pattern !== pattern)
+      compiled.current = { pattern, matcher: createSearchMatcher(pattern) };
     // AG Grid joins a row's columns with newlines; the reader sees spaces.
     return compiled.current.matcher(rowText.replace(/\n/g, " "));
   }, []);

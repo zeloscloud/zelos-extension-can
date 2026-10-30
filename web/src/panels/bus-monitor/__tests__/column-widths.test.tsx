@@ -4,14 +4,16 @@ import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BusMonitorPanel } from "../panel";
 
-const SIGNALS: AppBridgePanelSignal[] = ["arbitration_id", "is_extended", "dlc", "data"].map((signal) => ({
-  source: "CAN",
-  message: "can0/Frame",
-  eventType: "zelos.can.frame.v1",
-  color: "",
-  signal,
-  path: `CAN/can0/Frame.${signal}`,
-}));
+const SIGNALS: AppBridgePanelSignal[] = ["arbitration_id", "is_extended", "dlc", "data"].map(
+  (signal) => ({
+    source: "CAN",
+    message: "can0/Frame",
+    eventType: "zelos.can.frame.v1",
+    color: "",
+    signal,
+    path: `CAN/can0/Frame.${signal}`,
+  }),
+);
 
 /** Mounts the panel on the real grid at `fontSize`: its mock host, and its header cells' widths. */
 function mountPanel(instanceId: string, fontSize: number) {
@@ -51,7 +53,9 @@ beforeEach(() => {
       return { width: text.length * px * (this.font.startsWith("500 ") ? 0.75 : 0.6) };
     },
   };
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(measure as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+    measure as unknown as CanvasRenderingContext2D,
+  );
 });
 
 afterEach(() => sessionStorage.clear());

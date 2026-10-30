@@ -66,7 +66,7 @@ def resolve_advanced(config: dict) -> dict:
     """Merge the `advanced` object over its defaults.
 
     An absent `prefix` takes the default; a present-but-empty one clears it.
-    A top-level `log_level` from a pre-`advanced` config is still honoured.
+    A top-level `log_level` from a pre-`advanced` config is still honored.
     """
     supplied = config.get("advanced") or {}
     advanced = {**ADVANCED_DEFAULTS, **supplied}
@@ -117,7 +117,6 @@ def _create_codecs(
 
     advanced = advanced if advanced is not None else dict(ADVANCED_DEFAULTS)
 
-    # Prepare all configs first to get channel names
     # The configured interface is a label; the bus opens its python-can name.
     prepared_configs = []
     for bus in buses:
@@ -148,10 +147,7 @@ def _create_codecs(
             # source name; either way it must already be a legal trace name.
             _validate_name(bus_name, "bus Name", (LOG_SOURCE_NAME,))
         else:
-            # No explicit name: derive from the channel, for ssh-socketcan the
-            # remote interface alone (not "user@host:iface"). Channels can
-            # contain '.', which is a catalog PATH SEPARATOR in Zelos trace
-            # names and would break catalog / `latest` lookups.
+            # Sanitized: a channel can hold '.', the path separator of trace names.
             channel = prepared_config.get("channel", f"bus{i}")
             if prepared_config.get("interface") == "zelos-ssh-socketcan":
                 channel = channel.rpartition(":")[2]
@@ -193,10 +189,7 @@ async def _run_codecs_async(codecs: list[CanCodec], retry_unreachable: bool = Fa
     :param codecs: List of CanCodec instances to run
     :param retry_unreachable: Retry a bus that cannot start instead of stopping
     """
-    # Start buses inside the try so that if one start() raises, the finally
-    # stops the buses already started. Otherwise an already-started bus owning
-    # non-daemon ssh threads (with a live remote candump session) is never torn
-    # down and the process hangs forever.
+    # Inside the try: a started bus's non-daemon ssh threads would otherwise hang the process.
     started: list[CanCodec] = []
     retries: list[asyncio.Task] = []
 
@@ -297,18 +290,10 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         output_file = file
         logger.info(f"Recording trace to: {output_file}")
 
-    # Register the actions module once. `choices=` providers are evaluated at
-    # form-render time, so this does not need the codecs yet, and the address
-    # prefix is supplied by `init(name=ACTION_PREFIX, actions=True)` below.
+    # `choices=` providers run at form-render time, so registering needs no codecs yet.
     can_actions.register_actions(zelos_sdk.actions_registry)
 
-    # The trace source and the log handler come up BEFORE the codecs, so the
-    # DBC merge summary and any conflict warnings the codecs log land in the
-    # trace. `init_global_source` is idempotent and ignores the name on later
-    # calls, so `init` below returns this same source rather than making an
-    # empty second one. Same layout rule as every other entry point: a prefix
-    # means one source for every bus; cleared, each bus owns its own and the
-    # logs get theirs.
+    # Before the codecs, so their DBC merge summary and conflict warnings land in the trace.
     log_source_name, _, _ = trace_layout(prefix, LOG_SOURCE_NAME)
     global_source = zelos_sdk.init_global_source(log_source_name)
     shared_source = global_source if prefix else None
@@ -317,8 +302,6 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     else:
         logger.info("Trace prefix cleared: one trace source per bus")
 
-    # Initialize SDK. `ACTION_PREFIX` is package-level so the live namespace and
-    # the packaged at-rest inventory cannot drift apart.
     zelos_sdk.init(name=ACTION_PREFIX, log_level="info", actions=True)
 
     handler = TraceLoggingHandler(global_source)
@@ -331,11 +314,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         if output_file:
             stack.enter_context(zelos_sdk.TraceWriter(str(output_file)))
 
-        # Create all CAN codecs from buses array. A bad conflict policy, prefix
-        # or name raises ValueError, a missing DBC FileNotFoundError, and the
-        # Rust loader RuntimeError — all configuration mistakes, so report the
-        # reason and stop rather than dumping a traceback that reads like a
-        # crash.
+        # Each of these is a configuration mistake: report the reason, not a traceback.
         try:
             codec_pairs = _create_codecs(config, demo_dbc_path, advanced, shared_source)
         except (ValueError, FileNotFoundError, RuntimeError) as e:
@@ -343,17 +322,6 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
             sys.exit(1)
         codecs = [codec for codec, _ in codec_pairs]
 
-        # Populate the shared codec registry that `actions.py` reads from. The
-        # action surface is a single global namespace — `CAN/send_message`,
-        # `CAN/get_tx_state`, etc. — with a `codec` parameter that selects which
-        # bus to operate on. CLI usage:
-        #
-        #   zelos actions execute CAN/send_raw \
-        #       --params '{"codec":"busA","can_id":"0x100","data":"01 02"}'
-        #
-        # Web apps discover the bus list by calling `CAN/list_codecs`.
-        # Codec-name uniqueness is already enforced inside _create_codecs
-        # (multi-bus path) and trivially satisfied in the single-bus path.
         for codec, codec_name in codec_pairs:
             can_actions.CAN_CODECS[codec_name] = codec
 
@@ -362,14 +330,7 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         bus_count = len(codecs)
         logger.info(f"Starting CAN extension with {bus_count} bus{'es' if bus_count > 1 else ''}")
 
-        # A bus that can't start (bad interface, unreachable / unauthenticated
-        # ssh host, missing remote can-utils, ...) raises can.exceptions.CanError
-        # — CanInitializationError and CanInterfaceNotImplementedError are
-        # subclasses, as is the mid-run SshPermanentError; a bad `config_json`
-        # raises ValueError and the Rust-side loader RuntimeError. Exit cleanly
-        # with a one-line reason instead of a traceback that looks like a crash.
-        # _run_codecs_async's try/finally has already stopped every bus it
-        # started, so cleanup is complete by the time we get here.
+        # A bus that cannot start exits with a one-line reason; every started bus is stopped.
         try:
             asyncio.run(_run_codecs_async(codecs, advanced["retry_unreachable_at_start"]))
         except (can.exceptions.CanError, ValueError, FileNotFoundError, RuntimeError) as e:

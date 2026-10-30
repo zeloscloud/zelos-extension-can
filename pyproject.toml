@@ -1,71 +1,49 @@
 [project]
 name = "zelos-extension-can"
 version = "0.4.0"
-description = "CAN extension for Zelos"
-authors = [{ name = "zeloscloud", email = "info@zeloscloud.io" }]
+description = "Capture, decode (DBC) and send CAN and CAN-FD frames live, and convert CAN logs (.asc, .blf, .trc, .log, .csv, .mf4) to Zelos traces (.trz), with or without a DBC."
+authors = [{ name = "Zelos", email = "support@zeloscloud.io" }]
 readme = "README.md"
-license = { text = "MIT" }
 requires-python = ">=3.11"
 keywords = ["zelos", "extension"]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-]
 dependencies = [
-    # Standalone actions need the at-rest harness (`zelos_sdk.extensions.actions`),
-    # which first ships in 0.0.11a1. Naming a prerelease here is what lets a
-    # resolver pick one at all: without it, an installed extension resolves the
-    # newest final release and its at-rest actions simply do not appear.
+    # A prerelease floor, so a resolver considers zelos-sdk prereleases at all.
     "zelos-sdk>=0.0.13a1",
-    # Imported directly by `actions.py` and `cli/app.py`. serial extra: pyserial
-    # for slcan detection. Pure Python, no deps.
+    # The serial extra brings pyserial, which slcan detection needs.
     "python-can[serial]",
     "rich-click>=1.8.0",
-    # `cli/export.py` reads trace queries as Arrow IPC.
     "pyarrow>=14.0.0",
-    # The CAN runtime: codec, DBC decode, bus config, ssh-socketcan, converter,
-    # demo. Wheels cover all platforms, so there is no sys_platform marker.
-    # 0.0.11a13 runs every python-can interface on the Rust codec (J1939, CANopen,
-    # ARXML on all of them). Floor (not exact) pin.
+    # 0.0.11a13 runs every python-can interface on the Rust codec.
     "zelos-can[python-can]>=0.0.11a13",
 ]
-
-[project.scripts]
-zelos-extension-can = "main:cli"
 
 [project.urls]
 Homepage = "https://github.com/zeloscloud/zelos-extension-can"
 Repository = "https://github.com/zeloscloud/zelos-extension-can"
 Issues = "https://github.com/zeloscloud/zelos-extension-can/issues"
-Documentation = "https://docs.zeloscloud.io/extensions"
+Documentation = "https://docs.zeloscloud.io/app/extensions/"
 
 [project.optional-dependencies]
-cli = [
-    "tqdm>=4.0.0",
-]
-# The gs_usb interface. gs-usb brings pyusb; libusb-package bundles the native
-# libusb-1.0 pip cannot install (Windows, macOS, Linux x86_64/aarch64).
+# libusb-package bundles the native libusb-1.0, which pip cannot install.
 gs_usb = [
     "gs-usb>=0.3.1",
     "libusb-package>=1.0.26",
 ]
+
+[dependency-groups]
 dev = [
-    "pytest>=8.4.2",
-    "pre-commit>=4.3.0",
-    "ruff>=0.14.2",
+    "pytest>=9.1.1",
+    "pre-commit>=4.6.2",
+    "ruff>=0.16.10",
     "jsonschema>=4.0.0",
-    "tomli>=2.3.0; python_version < '3.11'",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+required-version = ">=0.9.5"
 
 [tool.hatch.build.targets.wheel]
 packages = ["zelos_extension_can"]
@@ -75,7 +53,7 @@ testpaths = ["tests"]
 addopts = "--log-cli-level=INFO"
 
 [tool.ruff]
-target-version = "py311"
+target-version = 'py311'
 line-length = 100
 
 [tool.ruff.lint]
@@ -89,12 +67,3 @@ select = [
     "C4",   # flake8-comprehensions
     "PTH",  # flake8-use-pathlib
 ]
-ignore = [
-    "B008",   # function call in defaults (common in decorators)
-]
-
-[tool.ruff.lint.per-file-ignores]
-"scripts/*.py" = ["PTH123"]  # Allow open() in scripts
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"

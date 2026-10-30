@@ -1,4 +1,8 @@
-import type { ColumnMetadata, LatestSignalValue, QueryDataMulti } from "@zeloscloud/app-extension-sdk";
+import type {
+  ColumnMetadata,
+  LatestSignalValue,
+  QueryDataMulti,
+} from "@zeloscloud/app-extension-sdk";
 import { describe, expect, it } from "vitest";
 import {
   advanceCanScope,
@@ -33,7 +37,8 @@ function col(over: Partial<ColumnMetadata> & { signal: string }): ColumnMetadata
 const TIME_COL = col({ source: "time_s", message: "", signal: "" });
 
 const FRAME_SIGNALS = ["arbitration_id", "is_extended", "dlc", "data"].map(
-  (signal) => ({ source: "CAN", message: "can0/Frame", signal, color: "" }) as unknown as BoundSignal,
+  (signal) =>
+    ({ source: "CAN", message: "can0/Frame", signal, color: "" }) as unknown as BoundSignal,
 );
 
 function dataset(columns: ColumnMetadata[], data: unknown[][]): QueryDataMulti {
@@ -97,7 +102,12 @@ describe("reduceCanFrameRows", () => {
 
   it("reduces an ascending window to the same rows", () => {
     const ascending = dataset(
-      [TIME_COL, col({ signal: "arbitration_id" }), col({ signal: "dlc" }), col({ signal: "data" })],
+      [
+        TIME_COL,
+        col({ signal: "arbitration_id" }),
+        col({ signal: "dlc" }),
+        col({ signal: "data" }),
+      ],
       [
         [10, 30],
         [100, 100],
@@ -113,7 +123,12 @@ describe("reduceCanFrameRows", () => {
   it("separates a standard and an extended frame sharing one numeric id", () => {
     const rows = reduceCanFrameRows(
       dataset(
-        [TIME_COL, col({ signal: "arbitration_id" }), col({ signal: "is_extended" }), col({ signal: "data" })],
+        [
+          TIME_COL,
+          col({ signal: "arbitration_id" }),
+          col({ signal: "is_extended" }),
+          col({ signal: "data" }),
+        ],
         [
           [20, 10],
           [100, 100],
@@ -155,7 +170,9 @@ describe("reduceCanFrameRows", () => {
       FRAME_SIGNALS,
       "absolute",
     );
-    expect(rows.map((row) => [row.message, row.timeS, row.tokens.join(" ")])).toEqual([["0x064", 30, "AA"]]);
+    expect(rows.map((row) => [row.message, row.timeS, row.tokens.join(" ")])).toEqual([
+      ["0x064", 30, "AA"],
+    ]);
   });
 
   it("melts nothing from a stream without an arbitration id, and nothing from an empty window", () => {
@@ -184,7 +201,10 @@ describe("buildCanEventRows", () => {
       ["CAN/can0/012c_DUT_Logging/LOGGING_MUX_ZERO.a", 1],
     ]);
     const rows = buildCanEventRows(
-      [value({ signal: "a", value: "7" }), value({ signal: "b", value: "8", timeNs: "3000000000" })],
+      [
+        value({ signal: "a", value: "7" }),
+        value({ signal: "b", value: "8", timeNs: "3000000000" }),
+      ],
       order,
       (v) => v.value,
       "absolute",
@@ -210,7 +230,11 @@ describe("buildCanEventRows", () => {
       (v) => v.value,
       "absolute",
     );
-    expect(rows.map((r) => r.message).sort()).toEqual(["00000100_Ext", "012c_DUT_Logging", "status"]);
+    expect(rows.map((r) => r.message).sort()).toEqual([
+      "00000100_Ext",
+      "012c_DUT_Logging",
+      "status",
+    ]);
   });
 
   it("keeps two producers of one table apart", () => {
@@ -226,7 +250,10 @@ describe("buildCanEventRows", () => {
   // The segment is NOT part of the row's identity: a producer restart is the same table, updated.
   it("folds two segments of one table into one row", () => {
     const rows = buildCanEventRows(
-      [value({ signal: "a", dataSegmentId: "seg-a" }), value({ signal: "a", dataSegmentId: "seg-b" })],
+      [
+        value({ signal: "a", dataSegmentId: "seg-a" }),
+        value({ signal: "a", dataSegmentId: "seg-b" }),
+      ],
       new Map(),
       (v) => v.value,
       "absolute",
@@ -236,7 +263,10 @@ describe("buildCanEventRows", () => {
 });
 
 describe("canRowHeight", () => {
-  const rowOf = (kind: CanRow["kind"], lines: number) => ({ kind, tokens: Array(lines).fill("a = 1") });
+  const rowOf = (kind: CanRow["kind"], lines: number) => ({
+    kind,
+    tokens: Array(lines).fill("a = 1"),
+  });
 
   // Seven lines must fit INSIDE the height the row is given, or the last ones spill past the row.
   it("gives an event row one line height per field, padded once", () => {
@@ -323,9 +353,13 @@ describe("mergeCanRows", () => {
   // `replaceAny` is the value-at-the-cursor rule: scrubbing back moves the reading BACK, not nowhere.
   it("replaces backwards under replaceAny, and still refuses an identical row", () => {
     const cache: CanRowCache = new Map([["a", row({ id: "a", timeS: 11 })]]);
-    expect(mergeCanRows(cache, [row({ id: "a", timeS: 5, tokens: ["ff", "ff"] })], true)).toBe(true);
+    expect(mergeCanRows(cache, [row({ id: "a", timeS: 5, tokens: ["ff", "ff"] })], true)).toBe(
+      true,
+    );
     expect(cache.get("a")?.timeS).toBe(5);
-    expect(mergeCanRows(cache, [row({ id: "a", timeS: 5, tokens: ["ff", "ff"] })], true)).toBe(false);
+    expect(mergeCanRows(cache, [row({ id: "a", timeS: 5, tokens: ["ff", "ff"] })], true)).toBe(
+      false,
+    );
   });
 
   it("leaves a key this poll did not carry exactly where it was", () => {
@@ -381,7 +415,9 @@ describe("advanceCanScope", () => {
     advanceCanScope(s, poll({}, [frameRow(10)]));
     const added = canPathsKey(["CAN/can0/Frame.data", "CAN/can0/Status.soc"]);
     expect(advanceCanScope(s, inputs({ pathsKey: added }))).toHaveLength(1);
-    expect(advanceCanScope(s, inputs({ pathsKey: canPathsKey(["CAN/can0/Status.soc"]) }))).toHaveLength(0);
+    expect(
+      advanceCanScope(s, inputs({ pathsKey: canPathsKey(["CAN/can0/Status.soc"]) })),
+    ).toHaveLength(0);
   });
 
   it("drops the rows when the panel reads another workspace or mode", () => {
@@ -414,7 +450,13 @@ describe("advanceCanScope", () => {
     const eventAt50 = {};
     const frameAt100 = {};
     const frameAt50 = {};
-    const at = (windowEndS: number, frames: unknown, frameRows: CanRow[], events: unknown, eventRows: CanRow[]) =>
+    const at = (
+      windowEndS: number,
+      frames: unknown,
+      frameRows: CanRow[],
+      events: unknown,
+      eventRows: CanRow[],
+    ) =>
       inputs({
         windowEndS,
         frames: { payload: frames, build: () => frameRows },
@@ -445,7 +487,9 @@ describe("advanceCanScope", () => {
     advanceCanScope(s, poll(oldWindow, [frameRow(90)]));
     // The retreat is noticed while the old window is still the payload in hand.
     expect(advanceCanScope(s, poll(oldWindow, [frameRow(90)], { windowEndS: 50 }))).toHaveLength(0);
-    expect(advanceCanScope(s, poll({}, [frameRow(40)], { windowEndS: 50 })).map((r) => r.timeS)).toEqual([40]);
+    expect(
+      advanceCanScope(s, poll({}, [frameRow(40)], { windowEndS: 50 })).map((r) => r.timeS),
+    ).toEqual([40]);
   });
 
   it("refills from the new window when it landed before the seek was noticed", () => {
@@ -455,9 +499,9 @@ describe("advanceCanScope", () => {
     const newWindow = {};
     expect(advanceCanScope(s, poll(newWindow, [frameRow(40)])).map((r) => r.timeS)).toEqual([90]);
     // The cursor's retreat lands; the same payload is the answer for it, and nothing else will arrive.
-    expect(advanceCanScope(s, poll(newWindow, [frameRow(40)], { windowEndS: 50 })).map((r) => r.timeS)).toEqual([
-      40,
-    ]);
+    expect(
+      advanceCanScope(s, poll(newWindow, [frameRow(40)], { windowEndS: 50 })).map((r) => r.timeS),
+    ).toEqual([40]);
   });
 
   it("ignores a payload newer than the cursor after a seek, and latches the next one inside the window", () => {
@@ -465,9 +509,13 @@ describe("advanceCanScope", () => {
     advanceCanScope(s, poll({}, [frameRow(10)]));
     expect(advanceCanScope(s, poll({}, [frameRow(80)], { windowEndS: 50 }))).toHaveLength(0);
     expect(advanceCanScope(s, poll({}, [frameRow(80)], { windowEndS: 50 }))).toHaveLength(0);
-    expect(advanceCanScope(s, poll({}, [frameRow(45)], { windowEndS: 50 })).map((r) => r.timeS)).toEqual([45]);
+    expect(
+      advanceCanScope(s, poll({}, [frameRow(45)], { windowEndS: 50 })).map((r) => r.timeS),
+    ).toEqual([45]);
     // The gate is lifted: the cursor moving forward latches forward as always.
-    expect(advanceCanScope(s, poll({}, [frameRow(70)], { windowEndS: 75 })).map((r) => r.timeS)).toEqual([70]);
+    expect(
+      advanceCanScope(s, poll({}, [frameRow(70)], { windowEndS: 75 })).map((r) => r.timeS),
+    ).toEqual([70]);
   });
 
   it("gates the decoded feed by the same rule", () => {
@@ -486,6 +534,8 @@ describe("advanceCanScope", () => {
     advanceCanScope(s, poll(stale, [frameRow(10)]));
     const fewer = canPathsKey(["CAN/can0/Frame.dlc"]);
     expect(advanceCanScope(s, poll(stale, [frameRow(10)], { pathsKey: fewer }))).toHaveLength(0);
-    expect(advanceCanScope(s, poll({ window: "fresh" }, [frameRow(11)], { pathsKey: fewer }))).toHaveLength(1);
+    expect(
+      advanceCanScope(s, poll({ window: "fresh" }, [frameRow(11)], { pathsKey: fewer })),
+    ).toHaveLength(1);
   });
 });

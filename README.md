@@ -251,7 +251,7 @@ loopback, so every transmit is traced exactly once.
   step; `strict` uses your `~/.ssh/known_hosts`, where an unknown or changed key
   stops the bus with the command that fixes it.
 - **SSH Extra Options**: extra `ssh` flags, e.g. a `-J bastion` jump host.
-  Placed before the options above; `ssh` honours the first `-o` it sees, so
+  Placed before the options above; `ssh` honors the first `-o` it sees, so
   these win over the settings above.
 - **Hardware timestamps** (default on): uses the adapter's hardware clock where
   the edge's `candump` supports `-H`. An interface without one (`vcan`, some
@@ -319,11 +319,9 @@ The extension has two halves: the Python agent at the root, and the Bus Monitor 
 
 The extension includes a command-line interface for advanced use cases. No installation required - just use `uv run`:
 
-> **Tip:** Run `pip install .` to install and use `zelos-extension-can <args>` from anywhere.
-
 ### CAN Bus Tracing
 
-`trace` takes a python-can interface name, not a form label: `zelos-socketcan` is the Rust bus, and `socketcan` here now means python-can's bus.
+`trace` takes a python-can interface name, not a form label: `zelos-socketcan` is the Rust bus, and `socketcan` is python-can's bus.
 
 ```bash
 # Launch trace process (pass several DBCs to layer them, later files win)

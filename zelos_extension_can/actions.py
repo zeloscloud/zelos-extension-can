@@ -241,11 +241,6 @@ def start_periodic_message(
 
 
 # ─── J1939 ──────────────────────────────────────────────────────────────────
-#
-# The bus's J1939 node: it claims an address, then sends from it. Up to 8
-# bytes is one frame; longer goes by the transport protocol, BAM to everyone or
-# RTS/CTS to one node. A send waits up to 5 s for the transfer and returns
-# {completed, error}.
 
 _J1939_SENT = (
     "Returns the addressing and payload sent, plus {completed, error}: completed false "
@@ -556,12 +551,6 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
 
 
 # ─── Bus-agnostic file utilities ────────────────────────────────────────────
-#
-# These don't take a `codec` *because* they're file-in / file-out conversions.
-# The DBC source is explicit via `database_path`; a `codec` lends its loaded
-# list when that is empty. We don't silently default to "first registered
-# codec" because that couples a file conversion to whichever bus started first.
-# With neither, the conversion writes raw frames only, like the CLI.
 
 
 @action(
@@ -767,11 +756,7 @@ def export_trace_to_log(
         logger.info("Exporting %s -> %s", input_file, output_file)
         stats = export_to_candump(input_file, output_file)
         if stats["frame_count"] == 0:
-            # Raise, do not return. `export_to_candump` writes no file when the
-            # trace has no raw sources, so a returned payload here reads as
-            # success (a plain return means "no verdict", which the wire maps to
-            # DONE) while `output_file` does not exist. A caller chaining on exit
-            # status would proceed against a missing file.
+            # Raised, not returned: no file was written, and a return reads as success.
             raise ValueError(
                 "No raw CAN frames found in trace "
                 f"(sources found: {stats['sources_found']}). "
@@ -793,10 +778,6 @@ def export_trace_to_log(
 
 
 # ─── Config-form hooks (standalone: the form calls these before a first start) ─
-#
-# Both answer the app's schema hooks in `config.schema.json`: the root
-# `ui:options.autoconfig` button, and the `action-choices` widget on a
-# socketcan channel. Neither needs privileges or the extension to be running.
 
 #: Where Linux publishes its network interfaces. A CAN interface is a netdev
 #: like any other, told apart by its ARPHRD type.
@@ -1226,11 +1207,7 @@ def _open_in_app(path: Path) -> None:
     "Convert CAN Log",
     "Convert a CAN log file to a Zelos trace (.trz). Runs without the extension "
     "running — no bus, no live connection.",
-    # Conversion is I/O bound over files that can reach multi-GB. 30 minutes is
-    # a ceiling for the pathological case, not an expectation; the action
-    # returns as soon as the file is written. Note the AI tool bridge clamps
-    # its own calls to MAX_ACTION_TOOL_TIMEOUT_MS (5 min) regardless, so long
-    # conversions are an action-panel / CLI path.
+    # A ceiling for multi-GB logs; the action returns as soon as the file is written.
     timeout=1800.0,
     standalone=True,
 )
@@ -1319,10 +1296,7 @@ def convert(
     database_paths = [resolve_database_file(p) for p in supplied or configured]
     cluster = cluster.strip() or configured_cluster
 
-    # Resolved, not just expanded. Two reasons: a relative path would otherwise
-    # resolve against the extension's working directory rather than the caller's,
-    # and an unresolved path starting with `-` reaches the platform opener as a
-    # flag (`open -a.trz` parses as `open -a <app>`).
+    # Resolved: a path starting with `-` would reach the platform opener as a flag.
     destination = (
         Path(output_file).expanduser().resolve() if output_file else source.with_suffix(".trz")
     )
@@ -1337,10 +1311,7 @@ def convert(
         cluster=cluster,
     )
 
-    # The trace exists on disk from here on. Failing to open it is a worse
-    # outcome to report than it is a real one: the conversion succeeded, and
-    # raising now would tell the caller the whole run failed and invite a
-    # re-run of work already done. Report it in-band instead.
+    # The conversion succeeded, so a failure to open the trace is reported in-band, not raised.
     opened = False
     open_error: str | None = None
     if open_on_complete:

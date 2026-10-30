@@ -185,7 +185,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
 # ── advanced settings and names ──────────────────────────────────────────────
 
 
-def test_resolve_advanced_honours_a_legacy_top_level_log_level():
+def test_resolve_advanced_honors_a_legacy_top_level_log_level():
     assert resolve_advanced({"log_level": "DEBUG"})["log_level"] == "DEBUG"
     assert resolve_advanced({})["log_level"] == ADVANCED_DEFAULTS["log_level"]
     # An explicit advanced value wins over the legacy one.
@@ -435,7 +435,7 @@ def test_run_codecs_async_retry_leaves_a_missing_socketcan_interface_fatal():
     codec.start.assert_called_once()
 
 
-def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
+def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch, caplog):
     """End to end: a doomed ssh bus makes run_app_mode exit(1) with a logged
     reason rather than propagating a raw CanInitializationError traceback."""
 
@@ -473,13 +473,15 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
     monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
     monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
-    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", app_mod.zelos_sdk.TraceSource)
     monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
 
     try:
         with pytest.raises(SystemExit) as ei:
             app_mod.run_app_mode(demo=False, file=None, demo_dbc_path=Path("/nonexistent/demo.dbc"))
         assert ei.value.code == 1
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1 and "ssh host key for edge is not trusted" in errors[0]
     finally:
         for c in created:
             with contextlib.suppress(Exception):

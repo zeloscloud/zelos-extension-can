@@ -76,7 +76,10 @@ function trimNumber(text: string): string {
 }
 
 /** The label a value table gives a raw value, keyed by the raw value as text; null on a miss or no table. */
-function valueTableLabel(value: string, table: Record<string, string> | null | undefined): string | null {
+function valueTableLabel(
+  value: string,
+  table: Record<string, string> | null | undefined,
+): string | null {
   if (!table || !Object.hasOwn(table, value)) return null;
   const label = table[value];
   return typeof label === "string" ? label : null;
@@ -107,11 +110,12 @@ export function useBusMonitorData(panel: AppBridgePanelInfo, stateKey: string): 
   // Every position a cursor sweep passes is a different window, so the sweep is held to the poll rate.
   const cursorS = useThrottledValue(time?.cursorS ?? null, CAN_POLL_MS);
   // Live reads the tail and never retreats, so it has no end to track; paused and trace end at the cursor.
-  const windowEndS = live ? null : (cursorS ?? time?.viewRange?.endS ?? time?.dataRange?.endS ?? null);
+  const windowEndS = live
+    ? null
+    : (cursorS ?? time?.viewRange?.endS ?? time?.dataRange?.endS ?? null);
 
-  const [wantedRows, setWantedRows] = useState(() =>
-    panelLatch(stateKey).deepReadDone ? CAN_MAX_ROWS : CAN_FIRST_MAX_ROWS,
-  );
+  const [deepRead, setDeepRead] = useState(() => panelLatch(stateKey).deepReadDone);
+  const wantedRows = deepRead ? CAN_MAX_ROWS : CAN_FIRST_MAX_ROWS;
   const framePaths = useMemo(() => uniquePaths(frameSignals), [frameSignals]);
   // The host splits its cell budget over every bound signal, not every path.
   const cap = fitRowBudget(frameSignals.length, wantedRows);
@@ -135,7 +139,12 @@ export function useBusMonitorData(panel: AppBridgePanelInfo, stateKey: string): 
     () =>
       eventSignals.length === 0
         ? null
-        : { id: "latest", shape: "latest", signals: uniquePaths(eventSignals), minPollMs: CAN_POLL_MS },
+        : {
+            id: "latest",
+            shape: "latest",
+            signals: uniquePaths(eventSignals),
+            minPollMs: CAN_POLL_MS,
+          },
     [eventSignals],
   );
   const frames = usePanelData(frameParams);
@@ -144,21 +153,28 @@ export function useBusMonitorData(panel: AppBridgePanelInfo, stateKey: string): 
   const eventPayload = events?.latest ?? null;
 
   // The deep read has landed and is latched; every later poll only has to carry what has changed since.
+  if (framePayload && !deepRead) setDeepRead(true);
   useEffect(() => {
-    if (!framePayload) return;
-    markDeepReadDone(stateKey);
-    setWantedRows(CAN_MAX_ROWS);
+    if (framePayload) markDeepReadDone(stateKey);
   }, [framePayload, stateKey]);
 
-  const bySignalPath = useMemo(() => new Map(signals.map((signal) => [signal.path, signal])), [signals]);
+  const bySignalPath = useMemo(
+    () => new Map(signals.map((signal) => [signal.path, signal])),
+    [signals],
+  );
   const fieldOrder = useMemo(() => {
     const order = new Map<string, number>();
-    for (const signal of eventSignals) if (!order.has(signal.path)) order.set(signal.path, order.size);
+    for (const signal of eventSignals)
+      if (!order.has(signal.path)) order.set(signal.path, order.size);
     return order;
   }, [eventSignals]);
 
   // Another workspace, mode or recording set makes the latched rows another recording's; a signal joining keeps them.
-  const scopeKey = [workspace?.id ?? "", workspace?.modeKind ?? "", ...(workspace?.traces ?? [])].join("\0");
+  const scopeKey = [
+    workspace?.id ?? "",
+    workspace?.modeKind ?? "",
+    ...(workspace?.traces ?? []),
+  ].join("\0");
   const pathsKey = useMemo(() => canPathsKey(signals.map((signal) => signal.path)), [signals]);
   const frameTimeMode = toTimeMode(frames?.timeMode);
   const eventTimeMode = toTimeMode(events?.timeMode ?? time?.mode);
@@ -181,7 +197,10 @@ export function useBusMonitorData(panel: AppBridgePanelInfo, stateKey: string): 
               eventPayload,
               fieldOrder,
               (value: LatestSignalValue) =>
-                formatLatestValue(value.value, bySignalPath.get(`${value.source}/${value.message}.${value.signal}`)),
+                formatLatestValue(
+                  value.value,
+                  bySignalPath.get(`${value.source}/${value.message}.${value.signal}`),
+                ),
               eventTimeMode,
             ),
         },

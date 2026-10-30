@@ -24,7 +24,10 @@ describe("the Reduce Motion rule", () => {
 
   // A remote desktop session reports Reduce Motion on Windows; Zelos keeps its motion there.
   it("keeps the flash where only Windows or Linux reports it", () => {
-    for (const userAgent of ["Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Mozilla/5.0 (X11; Linux x86_64)"]) {
+    for (const userAgent of [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Mozilla/5.0 (X11; Linux x86_64)",
+    ]) {
       host(userAgent, true);
       installReducedMotionPolicy()();
       expect(stilled()).toBe(false);

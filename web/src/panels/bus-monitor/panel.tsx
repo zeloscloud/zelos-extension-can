@@ -10,7 +10,13 @@ import { AgGridReact } from "ag-grid-react";
 import { useCallback, useMemo } from "react";
 import { buildCanColumnDefs, canColumnWidths } from "./columns";
 import { type CanRow, canRowHeight } from "./data";
-import { GridPanelBody, type GridMenuRequest, PanelErrorState, PanelState, WindowStatus } from "./grid/chrome";
+import {
+  GridPanelBody,
+  type GridMenuRequest,
+  PanelErrorState,
+  PanelState,
+  WindowStatus,
+} from "./grid/chrome";
 import { useExactRowHeights } from "./grid/use-exact-row-heights";
 import { useGridPanelState, useGridRowLookup } from "./grid/use-grid-panel-state";
 import { BusMonitorIcon } from "./icons";
@@ -23,8 +29,12 @@ import { useBusMonitorData } from "./use-bus-data";
 export const EMPTY_MESSAGE = "Drag CAN frames or messages onto this panel to view them.";
 
 // Module-level: AG Grid takes an overlay by identity, so a fresh function per render would remount it.
-const NoRowsOverlay = () => <PanelState icon={<BusMonitorIcon />} description="No CAN traffic in this time range" />;
-const LoadingOverlay = () => <PanelState icon={<BusMonitorIcon />} description="Loading CAN traffic…" />;
+const NoRowsOverlay = () => (
+  <PanelState icon={<BusMonitorIcon />} description="No CAN traffic in this time range" />
+);
+const LoadingOverlay = () => (
+  <PanelState icon={<BusMonitorIcon />} description="Loading CAN traffic…" />
+);
 const OVERLAYS = { noRows: NoRowsOverlay, loading: LoadingOverlay };
 
 function BusMonitor({ panel }: { panel: AppBridgePanelInfo }) {
@@ -53,7 +63,10 @@ function BusMonitor({ panel }: { panel: AppBridgePanelInfo }) {
 
   // Computed, not `autoHeight`, which measures every row's DOM on every refresh: the line count says the size.
   const rowHeight = gridProps.rowHeight;
-  const heightOf = useCallback((row: CanRow) => canRowHeight(row, rowHeight, fontSize), [rowHeight, fontSize]);
+  const heightOf = useCallback(
+    (row: CanRow) => canRowHeight(row, rowHeight, fontSize),
+    [rowHeight, fontSize],
+  );
   const exactHeights = useExactRowHeights(getGridApi, heightOf);
 
   // The menu works from a SNAPSHOT of the row, so it outlives the row being replaced by a newer frame.
@@ -99,6 +112,7 @@ export function BusMonitorPanel() {
 
   if (status === "error") return <PanelErrorState message={error.message} />;
   if (!panel) return <PanelState description="Connecting to Zelos…" />;
-  if (panel.signals.length === 0) return <PanelState icon={<BusMonitorIcon />} description={EMPTY_MESSAGE} />;
+  if (panel.signals.length === 0)
+    return <PanelState icon={<BusMonitorIcon />} description={EMPTY_MESSAGE} />;
   return <BusMonitor panel={panel} />;
 }
