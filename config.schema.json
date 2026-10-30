@@ -715,7 +715,7 @@
         "retry_unreachable_at_start": {
           "type": "boolean",
           "title": "Retry Unreachable at Start",
-          "description": "Off: a bus that cannot start stops the extension. On: it logs an ERROR and is retried like a dropped link while the other buses run. A failure an operator must fix still stops the extension: a permanent ssh failure (the log says how to fix it), or a SocketCAN interface that does not exist.",
+          "description": "Off: a bus that cannot start stops the extension. On: it logs an ERROR and is retried like a dropped link while the other buses run, an ssh bus whatever the cause. A SocketCAN interface that does not exist still stops the extension.",
           "default": false,
           "ui:widget": "toggle"
         },
