@@ -1,45 +1,29 @@
-# Zelos CAN Extension Manifest
-# See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
-
 name = "CAN"
 version = "0.4.0"
 description = "Capture, decode (DBC) and send CAN and CAN-FD frames live, and convert CAN logs (.asc, .blf, .trc, .log, .csv, .mf4) to Zelos traces (.trz), with or without a DBC."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
-homepage = "https://github.com/zeloscloud/zelos-extension-can"
+# At most 20 keywords and 10 categories. Marketplace search matches both, the name, description,
+# author and repository. Zelos AI sees the name, description and keywords, not the categories.
 keywords = ["can", "can-bus", "can-fd", "automotive", "vehicle", "dbc", "decode", "convert", "log", "candump", "asc", "blf", "trc", "csv", "mf4", "trz", "demo", "simulator", "simulation", "ev"]
 categories = ["Automotive", "Networking", "Industrial", "IoT"]
-
-# File references (relative paths in archive)
 icon = "assets/icon.png"
 readme = "README.md"
 
-# The [agent] and [app] form needs Zelos 26.0.10 or later
 [zelos]
 version = ">=26.0.10"
 
-# Configuration schema for the agent (enables the config form in Zelos App)
 [config]
 schema = "config.schema.json"
 
-# The agent: captures, decodes and sends CAN traffic
 [agent]
 runtime = "python"
 entry = "main.py"
 python_version = "3.11"
 
-# Graceful shutdown (optional, defaults to 10)
-[agent.stop]
-grace_seconds = 10
-
-# Optional dependency groups a user can add to the agent at install. Each one
-# matches a group in pyproject.toml [project.optional-dependencies]. Default: none.
 [extras.gs_usb]
 description = "The gs_usb (USB) interface"
 packages = ["gs-usb>=0.3.1", "libusb-package>=1.0.26"]
-
-# The app part: panels the app renders in a layout
-[app]
 
 [[app.panels]]
 id = "bus-monitor"
@@ -47,13 +31,13 @@ name = "CAN Bus Monitor"
 description = "CAN frames and messages"
 icon = "assets/bus-monitor.svg"
 entry = "dist/panels/bus-monitor.html"
-accepts = ["zelos.can.frame."]
-companions = ["zelos.can.message."]
-binds = "any"
+accepts = ["zelos.can.frame."]       # event-type prefixes (e.g. "acme.sensor.reading.") a drop routes to this panel
+companions = ["zelos.can.message."]  # prefixes that ride along with an accepted drop
+binds = "any"                        # "any" or "accepted"
 default_height = 2
 live_only = false
 options_schema = "dist/panels/bus-monitor.options.json"
 ai_guidance = "A bus monitor: one latched row per arbitration id or decoded message, each updated in place as it recurs."
 
 [package]
-paths = ["zelos_extension_can", "main.py", "pyproject.toml", "uv.lock", "dist", "assets", "README.md", "config.schema.json"]
+paths = ["LICENSE", "main.py", "zelos_extension_can", "dist", "assets"]

@@ -64,9 +64,12 @@ describe("useExactRowHeights", () => {
 
   it("resizes the rows already there when the height rule changes, keeping one callback for the grid", () => {
     const grid = fakeGrid([{ id: "a", lines: 2 }], 40);
-    const { result, rerender } = renderHook(({ heightOf }) => useExactRowHeights(grid.getGridApi, heightOf), {
-      initialProps: { heightOf: byLines },
-    });
+    const { result, rerender } = renderHook(
+      ({ heightOf }) => useExactRowHeights(grid.getGridApi, heightOf),
+      {
+        initialProps: { heightOf: byLines },
+      },
+    );
     const first = result.current.getRowHeight;
 
     rerender({ heightOf: (row: Row) => row.lines * 30 });

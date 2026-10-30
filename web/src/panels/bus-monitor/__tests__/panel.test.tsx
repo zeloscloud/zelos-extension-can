@@ -53,11 +53,13 @@ vi.mock("../data", async (importOriginal) => {
 });
 
 const FRAME = { source: "CAN", message: "can0/Frame", eventType: "zelos.can.frame.v1", color: "" };
-const FRAME_SIGNALS: AppBridgePanelSignal[] = ["arbitration_id", "is_extended", "dlc", "data"].map((signal) => ({
-  ...FRAME,
-  signal,
-  path: `CAN/can0/Frame.${signal}`,
-}));
+const FRAME_SIGNALS: AppBridgePanelSignal[] = ["arbitration_id", "is_extended", "dlc", "data"].map(
+  (signal) => ({
+    ...FRAME,
+    signal,
+    path: `CAN/can0/Frame.${signal}`,
+  }),
+);
 
 const column = (signal: string, producer: string | null = null): ColumnMetadata => ({
   source: signal === "" ? "time_s" : "CAN",
@@ -73,7 +75,9 @@ const column = (signal: string, producer: string | null = null): ColumnMetadata 
 /** One frame window, newest first: id 0x064 at `timeS` carrying `data`, and 0x12C before it. */
 function frameWindow(timeS: number, data: string, producer: string | null = null) {
   const dataset: QueryDataMulti = {
-    columns: ["", "arbitration_id", "is_extended", "dlc", "data"].map((signal) => column(signal, producer)),
+    columns: ["", "arbitration_id", "is_extended", "dlc", "data"].map((signal) =>
+      column(signal, producer),
+    ),
     data: [
       [timeS, timeS - 1],
       [0x064, 0x12c],
@@ -84,7 +88,15 @@ function frameWindow(timeS: number, data: string, producer: string | null = null
     range: null,
     queryDurationS: 0,
   };
-  return { id: "frames", dataset, latest: null, timeMode: "absolute", totalRows: 2, isLoading: false, error: null };
+  return {
+    id: "frames",
+    dataset,
+    latest: null,
+    timeMode: "absolute",
+    totalRows: 2,
+    isLoading: false,
+    error: null,
+  };
 }
 
 type Call = { method: string; params: unknown };
@@ -94,7 +106,12 @@ interface Host {
   time?: Partial<AppBridgeTimeInfo>;
 }
 
-const workspaceReading = (modeKind: string, ...traces: string[]) => ({ id: "ws", name: "", modeKind, traces });
+const workspaceReading = (modeKind: string, ...traces: string[]) => ({
+  id: "ws",
+  name: "",
+  modeKind,
+  traces,
+});
 
 const PAUSED_TRACE: Required<Host> = {
   workspace: { id: "ws", modeKind: "TRACE" },
@@ -178,8 +195,11 @@ describe("BusMonitorPanel", () => {
       minPollMs: 200,
     });
     // Frames only: there is nothing for a latest-value subscription to read.
-    expect(calls.filter((call) => call.method === "panel.subscribe").map((call) => (call.params as { id: string }).id))
-      .not.toContain("latest");
+    expect(
+      calls
+        .filter((call) => call.method === "panel.subscribe")
+        .map((call) => (call.params as { id: string }).id),
+    ).not.toContain("latest");
   });
 
   // The host cuts each bus's rows to fit a million cells; the fit keeps the request and the status line equal to it.
@@ -192,13 +212,16 @@ describe("BusMonitorPanel", () => {
       })),
     ).flat();
     const { bridge, calls } = await mountPanel(null, buses);
-    const subscribe = calls.find((call) => call.method === "panel.subscribe")?.params as PanelSubscribeParams;
+    const subscribe = calls.find((call) => call.method === "panel.subscribe")
+      ?.params as PanelSubscribeParams;
     expect(subscribe.signals).toHaveLength(336);
     expect(subscribe.maxRows).toBe(2_976);
 
     act(() => bridge.pushData({ ...frameWindow(90, "0x0001"), totalRows: 5_000 }));
     await waitFor(() =>
-      expect(screen.getByTestId("can-window-status").textContent).toBe("window: newest 2,976 of 5,000 rows"),
+      expect(screen.getByTestId("can-window-status").textContent).toBe(
+        "window: newest 2,976 of 5,000 rows",
+      ),
     );
   });
 
@@ -227,7 +250,9 @@ describe("BusMonitorPanel", () => {
     act(() => bridge.setTime({ cursorS: 95 }));
     act(() => bridge.setTime({ cursorS: 50 }));
     act(() => bridge.pushData(frameWindow(40, "0x0002")));
-    await waitFor(() => expect(document.querySelector('.ag-cell[col-id="data"]')?.textContent).toBe("00 02"));
+    await waitFor(() =>
+      expect(document.querySelector('.ag-cell[col-id="data"]')?.textContent).toBe("00 02"),
+    );
     expect(messageCells()).toHaveLength(2);
   });
 
@@ -251,7 +276,11 @@ describe("BusMonitorPanel", () => {
     await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
     expect(messageCells()).toHaveLength(2);
 
-    act(() => bridge.setPanel({ signals: [...fromP1.filter((signal) => signal.signal !== "data"), fromP2] }));
+    act(() =>
+      bridge.setPanel({
+        signals: [...fromP1.filter((signal) => signal.signal !== "data"), fromP2],
+      }),
+    );
     await waitFor(() => expect(messageCells()).toHaveLength(0));
   });
 
@@ -287,7 +316,11 @@ describe("BusMonitorPanel", () => {
     await mountWithFrames();
     const fontSize = resolveFontSizePx(undefined);
     const base = gridRowHeight(fontSize);
-    const node = (data: Partial<CanRow>) => ({ data: data as CanRow, rowHeight: base, setRowHeight: vi.fn() });
+    const node = (data: Partial<CanRow>) => ({
+      data: data as CanRow,
+      rowHeight: base,
+      setRowHeight: vi.fn(),
+    });
     const frame = node({ kind: "frame", tokens: ["00", "01"] });
     const grown = node({ kind: "event", tokens: ["state = 0", "soc = 80 %", "mode = 2"] });
     const api = {
@@ -295,7 +328,10 @@ describe("BusMonitorPanel", () => {
       forEachNode: (visit: (n: ReturnType<typeof node>) => void) => [frame, grown].forEach(visit),
       onRowHeightChanged: vi.fn(),
     };
-    const props = grid.props as { onGridReady: (event: unknown) => void; onRowDataUpdated: () => void };
+    const props = grid.props as {
+      onGridReady: (event: unknown) => void;
+      onRowDataUpdated: () => void;
+    };
     props.onGridReady({ api });
 
     props.onRowDataUpdated();
@@ -312,7 +348,9 @@ describe("BusMonitorPanel", () => {
 
   it("shows a failed read as the error state, with its cause", async () => {
     const { bridge } = await mountPanel();
-    act(() => bridge.pushData({ ...frameWindow(90, "0x0001"), dataset: null, error: "query timed out" }));
+    act(() =>
+      bridge.pushData({ ...frameWindow(90, "0x0001"), dataset: null, error: "query timed out" }),
+    );
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Error loading data");
     expect(alert.textContent).toContain("query timed out");
@@ -320,7 +358,9 @@ describe("BusMonitorPanel", () => {
 
   // Layouts saved by Zelos 26.0.9 and earlier refer to this panel by these option keys.
   it("reads every option a saved layout holds", async () => {
-    expect(Object.keys(schema.properties)).toEqual(expect.arrayContaining(["flashChanges", "showSource", "fontSize"]));
+    expect(Object.keys(schema.properties)).toEqual(
+      expect.arrayContaining(["flashChanges", "showSource", "fontSize"]),
+    );
     // Whole px; null is the default size.
     expect(schema.properties.fontSize.type).toBe("integer");
     expect(resolveFontSizePx(null)).toBe(resolveFontSizePx(undefined));
@@ -345,7 +385,10 @@ describe("BusMonitorPanel", () => {
 
   it("asks for a drop while nothing is bound", async () => {
     render(
-      <ZelosBridgeProvider showDevelopmentBanner={false} connectOptions={{ panel: { signals: [] } }}>
+      <ZelosBridgeProvider
+        showDevelopmentBanner={false}
+        connectOptions={{ panel: { signals: [] } }}
+      >
         <BusMonitorPanel />
       </ZelosBridgeProvider>,
     );
@@ -375,7 +418,10 @@ describe("BusMonitorPanel", () => {
   // One saved layout seeds many workspaces with the same panel ids.
   it("keeps a panel's search and latch apart in another workspace with the same panel id", async () => {
     const subscribedRows = (calls: Call[]) =>
-      (calls.filter((call) => call.method === "panel.subscribe").at(-1)?.params as PanelSubscribeParams).maxRows;
+      (
+        calls.filter((call) => call.method === "panel.subscribe").at(-1)
+          ?.params as PanelSubscribeParams
+      ).maxRows;
     const search = () => screen.getByLabelText<HTMLInputElement>("Search");
 
     const first = await mountWithFrames();
@@ -384,7 +430,9 @@ describe("BusMonitorPanel", () => {
     cleanup();
     forgetLatches();
 
-    const other = await mountPanel(null, FRAME_SIGNALS, null, { workspace: { id: "ws2", modeKind: "TRACE" } });
+    const other = await mountPanel(null, FRAME_SIGNALS, null, {
+      workspace: { id: "ws2", modeKind: "TRACE" },
+    });
     expect(search().value).toBe("");
     expect(subscribedRows(other.calls)).toBe(100_000);
     cleanup();
@@ -399,14 +447,19 @@ describe("BusMonitorPanel", () => {
   it("restores the column layout a reload left", async () => {
     await mountPanel();
     const columnState = [{ colId: "message", width: 300, sort: "desc" as const }];
-    const props = grid.props as { onGridReady: (event: unknown) => void; onSortChanged: () => void };
+    const props = grid.props as {
+      onGridReady: (event: unknown) => void;
+      onSortChanged: () => void;
+    };
     props.onGridReady({ api: { isDestroyed: () => false, getColumnState: () => columnState } });
     act(() => props.onSortChanged());
     cleanup();
 
     await mountPanel();
     const applyColumnState = vi.fn();
-    (grid.props as { onGridReady: (event: unknown) => void }).onGridReady({ api: { applyColumnState } });
+    (grid.props as { onGridReady: (event: unknown) => void }).onGridReady({
+      api: { applyColumnState },
+    });
     expect(applyColumnState).toHaveBeenCalledWith({ state: columnState, applyOrder: true });
   });
 
@@ -417,7 +470,10 @@ describe("BusMonitorPanel", () => {
 
     async function editFilter() {
       const mounted = await mountPanel();
-      const props = grid.props as { onGridReady: (event: unknown) => void; onFilterChanged: () => void };
+      const props = grid.props as {
+        onGridReady: (event: unknown) => void;
+        onFilterChanged: () => void;
+      };
       props.onGridReady({ api: { isDestroyed: () => false, getFilterModel: () => model } });
       props.onFilterChanged();
       return mounted;
@@ -426,7 +482,9 @@ describe("BusMonitorPanel", () => {
     it("writes the model under `grid.filterModel` once the edits settle", async () => {
       const { calls } = await editFilter();
       expect(saved(calls)).toEqual([]);
-      await waitFor(() => expect(saved(calls)).toEqual([{ patch: { grid: { filterModel: model } } }]));
+      await waitFor(() =>
+        expect(saved(calls)).toEqual([{ patch: { grid: { filterModel: model } } }]),
+      );
     });
 
     it("writes a pending edit when the panel unmounts", async () => {
@@ -447,7 +505,9 @@ describe("BusMonitorPanel", () => {
     for (const filterModel of [[{ filterType: "text" }], { message: "0x064" }]) {
       await mountPanel(null, FRAME_SIGNALS, { grid: { filterModel } });
       const setFilterModel = vi.fn();
-      (grid.props as { onGridReady: (event: unknown) => void }).onGridReady({ api: { setFilterModel } });
+      (grid.props as { onGridReady: (event: unknown) => void }).onGridReady({
+        api: { setFilterModel },
+      });
       expect(setFilterModel).not.toHaveBeenCalled();
       cleanup();
     }
@@ -474,14 +534,24 @@ describe("BusMonitorPanel", () => {
       ),
     ).flat();
     const { calls } = await mountPanel(null, buses);
-    const subscribe = calls.find((call) => call.method === "panel.subscribe")?.params as PanelSubscribeParams;
+    const subscribe = calls.find((call) => call.method === "panel.subscribe")
+      ?.params as PanelSubscribeParams;
     expect(subscribe.signals).toHaveLength(160);
     expect(subscribe.maxRows).toBe(fitRowBudget(320, 100_000));
   });
 
   it("reads every other bound table from one latest-value subscription, a row per table", async () => {
-    const status = { source: "CAN", message: "can0/0064_DUT_Status", eventType: "zelos.can.message.v1", color: "" };
-    const field = (signal: string, producer: string, unit: string | null = null): AppBridgePanelSignal => ({
+    const status = {
+      source: "CAN",
+      message: "can0/0064_DUT_Status",
+      eventType: "zelos.can.message.v1",
+      color: "",
+    };
+    const field = (
+      signal: string,
+      producer: string,
+      unit: string | null = null,
+    ): AppBridgePanelSignal => ({
       ...status,
       signal,
       producer,
@@ -495,7 +565,8 @@ describe("BusMonitorPanel", () => {
       field("soc", "p1", "%"),
     ]);
     const latest = calls.find(
-      (call) => call.method === "panel.subscribe" && (call.params as { id: string }).id === "latest",
+      (call) =>
+        call.method === "panel.subscribe" && (call.params as { id: string }).id === "latest",
     );
     expect(latest?.params).toEqual({
       id: "latest",
@@ -525,21 +596,31 @@ describe("BusMonitorPanel", () => {
         error: null,
       }),
     );
-    await waitFor(() => expect([...messageCells()].map((cell) => cell.textContent)).toEqual(["0064_DUT_Status"]));
-    expect(document.querySelector('.ag-cell[col-id="data"]')?.textContent).toBe("state = 3\nsoc = 59.5 %");
+    await waitFor(() =>
+      expect([...messageCells()].map((cell) => cell.textContent)).toEqual(["0064_DUT_Status"]),
+    );
+    expect(document.querySelector('.ag-cell[col-id="data"]')?.textContent).toBe(
+      "state = 3\nsoc = 59.5 %",
+    );
   });
 
   // The host publishes time every animation frame while it follows live.
   it("does not reduce the frame window again for a live time push that brings no new frames", async () => {
     const { bridge } = await mountPanel(null, FRAME_SIGNALS, null, {
       workspace: { id: "ws", modeKind: "LIVE" },
-      time: { playback: "LIVE", cursorS: null, viewRange: null, dataRange: { startS: 0, endS: 100 } },
+      time: {
+        playback: "LIVE",
+        cursorS: null,
+        viewRange: null,
+        dataRange: { startS: 0, endS: 100 },
+      },
     });
     act(() => bridge.pushData(frameWindow(90, "0x0001")));
     await waitFor(() => expect(messageCells()).toHaveLength(2));
     const reduced = vi.mocked(reduceCanFrameRows).mock.calls.length;
 
-    for (const endS of [101, 102, 103]) act(() => bridge.setTime({ dataRange: { startS: 0, endS } }));
+    for (const endS of [101, 102, 103])
+      act(() => bridge.setTime({ dataRange: { startS: 0, endS } }));
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     expect(vi.mocked(reduceCanFrameRows).mock.calls.length).toBe(reduced);
   });
