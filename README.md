@@ -180,7 +180,7 @@ One value each, applied to every bus.
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
 | **Timestamp Mode** | How to interpret the interface's timestamp (auto, absolute, ignore). |
 | **Send Timeout (s)** | SocketCAN / SocketCAN over SSH: how long a send waits for room in the host's transmit queue before failing (default 1 s; 0 tries once). |
-| **Retry Unreachable at Start** | A bus that cannot start is retried with backoff while the other buses run, instead of stopping the extension (default off). A failure retrying cannot fix still stops it: a permanent ssh failure, or a SocketCAN interface that does not exist. |
+| **Retry Unreachable at Start** | A bus that cannot start is retried with backoff while the other buses run, instead of stopping the extension (default off). An ssh bus retries whatever the cause; a SocketCAN interface that does not exist still stops it. |
 | **J1939** | Every 29-bit message is a J1939 parameter group, not only those the DBC marks (default off). See [J1939](#j1939). |
 | **J1939 Node** | The DBC node every bus claims and sends as on J1939 (default empty: none). See [J1939 node identity](#j1939-node-identity). |
 | **J1939 NAME**, **J1939 Address** | Instead of J1939 Node: the NAME (hex) and address every bus claims, no DBC node needed (default empty: none). |
@@ -244,18 +244,13 @@ loopback, so every transmit is traced exactly once.
 - Plus the shared **Database Files** setting and the global **Advanced** ones.
 
 ### Notes
-- A failure nothing but an operator can fix — authentication, an untrusted host
-  key under `strict`, missing `can-utils` on the edge, or a **Remote Channel**
-  the edge does not have on a bus that has never once streamed a frame — is reported
-  once with the exact command that fixes it (resolved for this bus and your OS)
-  and the bus stops, rather than retrying behind your back.
-- Such a permanent failure on ONE ssh bus stops the extension, and so every
-  other bus with it — the same as a bus that cannot start at all, unless
-  **Advanced > Retry Unreachable at Start** is on.
-- Transient failures (unreachable, DNS, a dropped link, or a CAN interface that
-  went away after a working session — a rebooting edge, a re-enumerating
-  adapter) reconnect automatically with backoff; decoded state and any armed
-  periodic transmissions are preserved across the reconnect.
+- A session that fails before it is up (authentication, host key under
+  `strict`, missing `can-utils`, a **Remote Channel** the edge does not have,
+  an unreachable edge) fails the bus's start, and the log carries ssh's exit
+  code, stderr and command. That stops the extension unless **Advanced > Retry
+  Unreachable at Start** is on, which retries the bus while the others run.
+- A link that drops after it was up reconnects with backoff; decoded state and
+  armed periodic transmissions are preserved.
 - Timestamps in `auto`/`absolute` mode come from the **edge's** clock (its
   adapter's, with **Hardware timestamps** on) — keep the edge's time in sync
   (NTP) if absolute timestamps matter.
