@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.4.0",
   "type": "module",
-  "description": "Capture, decode (DBC) and send CAN and CAN-FD frames live, and convert CAN logs (.asc, .blf, .trc, .log, .csv, .mf4) to Zelos traces (.trz), with or without a DBC.",
+  "description": "Capture, decode (DBC, AUTOSAR ARXML) and send CAN frames over SocketCAN (local or over SSH), PCAN, Kvaser, Vector, slcan, gs_usb or any python-can interface (CAN-FD on SocketCAN, PCAN, Kvaser and Vector), with J1939 and CANopen. Convert .asc, .blf, .trc, python-can .csv, candump and .mf4 logs to .trz.",
   "author": "Zelos",
   "packageManager": "npm@11.19.0",
   "engines": {
