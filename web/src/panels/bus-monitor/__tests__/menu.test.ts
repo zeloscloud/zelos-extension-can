@@ -37,7 +37,10 @@ describe("canMenuItems", () => {
 
   it("copies a decoded row's Data cell as its lines, and the row as JSON", () => {
     const target = { row: eventRow, cellText: "soc = 59.5 %\nstate = 3" };
-    expect(canMenuCopy("copy-value", target)).toEqual({ text: "soc = 59.5 %\nstate = 3", toast: "Value copied" });
+    expect(canMenuCopy("copy-value", target)).toEqual({
+      text: "soc = 59.5 %\nstate = 3",
+      toast: "Value copied",
+    });
     expect(canMenuCopy("copy-bytes", target)).toBeNull();
     expect(JSON.parse(canMenuCopy("copy-row-json", target)?.text ?? "null")).toEqual({
       source: "CAN/can0/0064_DUT_Status",

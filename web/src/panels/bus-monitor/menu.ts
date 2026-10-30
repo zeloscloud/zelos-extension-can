@@ -15,7 +15,13 @@ export function canCellText(row: CanRow, colId: string, domText: string): string
 
 /** The row as a machine reads it: a row is already a reduction, so the display is the record. */
 function canRowJson(row: CanRow): Record<string, unknown> {
-  return { source: row.source, message: row.message, dlc: row.dlc, time_s: row.timeS, data: [...row.tokens] };
+  return {
+    source: row.source,
+    message: row.message,
+    dlc: row.dlc,
+    time_s: row.timeS,
+    data: [...row.tokens],
+  };
 }
 
 /** A frame row with bytes to copy; a decoded row's lines are what "Copy value" copies. */
@@ -37,7 +43,10 @@ export function canMenuItems(target: CanMenuTarget): PanelMenuItem[] {
 }
 
 /** The text a chosen item copies and the toast that confirms it, or null for no choice. */
-export function canMenuCopy(itemId: string | null, target: CanMenuTarget): { text: string; toast: string } | null {
+export function canMenuCopy(
+  itemId: string | null,
+  target: CanMenuTarget,
+): { text: string; toast: string } | null {
   switch (itemId) {
     case "copy-value":
       return { text: target.cellText, toast: "Value copied" };

@@ -50,7 +50,8 @@ export function canColumnWidths(
         HEADER_FILTER_BUTTON_PX +
         (sortable ? HEADER_SORT_INDICATOR_PX : 0),
     );
-  const mono = getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace";
+  const mono =
+    getComputedStyle(document.documentElement).getPropertyValue("--mono").trim() || "monospace";
   const cell = (value: string) => width(`${fontSizePx}px ${mono}`, value);
   const times = mode === "relative" ? [startS, endS] : [0];
   const widestTime = Math.max(...times.map((timeS) => cell(formatTime(timeS, mode))));
@@ -79,7 +80,10 @@ const CanMessageCell = memo((props: ICellRendererParams<CanRow>) => {
   const { data } = props;
   if (!data) return null;
   return (
-    <GridCell className={data.kind === "frame" ? "truncate centered" : "truncate"} title={data.source}>
+    <GridCell
+      className={data.kind === "frame" ? "truncate centered" : "truncate"}
+      title={data.source}
+    >
       {data.message}
     </GridCell>
   );
@@ -121,7 +125,11 @@ const CanDataCell = memo((props: ICellRendererParams<CanRow> & { flash: boolean 
       {data.tokens.map((line, index) => {
         const lineFlash = flashClass(index);
         return (
-          <div key={`${index}:${line}`} className={lineFlash ? `truncate ${lineFlash}` : "truncate"} data-can-line="">
+          <div
+            key={`${index}:${line}`}
+            className={lineFlash ? `truncate ${lineFlash}` : "truncate"}
+            data-can-line=""
+          >
             {line}
           </div>
         );
@@ -141,7 +149,11 @@ interface CanColumnDefsParams {
 }
 
 /** Only the columns that identify a row sort: a bus sorted by its bytes shuffles the ids you read it by. */
-export function buildCanColumnDefs({ flashChanges, showSource, widths }: CanColumnDefsParams): ColDef<CanRow>[] {
+export function buildCanColumnDefs({
+  flashChanges,
+  showSource,
+  widths,
+}: CanColumnDefsParams): ColDef<CanRow>[] {
   return [
     {
       // No initial sort: a second one beside Message's would number the headers (`1`, `2`).
@@ -165,7 +177,8 @@ export function buildCanColumnDefs({ flashChanges, showSource, widths }: CanColu
       ...(widths && { initialWidth: widths.message }),
       initialSort: "asc",
       sortingOrder: MESSAGE_SORT_ORDER,
-      comparator: (_a, _b, nodeA, nodeB, descending) => compareCanMessage(nodeA.data, nodeB.data, descending),
+      comparator: (_a, _b, nodeA, nodeB, descending) =>
+        compareCanMessage(nodeA.data, nodeB.data, descending),
       cellClass: MONO_VALUE_CELL,
       valueGetter: (p) => p.data?.message ?? "",
       cellRenderer: CanMessageCell,

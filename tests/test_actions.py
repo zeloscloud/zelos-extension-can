@@ -12,6 +12,7 @@ import json
 import logging
 import sys
 import time
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -750,6 +751,12 @@ def test_every_action_declares_its_flags():
         "auto_config": (True, True),
         "convert": (False, False),
     }
+
+
+def test_actions_register_under_the_manifest_name():
+    """`zelos_sdk.init` takes ACTION_PREFIX, and the app resolves actions by the manifest name."""
+    manifest = tomllib.loads((Path(__file__).parents[1] / "extension.toml").read_text())
+    assert manifest["name"] == ACTION_PREFIX
 
 
 class TestAdapterDetection:

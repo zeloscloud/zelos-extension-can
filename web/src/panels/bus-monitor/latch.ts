@@ -1,4 +1,10 @@
-import { advanceCanScope, type CanPanelState, type CanRow, type CanRowScope, type CanScopeInputs } from "./data";
+import {
+  advanceCanScope,
+  type CanPanelState,
+  type CanRow,
+  type CanRowScope,
+  type CanScopeInputs,
+} from "./data";
 
 // The host reloads a panel on a layout tab switch, so the latch lives in sessionStorage, scope and all.
 
@@ -40,7 +46,7 @@ function emptyLatch(): CanPanelState {
 
 function restore(panelKey: string, storage: Storage | null): CanPanelState {
   const state = emptyLatch();
-  let stored: Partial<StoredLatch> | null = null;
+  let stored: Partial<StoredLatch> | null;
   try {
     const raw = storage?.getItem(latchKey(panelKey));
     stored = raw ? (JSON.parse(raw) as Partial<StoredLatch>) : null;
@@ -57,7 +63,10 @@ function restore(panelKey: string, storage: Storage | null): CanPanelState {
 }
 
 /** One panel instance's latch: in memory when this document already holds it, else restored from storage. */
-export function panelLatch(panelKey: string, storage: Storage | null = sessionStore()): CanPanelState {
+export function panelLatch(
+  panelKey: string,
+  storage: Storage | null = sessionStore(),
+): CanPanelState {
   let state = LATCHES.get(panelKey);
   if (!state) {
     state = restore(panelKey, storage);
@@ -74,11 +83,19 @@ function rowsToStore(rows: readonly CanRow[]): CanRow[] {
     kept = rows.filter((row) => newest.has(row));
   }
   // A restored row has no previous value, so it has nothing to flash.
-  return kept.map(({ flash: _flash, ...row }) => row);
+  return kept.map((row) => {
+    const copy = { ...row };
+    delete copy.flash;
+    return copy;
+  });
 }
 
 /** Write one latch to storage. A full or refused store keeps the panel working, without the restore. */
-function persistLatch(panelKey: string, state: CanPanelState, storage: Storage | null = sessionStore()): void {
+function persistLatch(
+  panelKey: string,
+  state: CanPanelState,
+  storage: Storage | null = sessionStore(),
+): void {
   if (!storage) return;
   const stored: StoredLatch = {
     version: 1,

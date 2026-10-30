@@ -140,7 +140,11 @@ export function GridPanelBody({
   children,
 }: {
   error: string | null;
-  search: { value: string; onChange: (event: ChangeEvent<HTMLInputElement>) => void; onClear: () => void };
+  search: {
+    value: string;
+    onChange: (event: ChangeEvent<HTMLInputElement>) => void;
+    onClear: () => void;
+  };
   /** One line under the grid; a panel with nothing to say passes nothing. */
   footer?: ReactNode | undefined;
   /** A right-click on a cell. A right-click anywhere else keeps the document's own menu out of the way. */
@@ -151,7 +155,12 @@ export function GridPanelBody({
 
   // Cmd+F focuses this panel's search while focus is inside it.
   const handleKeyDown = useCallback((event: KeyboardEvent) => {
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "f") {
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "f"
+    ) {
       event.preventDefault();
       event.stopPropagation();
       searchRef.current?.focus();
@@ -186,7 +195,12 @@ export function GridPanelBody({
             onChange={search.onChange}
           />
           {search.value && (
-            <button type="button" aria-label="Clear search" title="Clear search" onClick={search.onClear}>
+            <button
+              type="button"
+              aria-label="Clear search"
+              title="Clear search"
+              onClick={search.onClear}
+            >
               <ClearIcon />
             </button>
           )}

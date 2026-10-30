@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Zelos CAN extension - CAN bus monitoring and database decoding."""
 
 import logging
@@ -8,25 +7,17 @@ from pathlib import Path
 import rich_click as click
 from zelos_can import demo as _demo
 
-from zelos_extension_can import ACTION_PREFIX as _ACTION_PREFIX
 from zelos_extension_can import cli as cli_commands
 
 DEMO_DBC_PATH = Path(_demo.__file__).parent / "demo.dbc"
 
-#: Re-exported so the at-rest inventory dump — which reads this entry module —
-#: sees the same namespace the live registration uses. See the definition in
-#: `zelos_extension_can/__init__.py`.
-ACTION_PREFIX = _ACTION_PREFIX
-
-# Configure rich-click
 click.rich_click.USE_RICH_MARKUP = True
 click.rich_click.USE_MARKDOWN = True
 click.rich_click.SHOW_ARGUMENTS = True
 click.rich_click.GROUP_ARGUMENTS_OPTIONS = True
 click.rich_click.STYLE_ERRORS_SUGGESTION = "yellow italic"
 
-# Configure logging - INFO level prevents debug logs from being sent to backend
-# UTC ISO 8601 with ms, matching the SDK's Rust tracing lines in the same log stream
+# UTC ISO 8601 with ms, matching the SDK's Rust tracing lines in the same log stream.
 logging.Formatter.converter = time.gmtime
 logging.basicConfig(
     level=logging.INFO,
@@ -56,15 +47,12 @@ def cli(ctx: click.Context, demo: bool, file: Path | None) -> None:
     Traces a CAN bus given an interface, channel, database file, bitrate, etc.
     Configure via Zelos extension settings or use --demo for testing.
     """
-    # If a subcommand was invoked, don't run the main trace logic
     if ctx.invoked_subcommand is not None:
         return
 
-    # Run app-based configuration mode
     cli_commands.run_app_mode(demo, file, DEMO_DBC_PATH)
 
 
-# Register subcommands
 cli.add_command(cli_commands.trace)
 cli.add_command(cli_commands.convert)
 cli.add_command(cli_commands.export)

@@ -16,6 +16,7 @@ import can.exceptions
 import pytest
 from zelos_can import ssh_socketcan
 from zelos_can.codec import CanCodec
+from zelos_sdk.extensions import load_config
 
 from zelos_extension_can import INTERFACES
 from zelos_extension_can.cli import app as app_mod
@@ -107,6 +108,26 @@ def test_schema_is_valid_and_carries_the_per_bus_block():
     assert not validator.is_valid({"buses": [{"interface": "Demo"}], "advanced": {"nope": 1}})
 
 
+def test_settings_saved_by_earlier_releases_pass_the_settings_check(tmp_path):
+    saved = {
+        "buses": [
+            {
+                "interface": "SocketCAN",
+                "channel": "can0",
+                "fd_mode": True,
+                "data_bitrate": 2000000,
+                "config_json": json.dumps({"receive_own_messages": True}),
+            }
+        ],
+        "advanced": {"message_id_in_name": True},
+    }
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(saved))
+    config = load_config(config_path=config_path, schema_path=SCHEMA_PATH)
+    assert config["buses"][0]["data_bitrate"] == 2000000
+    assert resolve_advanced(config)["message_id_in_name"] is True
+
+
 def test_every_interface_label_resolves():
     schema = _load_schema()
     enum = schema["properties"]["buses"]["items"]["properties"]["interface"]["enum"]
@@ -185,7 +206,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
 # ── advanced settings and names ──────────────────────────────────────────────
 
 
-def test_resolve_advanced_honours_a_legacy_top_level_log_level():
+def test_resolve_advanced_honors_a_legacy_top_level_log_level():
     assert resolve_advanced({"log_level": "DEBUG"})["log_level"] == "DEBUG"
     assert resolve_advanced({})["log_level"] == ADVANCED_DEFAULTS["log_level"]
     # An explicit advanced value wins over the legacy one.
@@ -442,7 +463,7 @@ def test_run_codecs_async_retry_leaves_a_missing_socketcan_interface_fatal():
     codec.start.assert_called_once()
 
 
-def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
+def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch, caplog):
     """End to end: a doomed ssh bus makes run_app_mode exit(1) with a logged
     reason rather than propagating a raw CanInitializationError traceback."""
 
@@ -480,13 +501,15 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
     monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
     monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
-    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", app_mod.zelos_sdk.TraceSource)
     monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
 
     try:
         with pytest.raises(SystemExit) as ei:
             app_mod.run_app_mode(demo=False, file=None, demo_dbc_path=Path("/nonexistent/demo.dbc"))
         assert ei.value.code == 1
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1 and "ssh host key for edge is not trusted" in errors[0]
     finally:
         for c in created:
             with contextlib.suppress(Exception):

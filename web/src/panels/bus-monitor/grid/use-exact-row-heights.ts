@@ -1,11 +1,16 @@
 import type { GridApi, RowHeightParams } from "ag-grid-community";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useInsertionEffect, useRef } from "react";
 
 /** Every row's height set up front: AG Grid's guess for an unrendered row shifts the lines under the reader. */
-export function useExactRowHeights<TRow>(getGridApi: () => GridApi<TRow> | null, heightOf: (row: TRow) => number) {
+export function useExactRowHeights<TRow>(
+  getGridApi: () => GridApi<TRow> | null,
+  heightOf: (row: TRow) => number,
+) {
   // Read through a ref, so the grid holds one callback for the panel's life.
   const heightOfRef = useRef(heightOf);
-  heightOfRef.current = heightOf;
+  useInsertionEffect(() => {
+    heightOfRef.current = heightOf;
+  }, [heightOf]);
   const getRowHeight = useCallback(
     (params: RowHeightParams<TRow>) => (params.data ? heightOfRef.current(params.data) : undefined),
     [],
