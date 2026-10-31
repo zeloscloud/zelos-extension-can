@@ -642,6 +642,14 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     description="Decode CANopen (NMT, heartbeat, EMCY, SDO) for every node-id",
     widget="toggle",
 )
+@action.boolean(
+    "message_id_in_name",
+    required=False,
+    default=False,
+    title="Message ID in Event Names",
+    description="Name decoded events after their frame ID too: '0064_DUT_Status', not 'DUT_Status'",
+    widget="toggle",
+)
 def convert_trace_file(
     input_path: str,
     database_path: str | list[str] = "",
@@ -652,6 +660,7 @@ def convert_trace_file(
     j1939: bool = False,
     canopen: bool = False,
     cluster: str = "",
+    message_id_in_name: bool = False,
 ) -> dict[str, Any]:
     from zelos_can.converter import convert_can_trace
 
@@ -701,6 +710,7 @@ def convert_trace_file(
             j1939=j1939,
             canopen="on" if canopen else "auto",
             cluster=cluster,
+            message_id_in_name=message_id_in_name,
         )
         return {
             "status": "success",
@@ -1294,6 +1304,14 @@ def _open_in_app(path: Path) -> None:
     description="Decode CANopen (NMT, heartbeat, EMCY, SDO) for every node-id",
     widget="toggle",
 )
+@action.boolean(
+    "message_id_in_name",
+    required=False,
+    default=False,
+    title="Message ID in Event Names",
+    description="Name decoded events after their frame ID too: '0064_DUT_Status', not 'DUT_Status'",
+    widget="toggle",
+)
 def convert(
     input_file: str,
     database_file: str | list[str] = "",
@@ -1303,6 +1321,7 @@ def convert(
     j1939: bool = False,
     canopen: bool = False,
     cluster: str = "",
+    message_id_in_name: bool = False,
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
@@ -1335,6 +1354,7 @@ def convert(
         j1939=j1939,
         canopen="on" if canopen else "auto",
         cluster=cluster,
+        message_id_in_name=message_id_in_name,
     )
 
     # The trace exists on disk from here on. Failing to open it is a worse

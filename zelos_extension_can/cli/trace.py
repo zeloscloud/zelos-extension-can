@@ -56,6 +56,11 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     help="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
 )
+@click.option(
+    "--message-id-in-name",
+    is_flag=True,
+    help="Name decoded events after their frame ID too: '0064_DUT_Status', not 'DUT_Status'",
+)
 @canopen_node_option
 def trace(
     interface: str,
@@ -68,6 +73,7 @@ def trace(
     data_bitrate: int | None,
     prefix: str,
     j1939: bool,
+    message_id_in_name: bool,
     canopen: bool,
     canopen_nodes: list[dict],
 ) -> None:
@@ -118,6 +124,7 @@ def trace(
         "bitrate": bitrate,
         "fd_mode": fd,
         "j1939": j1939,
+        "message_id_in_name": message_id_in_name,
         "canopen": canopen,
         "canopen_nodes": canopen_nodes,
         "log_raw_frames": True,  # Enable raw logging in CLI mode

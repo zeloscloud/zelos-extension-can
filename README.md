@@ -89,10 +89,11 @@ Two databases that define one message id:
 
 | Case | What happens |
 |---|---|
-| **Overlap** — same id, **different** names | Both definitions survive: a frame decodes under each, into its own table (`0302_Batt_Status` *and* `0302_Batt_Debug`). Logged at INFO, reported as `dbc_overlaps`. |
+| **Overlap** — same id, **different** names | Both definitions survive: a frame decodes under each, into its own table (`Batt_Status` *and* `Batt_Debug`). Logged at INFO, reported as `dbc_overlaps`. |
 | **Conflict** — same id, **same** name, different layout | The later file's definition wins, the other is dropped with a warning, and the pair is listed under `dbc_conflicts` on `get_tx_state`. |
 
-One message name at two ids (a moved message) is neither: both definitions
+One message name at two ids (a moved message) is neither: the bus refuses to
+start unless **Message ID in Event Names** is on, and then both definitions
 survive and both are listed. Address each by its `key` — a transmit by the bare
 name refuses and names the keys.
 
@@ -107,7 +108,7 @@ and `trace` have `--j1939` for the same.
 | What | Behavior |
 |---|---|
 | **Matching** | By PGN, whatever the priority. A message the DBC defines at source address `0xFE` decodes from any sender. |
-| **Tables** | One per sender: `0cf00400_EEC1`, `0cf00401_EEC1`. |
+| **Tables** | One per sender, named for its source address: `EEC1_00`, `EEC1_01`. |
 | **One message, several definitions** | A sender decodes under its own definition, whatever the destination. A sender the DBC does not name decodes under the first definition when they all share one layout, and is left undecoded when layouts differ. |
 | **Messages over 8 bytes** | Transport protocol transfers (BAM, RTS/CTS) are rebuilt and decoded, stamped with their last packet. |
 | **Not available, error** | A raw value J1939 reserves for these (above `0xFA` at 8 bits, `0xFAFF` at 16, and so on) decodes to empty. It stays a value when the DBC's range for the signal takes it in, or a `VAL_` labels it. |
@@ -175,6 +176,7 @@ One value each, applied to every bus.
 | Setting | What it does |
 |---|---|
 | **Prefix** | Leading trace source every bus publishes under (default `CAN`). |
+| **Message ID in Event Names** | Name decoded events after their frame ID too, `0064_DUT_Status` instead of `DUT_Status` (default off). J1939 and OBD events end in the sender either way. `convert` and `trace` have `--message-id-in-name`, the convert actions a toggle. |
 | **Log Raw CAN Frames** | Log undecoded frames alongside the decoded signals (default on). |
 | **Receive Own Messages** | Receive frames this host transmits. |
 | **Emit Schemas On Init** | Register every message schema at startup instead of lazily. |
@@ -194,10 +196,10 @@ events the same way; a conversion uses the input file's stem as its segment.
 
 | What | Prefix `CAN` | Prefix cleared |
 |---|---|---|
-| Decoded signals | `CAN/can0/0064_DUT_Status` | `can0/0064_DUT_Status` |
+| Decoded signals | `CAN/can0/DUT_Status` | `can0/DUT_Status` |
 | Undecoded frames | `CAN/can0/Frame` | `can0/Frame` |
 | Extension logs | `CAN/log` | `can_log/log` |
-| Converted `capture.log` | `CAN/capture/0064_DUT_Status` | `capture/0064_DUT_Status` |
+| Converted `capture.log` | `CAN/capture/DUT_Status` | `capture/DUT_Status` |
 
 Clear **Prefix** in Advanced settings to keep the previous layout: one source
 per bus (or per converted file) with events unprefixed.
@@ -261,7 +263,7 @@ The extension provides several actions accessible from the Zelos App:
 
 - **List Codecs**: Names of every configured bus
 - **Get TX State**: One bus's periodics, DBC list, metrics, and health. `status` is `active`, `warning` (errors on the wire, error counters high, or frames lost on receive), `error` (error-passive, bus-off, adapter unreachable or down, or sends failing), `stopped`, or `unknown`; `health` gives the controller's state, why, and its error counters where the adapter reports them
-- **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key` (`0334_Merge_Moved`: its id and name, and the name of its trace event). The transmit actions take a key, or a name only one definition carries.
+- **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key`, the name of its trace event (`DUT_Status`, or `0064_DUT_Status` with **Message ID in Event Names**). The transmit actions take a key, or a name only one definition carries.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
 - **J1939 Claim**: Claim an address for a NAME on a bus; the J1939 sends go from it
