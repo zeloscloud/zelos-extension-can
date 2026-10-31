@@ -6,7 +6,7 @@ keyed by a `codec` parameter, not per-bus action paths (`<prefix>/<bus>/<action>
 - CLI/SDK consumers get one stable surface — `can.send_message` always exists,
   with the same shape, regardless of how many buses are configured.
 - Bus discovery is explicit via `list_codecs`, not implicit via action-path
-  scanning on the consumer side.
+  scanning on the consumer side. With one bus configured, `codec` may be left unset.
 - Dynamic `choices=` reflects the currently-registered codecs at form-render time.
 
 Functions in this module read from the shared `CAN_CODECS` registry, which
@@ -20,6 +20,7 @@ bound at decoration time.
 
 from __future__ import annotations
 
+import functools
 import inspect
 import logging
 import os
@@ -58,6 +59,20 @@ def _get_codec(name: str) -> CanCodec:
     if codec is None:
         raise ValueError(f"Unknown CAN codec '{name}'. Available: {sorted(CAN_CODECS.keys())}")
     return codec
+
+
+def _codec_field(func: Any) -> Any:
+    """The `codec` select. Unset, the action runs on the only configured bus."""
+
+    @functools.wraps(func)
+    def call(codec: str | None = None, *args: Any, **kwargs: Any) -> Any:
+        if not codec:
+            if len(CAN_CODECS) != 1:
+                raise ValueError(f"Set codec. Available: {_available_codecs()}")
+            codec = next(iter(CAN_CODECS))
+        return func(codec, *args, **kwargs)
+
+    return action.select("codec", title="CAN bus", choices=_available_codecs, required=False)(call)
 
 
 def _as_paths(value: str | list[str]) -> list[Path]:
@@ -105,7 +120,7 @@ def list_codecs() -> dict[str, Any]:
     read_only=True,
     hidden=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 def get_tx_state(codec: str) -> dict[str, Any]:
     return _get_codec(codec).get_tx_state()
 
@@ -120,7 +135,7 @@ def get_tx_state(codec: str) -> dict[str, Any]:
     read_only=True,
     hidden=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 def list_messages(codec: str) -> dict[str, Any]:
     return _get_codec(codec).list_messages()
 
@@ -134,7 +149,7 @@ def list_messages(codec: str) -> dict[str, Any]:
     read_only=True,
     hidden=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("message", title="DBC message key or name")
 def describe_message(codec: str, message: str) -> dict[str, Any]:
     return _get_codec(codec).describe_message(message)
@@ -144,7 +159,7 @@ def describe_message(codec: str, message: str) -> dict[str, Any]:
 
 
 @action("Send Raw", "Send a one-shot raw CAN frame")
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
 @action.text(
     "data", title="Data (hex bytes)", placeholder="01 02 03 04", required=False, default=""
@@ -164,7 +179,7 @@ def send_raw(
 
 
 @action("Start Periodic Raw", "Start raw periodic transmission. Returns {task_id, replaced}.")
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("can_id", title="CAN ID (hex)", placeholder="0x100")
 @action.text("data", title="Data (hex bytes)", placeholder="01 02 03 04")
 @action.number(
@@ -192,7 +207,7 @@ def start_periodic_raw(
     "`message` is a key from list_messages, or a name only one "
     "definition carries.",
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
 @action.text("mux", title="Multiplexer (optional)", required=False, default="")
@@ -209,7 +224,7 @@ def send_message(codec: str, message: str, signals_json: str, mux: str = "") -> 
     read_only=True,
     hidden=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
 @action.text("mux", title="Multiplexer (optional)", required=False, default="")
@@ -223,7 +238,7 @@ def encode_preview(codec: str, message: str, signals_json: str, mux: str = "") -
     "`message` is a key from list_messages, or a name only one "
     "definition carries.",
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"Speed": 50}')
 @action.number(
@@ -287,7 +302,7 @@ def _j1939_addressed(fn):
     "(arbitrary address capable) lets the node move to a free address in 128..247 when it "
     "loses. get_tx_state shows the address held. Kept, and claimed again when the bus reopens.",
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("name", title="NAME (hex, 64-bit)", placeholder="0x8000000000001000")
 @action.integer("address", title="Address (0-253)", minimum=0, maximum=253)
 def j1939_claim(codec: str, name: str, address: int) -> dict[str, Any]:
@@ -299,7 +314,7 @@ def j1939_claim(codec: str, name: str, address: int) -> dict[str, Any]:
     "Send a DBC-encoded J1939 parameter group once from the claimed address. "
     "`message` is a key from list_messages, or a name only one definition carries. " + _J1939_SENT,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
 @_j1939_addressed
@@ -324,7 +339,7 @@ def j1939_send(
     read_only=True,
     hidden=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
 @_j1939_addressed
@@ -350,7 +365,7 @@ def j1939_encode_preview(
     "counted (`skipped` in the periodic). Returns {task_id, replaced}; stop it with "
     "stop_periodic.",
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("message", title="DBC message key or name")
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
 @action.number(
@@ -377,7 +392,7 @@ def j1939_send_periodic(
     "J1939 Send Raw",
     "Send a parameter group's bytes once from the claimed address. " + _J1939_SENT,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("pgn", title="PGN (hex)", placeholder="FECA")
 @action.text(
     "data", title="Data (hex bytes)", placeholder="01 02 03 04", required=False, default=""
@@ -415,7 +430,7 @@ def j1939_send_raw(
     "Ask a node, or everyone, to send a parameter group (Request, PGN 0xEA00) from the "
     "claimed address. The answer decodes like any other frame, transport protocol included.",
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("pgn", title="PGN (hex)", placeholder="FECA")
 @action.integer(
     "destination_address",
@@ -467,7 +482,7 @@ def _canopen_sdo(fn):
     read_only=True,
     hidden=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 def canopen_nodes(codec: str) -> dict[str, Any]:
     return _get_codec(codec).canopen_nodes_status()
 
@@ -479,7 +494,7 @@ def canopen_nodes(codec: str) -> dict[str, Any]:
     read_only=True,
     hidden=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.integer("node_id", title="Node ID (1-127)", minimum=1, maximum=127)
 @action.text("index", title="Index (hex, optional)", placeholder="1018", required=False, default="")
 def canopen_describe(codec: str, node_id: int, index: str = "") -> dict[str, Any]:
@@ -492,7 +507,7 @@ def canopen_describe(codec: str, node_id: int, index: str = "") -> dict[str, Any
     "answer in time, is an error.",
     read_only=True,
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @_canopen_sdo
 def canopen_sdo_read(
     codec: str, node_id: int, index: str, subindex: int = 0, timeout: float = 1.0
@@ -508,7 +523,7 @@ def canopen_sdo_read(
     "integers decimal or 0x hex, REAL decimal, BOOLEAN 0/1, VISIBLE_STRING text, bytes "
     "hex. An abort, or no answer in time, is an error.",
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @_canopen_sdo
 @action.text("value", title="Value", placeholder="1500, 0x5dc, or 01 02 as bytes")
 @action.select(
@@ -536,7 +551,7 @@ def canopen_sdo_write(
     "Send an NMT command. Transmits on the bus and changes the state of the addressed "
     "node, or of every node on the bus with node 0; no confirmation.",
 )
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.select("command", title="Command", choices=list(NMT_COMMANDS))
 @action.integer("node_id", title="Node ID (1-127, or 0 for all nodes)", minimum=0, maximum=127)
 def canopen_nmt(codec: str, command: str, node_id: int) -> dict[str, Any]:
@@ -544,7 +559,7 @@ def canopen_nmt(codec: str, command: str, node_id: int) -> dict[str, Any]:
 
 
 @action("Stop Periodic", "Stop a periodic task by its stable task_id (from start_periodic_*)")
-@action.select("codec", title="CAN bus", choices=_available_codecs)
+@_codec_field
 @action.text("task_id", title="Task ID")
 def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     return _get_codec(codec).stop_periodic(task_id)

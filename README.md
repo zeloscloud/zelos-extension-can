@@ -278,7 +278,7 @@ loopback, so every transmit is traced exactly once.
 
 ## Actions
 
-The extension provides several actions accessible from the Zelos App:
+The extension provides several actions accessible from the Zelos App. The per-bus actions take the bus as `codec`, which may be left unset when one bus is configured:
 
 - **List Codecs**: Names of every configured bus
 - **Get TX State**: One bus's periodics, DBC list, metrics, and health. `status` is `active`, `warning` (errors on the wire, error counters high, or frames lost on receive), `error` (error-passive, bus-off, adapter unreachable or down, or sends failing), `stopped`, or `unknown`; `health` gives the controller's state, why, and its error counters where the adapter reports them
