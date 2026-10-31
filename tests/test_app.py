@@ -501,6 +501,19 @@ def test_demo_flag_adds_the_demo_bus_before_the_settings_check(
     assert buses[-1]["name"] == "demo"
 
 
+def test_the_demo_simulator_logs_only_its_warnings(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    simulator = logging.getLogger("zelos_can.demo.demo")
+    try:
+        _buses_run_app_mode_opens(monkeypatch, demo=True)
+        assert not simulator.isEnabledFor(logging.INFO)
+        assert simulator.isEnabledFor(logging.WARNING)
+        assert app_mod.logger.isEnabledFor(logging.INFO)
+    finally:
+        simulator.setLevel(logging.NOTSET)
+
+
 @pytest.mark.parametrize(
     ("demo", "saved", "reason"),
     [

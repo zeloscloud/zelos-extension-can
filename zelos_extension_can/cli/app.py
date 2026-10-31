@@ -293,6 +293,8 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     except AttributeError:
         logger.warning(f"Invalid log level '{log_level_str}', using INFO")
         logging.getLogger().setLevel(logging.INFO)
+    # A Demo bus's EV simulator logs its state every second.
+    logging.getLogger("zelos_can.demo.demo").setLevel(logging.WARNING)
 
     if demo:
         logger.info("Demo mode enabled via --demo flag")
