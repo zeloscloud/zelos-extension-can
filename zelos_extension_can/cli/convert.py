@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     help="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
 )
+@click.option(
+    "--message-id-in-name",
+    is_flag=True,
+    help="Name decoded events after their frame ID too: '0064_DUT_Status', not 'DUT_Status'",
+)
 @canopen_node_option
 @click.option(
     "-f",
@@ -55,6 +60,7 @@ def convert(
     output: Path | None,
     prefix: str,
     j1939: bool,
+    message_id_in_name: bool,
     canopen: bool,
     canopen_nodes: list[dict],
     force: bool,
@@ -141,6 +147,7 @@ def convert(
             "on" if canopen else "auto",
             canopen_nodes,
             cluster=cluster,
+            message_id_in_name=message_id_in_name,
         )
     except Exception as e:
         logger.error(f"Conversion failed: {e}")

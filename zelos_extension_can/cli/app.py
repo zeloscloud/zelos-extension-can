@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 #: keeps it.
 ADVANCED_DEFAULTS: dict = {
     "prefix": DEFAULT_PREFIX,
+    "message_id_in_name": False,
     **BUS_DEFAULTS,
     "j1939": False,
     "j1939_node": "",
@@ -42,7 +43,7 @@ ADVANCED_DEFAULTS: dict = {
 
 #: Bus-level keys this extension owns (not zelos-can's `BUS_DEFAULTS`), copied
 #: onto each bus config the same way.
-EXTENSION_BUS_KEYS = ("j1939", "canopen")
+EXTENSION_BUS_KEYS = ("message_id_in_name", "j1939", "canopen")
 
 
 def _j1939_node(advanced: dict) -> str | dict | None:

@@ -307,6 +307,13 @@ def test_advanced_bus_settings_reach_each_bus():
     )
 
 
+def test_advanced_message_id_in_name_reaches_each_bus():
+    advanced = resolve_advanced({"advanced": {"message_id_in_name": True}})
+    with patch("zelos_sdk.TraceSource"):
+        ((codec, _),) = _create_codecs({"buses": [_vbus("vcan0")]}, TEST_DBC, advanced)
+    assert codec.message_id_in_name is True
+
+
 def test_advanced_j1939_node_reaches_every_bus():
     advanced = resolve_advanced({"advanced": {"j1939_node": "NoSuchNode"}})
     with patch("zelos_sdk.TraceSource"), pytest.raises(ValueError, match="no DBC node"):

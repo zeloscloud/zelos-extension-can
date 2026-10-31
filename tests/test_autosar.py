@@ -58,18 +58,18 @@ def test_cluster_selects_each_bus_and_e2e_status_reaches_the_trace():
         for codec, _ in pairs:
             codec.start()
         assert [c.list_messages()["messages"][0]["key"] for c, _ in pairs] == [
-            "0010_Status",
-            "0020_Other",
+            "Status",
+            "Other",
         ]
         # python-can lane: E2E is decoded only on zelos-can's Rust decoder
         peer.send(can.Message(arbitration_id=0x10, data=STATUS_OK, is_extended_id=False))
-        assert _wait(cache, "pycan/0010_Status/Value", lambda v: True) == 7
-        ok = _wait(cache, "pycan/0010_Status/e2e_status", lambda v: True)
+        assert _wait(cache, "pycan/Status/Value", lambda v: True) == 7
+        ok = _wait(cache, "pycan/Status/e2e_status", lambda v: True)
         assert ok == 0  # ok
         peer.send(can.Message(arbitration_id=0x10, data=STATUS_BAD_CRC, is_extended_id=False))
-        assert _wait(cache, "pycan/0010_Status/e2e_status", lambda v: v != ok) != ok
+        assert _wait(cache, "pycan/Status/e2e_status", lambda v: v != ok) != ok
         VirtualBus("arxml_zv").send(id=0x20, data=bytes([55, 0, 0, 0, 0, 0, 0, 0]))
-        assert _wait(cache, "zv/0020_Other/Speed", lambda v: True) == 55
+        assert _wait(cache, "zv/Other/Speed", lambda v: True) == 55
     finally:
         peer.shutdown()
         for codec, _ in pairs:

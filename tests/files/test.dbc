@@ -31,9 +31,6 @@ BO_ 300 DUT_Logging: 2 DUT
 BO_ 400 Duplicate_Message: 1 DUT
  SG_ duplicate_signal : 0|1@1+ (1,0) [0|0] "" DBG
 
-BO_ 500 Duplicate_Message: 1 DUT
- SG_ duplicate_signal : 0|1@1+ (1,0) [0|0] "" DBG
-
 BO_ 600 Mixed_Message: 2 DUT
  SG_ muxer M : 0|4@1+ (1,0) [0|0] "" DBG
  SG_ muxed_signal m0 : 4|1@1+ (1,0) [0|0] "" DBG
@@ -101,7 +98,6 @@ BA_ "GenMsgCycleTime" BO_ 100 1000;
 BA_ "GenMsgCycleTime" BO_ 200 100;
 BA_ "GenMsgCycleTime" BO_ 300 100;
 BA_ "GenMsgCycleTime" BO_ 400 100;
-BA_ "GenMsgCycleTime" BO_ 500 100;
 BA_ "GenMsgCycleTime" BO_ 2565861376 50;
 BA_ "GenMsgCycleTime" BO_ 2566853172 100;
 BA_ "GenMsgCycleTime" BO_ 2684354304 200;

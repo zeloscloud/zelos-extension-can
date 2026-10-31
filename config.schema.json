@@ -628,6 +628,13 @@
           "ui:placeholder": "CAN",
           "ui:emptyValue": ""
         },
+        "message_id_in_name": {
+          "type": "boolean",
+          "title": "Message ID in Event Names",
+          "description": "Name every decoded event after its frame ID as well, '0064_DUT_Status' instead of 'DUT_Status', the earlier layout. J1939 and OBD events end in the sender either way.",
+          "default": false,
+          "ui:widget": "toggle"
+        },
         "log_raw_frames": {
           "type": "boolean",
           "title": "Log Raw CAN Frames",
