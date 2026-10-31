@@ -595,7 +595,6 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
 @action.select(
     "codec",
     required=False,
-    default="",
     title="Codec (fallback DBC source)",
     description=(
         "Used only when `database_path` is empty — the named codec's DBCs drive the conversion."
