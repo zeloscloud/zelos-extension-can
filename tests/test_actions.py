@@ -132,6 +132,33 @@ class TestDispatch:
         assert result == {"task_id": "nonexistent", "stopped": False}
 
 
+class TestUnsetCodec:
+    """Called as the agent calls them: without `codec`, the only bus answers; with two
+    configured, the action names them."""
+
+    def test_no_action_requires_codec(self):
+        schemas = [v._action.to_schema() for v in vars(actions).values() if hasattr(v, "_action")]
+        takes_codec = [s for s in schemas if "codec" in s["properties"]]
+        assert len(takes_codec) == 21
+        assert not [s["title"] for s in takes_codec if "codec" in s.get("required", [])]
+
+    def test_unset_codec_is_the_only_bus(self):
+        codec = _make_codec("busA")
+        actions.CAN_CODECS["busA"] = codec
+        execute = zelos_sdk.actions_registry.execute
+        try:
+            assert execute("get_tx_state", {}).value["bus"]["name"] == "busA"
+            assert execute("get_tx_state", {"codec": None}).value["bus"]["name"] == "busA"
+            assert execute("list_messages", {}).value["bus"] == "busA"
+        finally:
+            actions.CAN_CODECS.pop("busA", None)
+            codec.stop()
+
+    def test_unset_codec_among_several_names_them(self, two_codecs):
+        with pytest.raises(RuntimeError, match=r"Set codec\. Available: \['busA', 'busB'\]"):
+            zelos_sdk.actions_registry.execute("get_tx_state", {})
+
+
 class TestConverterDbcResolution:
     # Failures must *raise* — the actions protocol derives its error verdict
     # from a raised exception, not from a payload key.
