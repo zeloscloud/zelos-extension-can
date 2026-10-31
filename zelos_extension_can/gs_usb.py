@@ -17,8 +17,9 @@ INTERFACE = "gs_usb"
 
 MISSING_EXTRA = (
     "gs_usb (USB) needs this extension's gs_usb extra (gs-usb, libusb-package), "
-    "which is not installed. Add it with Change what's installed… on the extension's page, "
-    "or run: zelos extensions reinstall zeloscloud.zelos-extension-can --extras gs_usb"
+    "which is not installed. Stop the extension, then add it with Change what's installed… "
+    "on the extension's page, or run: "
+    "zelos extensions reinstall zeloscloud.zelos-extension-can --extras gs_usb"
 )
 
 

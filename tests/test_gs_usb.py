@@ -86,6 +86,8 @@ def test_missing_extra_is_one_line_naming_the_extra():
     message = str(e.value)
     assert "gs_usb extra" in message
     assert "\n" not in message
+    # Neither the agent nor the app changes the extras of a running extension.
+    assert "Stop the extension, then add it" in message
     # The command it ends with reinstalls this extension, by the id Zelos gives it.
     manifest = tomllib.loads((Path(__file__).parents[1] / "extension.toml").read_text())
     repository = manifest["repository"]
