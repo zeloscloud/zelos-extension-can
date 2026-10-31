@@ -15,7 +15,7 @@ from zelos_can.bus import BUS_DEFAULTS, BusConfigError, prepare_bus_config
 from zelos_can.codec import CanCodec
 from zelos_can.naming import DEFAULT_PREFIX, LOG_SOURCE_NAME, name_error, trace_layout
 from zelos_can.ssh_socketcan import SshPermanentError
-from zelos_sdk.extensions import load_config
+from zelos_sdk.extensions import ConfigValidationError, load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from .. import ACTION_PREFIX, INTERFACES, gs_usb
@@ -255,8 +255,11 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     :param file: Optional output file for trace recording
     :param demo_dbc_path: Path to demo DBC file
     """
-    # Load and validate configuration
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigValidationError as e:
+        logger.error("Invalid configuration: %s", "; ".join(m.strip(" •") for m in e.errors))
+        sys.exit(1)
     advanced = resolve_advanced(config)
     prefix = str(advanced.get("prefix") or "").strip()
     _validate_name(prefix, "Prefix")

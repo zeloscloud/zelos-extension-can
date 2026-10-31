@@ -26,6 +26,7 @@ from zelos_extension_can.cli.app import (
     _run_codecs_async,
     _validate_name,
     resolve_advanced,
+    run_app_mode,
 )
 
 TEST_DBC = Path(__file__).parent / "files" / "test.dbc"
@@ -433,6 +434,35 @@ def test_run_codecs_async_retry_leaves_a_missing_socketcan_interface_fatal():
     with pytest.raises(RuntimeError):
         asyncio.run(_run_codecs_async([codec], retry_unreachable=True))
     codec.start.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("advanced", "reason"),
+    [
+        (
+            {"log_level": "VERBOSE"},
+            "advanced.log_level: 'VERBOSE' is not one of "
+            "['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']",
+        ),
+        (
+            {"timestamp_mode": "local", "j1939_address": 254},
+            "advanced.timestamp_mode: 'local' is not one of ['auto', 'absolute', 'ignore']; "
+            "advanced.j1939_address: 254 is greater than the maximum of 253",
+        ),
+    ],
+    ids=["one error", "two errors"],
+)
+def test_saved_settings_off_the_schema_exit(advanced, reason, tmp_path, monkeypatch, caplog):
+    """Started with saved settings that fail the schema: one ERROR line, then exit 1."""
+    saved = tmp_path / "config.json"
+    saved.write_text(json.dumps({"buses": [{"interface": "Demo"}], "advanced": advanced}))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(saved))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    with pytest.raises(SystemExit) as exc:
+        run_app_mode(demo=False, file=None, demo_dbc_path=TEST_DBC)
+    assert exc.value.code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == [f"Invalid configuration: {reason}"]
 
 
 def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch, caplog):
