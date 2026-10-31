@@ -12,6 +12,7 @@ import json
 import logging
 import sys
 import time
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -131,6 +132,33 @@ class TestDispatch:
         assert result == {"task_id": "nonexistent", "stopped": False}
 
 
+class TestUnsetCodec:
+    """Called as the agent calls them: without `codec`, the only bus answers; with two
+    configured, the action names them."""
+
+    def test_no_action_requires_codec(self):
+        schemas = [v._action.to_schema() for v in vars(actions).values() if hasattr(v, "_action")]
+        takes_codec = [s for s in schemas if "codec" in s["properties"]]
+        assert len(takes_codec) == 21
+        assert not [s["title"] for s in takes_codec if "codec" in s.get("required", [])]
+
+    def test_unset_codec_is_the_only_bus(self):
+        codec = _make_codec("busA")
+        actions.CAN_CODECS["busA"] = codec
+        execute = zelos_sdk.actions_registry.execute
+        try:
+            assert execute("get_tx_state", {}).value["bus"]["name"] == "busA"
+            assert execute("get_tx_state", {"codec": None}).value["bus"]["name"] == "busA"
+            assert execute("list_messages", {}).value["bus"] == "busA"
+        finally:
+            actions.CAN_CODECS.pop("busA", None)
+            codec.stop()
+
+    def test_unset_codec_among_several_names_them(self, two_codecs):
+        with pytest.raises(RuntimeError, match=r"Set codec\. Available: \['busA', 'busB'\]"):
+            zelos_sdk.actions_registry.execute("get_tx_state", {})
+
+
 class TestConverterDbcResolution:
     # Failures must *raise* — the actions protocol derives its error verdict
     # from a raised exception, not from a payload key.
@@ -155,6 +183,13 @@ class TestConverterDbcResolution:
                 database_path="",
                 codec="busA",
             )
+
+    def test_unset_codec_passes_the_field_check(self, two_codecs, tmp_path):
+        # Called as the agent calls it, without codec: getting to the file check
+        # proves the field's default is one the SDK accepts.
+        params = {"input_path": str(tmp_path / "missing.log")}
+        with pytest.raises(RuntimeError, match="Input file not found"):
+            zelos_sdk.actions_registry.execute("convert_trace_file", params)
 
     def test_unknown_codec_in_fallback_is_explicit_error(self, two_codecs, tmp_path):
         with pytest.raises(ValueError, match="Unknown CAN codec"):
@@ -750,6 +785,12 @@ def test_every_action_declares_its_flags():
         "auto_config": (True, True),
         "convert": (False, False),
     }
+
+
+def test_actions_register_under_the_manifest_name():
+    """`zelos_sdk.init` takes ACTION_PREFIX, and the app resolves actions by the manifest name."""
+    manifest = tomllib.loads((Path(__file__).parents[1] / "extension.toml").read_text())
+    assert manifest["name"] == ACTION_PREFIX
 
 
 class TestAdapterDetection:

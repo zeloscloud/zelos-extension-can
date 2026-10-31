@@ -26,6 +26,7 @@ from zelos_extension_can.cli.app import (
     _run_codecs_async,
     _validate_name,
     resolve_advanced,
+    run_app_mode,
 )
 
 TEST_DBC = Path(__file__).parent / "files" / "test.dbc"
@@ -185,7 +186,7 @@ def test_schema_validates_good_ssh_config_and_rejects_missing_host():
 # ── advanced settings and names ──────────────────────────────────────────────
 
 
-def test_resolve_advanced_honours_a_legacy_top_level_log_level():
+def test_resolve_advanced_honors_a_legacy_top_level_log_level():
     assert resolve_advanced({"log_level": "DEBUG"})["log_level"] == "DEBUG"
     assert resolve_advanced({})["log_level"] == ADVANCED_DEFAULTS["log_level"]
     # An explicit advanced value wins over the legacy one.
@@ -435,7 +436,113 @@ def test_run_codecs_async_retry_leaves_a_missing_socketcan_interface_fatal():
     codec.start.assert_called_once()
 
 
-def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
+@pytest.mark.parametrize(
+    ("advanced", "reason"),
+    [
+        (
+            {"log_level": "VERBOSE"},
+            "advanced.log_level: 'VERBOSE' is not one of "
+            "['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']",
+        ),
+        (
+            {"timestamp_mode": "local", "j1939_address": 254},
+            "advanced.timestamp_mode: 'local' is not one of ['auto', 'absolute', 'ignore']; "
+            "advanced.j1939_address: 254 is greater than the maximum of 253",
+        ),
+    ],
+    ids=["one error", "two errors"],
+)
+def test_saved_settings_off_the_schema_exit(advanced, reason, tmp_path, monkeypatch, caplog):
+    """Started with saved settings that fail the schema: one ERROR line, then exit 1."""
+    saved = tmp_path / "config.json"
+    saved.write_text(json.dumps({"buses": [{"interface": "Demo"}], "advanced": advanced}))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(saved))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    with pytest.raises(SystemExit) as exc:
+        run_app_mode(demo=False, file=None, demo_dbc_path=TEST_DBC)
+    assert exc.value.code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == [f"Invalid configuration: {reason}"]
+
+
+def _buses_run_app_mode_opens(monkeypatch, demo):
+    """Drive run_app_mode with the SDK stubbed; return the buses it hands to the codecs."""
+    buses = []
+
+    def capture_create(config, *args):
+        buses.extend(config["buses"])
+        return []
+
+    monkeypatch.setattr(app_mod, "_create_codecs", capture_create)
+    monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", app_mod.zelos_sdk.TraceSource)
+    monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
+    run_app_mode(demo=demo, file=None, demo_dbc_path=TEST_DBC)
+    return buses
+
+
+@pytest.mark.parametrize(
+    ("saved", "interfaces"),
+    [(None, ["Demo"]), ({"buses": [_vbus("vcan0")]}, ["Other (python-can)", "Demo"])],
+    ids=["no saved config", "a saved bus"],
+)
+def test_demo_flag_adds_the_demo_bus_before_the_settings_check(
+    saved, interfaces, tmp_path, monkeypatch
+):
+    config_file = tmp_path / "config.json"
+    if saved is not None:
+        config_file.write_text(json.dumps(saved))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(config_file))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    buses = _buses_run_app_mode_opens(monkeypatch, demo=True)
+    assert [bus["interface"] for bus in buses] == interfaces
+    assert buses[-1]["name"] == "demo"
+
+
+def test_the_demo_simulator_logs_only_its_warnings(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    simulator = logging.getLogger("zelos_can.demo.demo")
+    try:
+        _buses_run_app_mode_opens(monkeypatch, demo=True)
+        assert not simulator.isEnabledFor(logging.INFO)
+        assert simulator.isEnabledFor(logging.WARNING)
+        assert app_mod.logger.isEnabledFor(logging.INFO)
+    finally:
+        simulator.setLevel(logging.NOTSET)
+
+
+@pytest.mark.parametrize(
+    ("demo", "saved", "reason"),
+    [
+        (False, None, "buses: [] should be non-empty"),
+        (
+            True,
+            {"advanced": {"log_level": "VERBOSE"}},
+            "advanced.log_level: 'VERBOSE' is not one of "
+            "['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']",
+        ),
+    ],
+    ids=["no demo, no saved config", "demo, saved settings off the schema"],
+)
+def test_settings_check_still_applies_around_the_demo_bus(
+    demo, saved, reason, tmp_path, monkeypatch, caplog
+):
+    config_file = tmp_path / "config.json"
+    if saved is not None:
+        config_file.write_text(json.dumps(saved))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(config_file))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    with pytest.raises(SystemExit) as exc:
+        _buses_run_app_mode_opens(monkeypatch, demo=demo)
+    assert exc.value.code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == [f"Invalid configuration: {reason}"]
+
+
+def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch, caplog):
     """End to end: a doomed ssh bus makes run_app_mode exit(1) with a logged
     reason rather than propagating a raw CanInitializationError traceback."""
 
@@ -473,13 +580,15 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch):
     monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
     monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
-    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", app_mod.zelos_sdk.TraceSource)
     monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
 
     try:
         with pytest.raises(SystemExit) as ei:
             app_mod.run_app_mode(demo=False, file=None, demo_dbc_path=Path("/nonexistent/demo.dbc"))
         assert ei.value.code == 1
+        errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+        assert len(errors) == 1 and "ssh host key for edge is not trusted" in errors[0]
     finally:
         for c in created:
             with contextlib.suppress(Exception):

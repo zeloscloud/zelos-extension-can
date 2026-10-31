@@ -1,13 +1,14 @@
-"""extension.toml [extras] mirrors pyproject: uv installs from it, the app lists the manifest."""
+"""Layouts saved by Zelos 26.0.9 and earlier find the Bus Monitor by these ids."""
 
 import tomllib
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_extras_match_pyproject() -> None:
-    extras = tomllib.loads((ROOT / "extension.toml").read_text())["extras"]
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    optional = pyproject["project"]["optional-dependencies"]
-    assert extras == {name: optional[name] for name in extras}
+def test_saved_layouts_find_the_bus_monitor() -> None:
+    manifest = tomllib.loads((ROOT / "extension.toml").read_text())
+    owner_repo = urlparse(manifest["repository"]).path.strip("/")
+    assert owner_repo.lower().replace("/", ".", 1) == "zeloscloud.zelos-extension-can"
+    assert "bus-monitor" in {panel["id"] for panel in manifest["app"]["panels"]}

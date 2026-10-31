@@ -17,7 +17,9 @@ INTERFACE = "gs_usb"
 
 MISSING_EXTRA = (
     "gs_usb (USB) needs this extension's gs_usb extra (gs-usb, libusb-package), "
-    "which is not installed. Reinstall the extension with the gs_usb extra"
+    "which is not installed. Stop the extension, then add it with Change what's installed… "
+    "on the extension's page, or run: "
+    "zelos extensions reinstall zeloscloud.zelos-extension-can --extras gs_usb"
 )
 
 
@@ -92,11 +94,6 @@ def prime_libusb() -> None:
 
 
 # ─── Discovery (auto-configure) ──────────────────────────────────────────────
-#
-# The scan runs in a child process, killed at the deadline: libusb calls cannot
-# be interrupted, and a thread stuck in one would sit in the live extension and
-# race pyusb's at-exit libusb_exit in a standalone run. The child enumerates
-# only; its one device access is a best-effort product string read.
 
 
 def extra_installed() -> bool:
@@ -136,6 +133,7 @@ def _scan_command(skip: list[tuple[int, int]]) -> list[str]:
     return [sys.executable, "-P", __file__, json.dumps(skip)]
 
 
+# A child process, killed at the deadline: a libusb call cannot be interrupted.
 def scan(skip: list[tuple[int, int]], timeout: float) -> list[dict[str, Any]]:
     """Every gs_usb device in GsUsb.scan() order: bus, address, product name or None.
 

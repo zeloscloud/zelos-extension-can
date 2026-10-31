@@ -2,9 +2,11 @@
 
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 from zelos_can.bus import prepare_bus_config
@@ -81,8 +83,16 @@ def test_missing_extra_is_one_line_naming_the_extra():
         pytest.raises(gs_usb.GsUsbConfigError) as e,
     ):
         gs_usb.require_extra()
-    assert "gs_usb extra" in str(e.value)
-    assert "\n" not in str(e.value)
+    message = str(e.value)
+    assert "gs_usb extra" in message
+    assert "\n" not in message
+    # Neither the agent nor the app changes the extras of a running extension.
+    assert "Stop the extension, then add it" in message
+    # The command it ends with reinstalls this extension, by the id Zelos gives it.
+    manifest = tomllib.loads((Path(__file__).parents[1] / "extension.toml").read_text())
+    repository = manifest["repository"]
+    extension_id = urlparse(repository).path.strip("/").lower().replace("/", ".", 1)
+    assert message.endswith(f"zelos extensions reinstall {extension_id} --extras gs_usb")
 
 
 def test_libusb_shim_runs_only_for_gs_usb():
