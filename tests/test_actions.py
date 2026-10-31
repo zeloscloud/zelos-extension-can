@@ -184,6 +184,13 @@ class TestConverterDbcResolution:
                 codec="busA",
             )
 
+    def test_unset_codec_passes_the_field_check(self, two_codecs, tmp_path):
+        # Called as the agent calls it, without codec: getting to the file check
+        # proves the field's default is one the SDK accepts.
+        params = {"input_path": str(tmp_path / "missing.log")}
+        with pytest.raises(RuntimeError, match="Input file not found"):
+            zelos_sdk.actions_registry.execute("convert_trace_file", params)
+
     def test_unknown_codec_in_fallback_is_explicit_error(self, two_codecs, tmp_path):
         with pytest.raises(ValueError, match="Unknown CAN codec"):
             actions.convert_trace_file(
