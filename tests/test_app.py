@@ -465,6 +465,70 @@ def test_saved_settings_off_the_schema_exit(advanced, reason, tmp_path, monkeypa
     assert errors == [f"Invalid configuration: {reason}"]
 
 
+def _buses_run_app_mode_opens(monkeypatch, demo):
+    """Drive run_app_mode with the SDK stubbed; return the buses it hands to the codecs."""
+    buses = []
+
+    def capture_create(config, *args):
+        buses.extend(config["buses"])
+        return []
+
+    monkeypatch.setattr(app_mod, "_create_codecs", capture_create)
+    monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", app_mod.zelos_sdk.TraceSource)
+    monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
+    run_app_mode(demo=demo, file=None, demo_dbc_path=TEST_DBC)
+    return buses
+
+
+@pytest.mark.parametrize(
+    ("saved", "interfaces"),
+    [(None, ["Demo"]), ({"buses": [_vbus("vcan0")]}, ["Other (python-can)", "Demo"])],
+    ids=["no saved config", "a saved bus"],
+)
+def test_demo_flag_adds_the_demo_bus_before_the_settings_check(
+    saved, interfaces, tmp_path, monkeypatch
+):
+    config_file = tmp_path / "config.json"
+    if saved is not None:
+        config_file.write_text(json.dumps(saved))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(config_file))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    buses = _buses_run_app_mode_opens(monkeypatch, demo=True)
+    assert [bus["interface"] for bus in buses] == interfaces
+    assert buses[-1]["name"] == "demo"
+
+
+@pytest.mark.parametrize(
+    ("demo", "saved", "reason"),
+    [
+        (False, None, "buses: [] should be non-empty"),
+        (
+            True,
+            {"advanced": {"log_level": "VERBOSE"}},
+            "advanced.log_level: 'VERBOSE' is not one of "
+            "['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']",
+        ),
+    ],
+    ids=["no demo, no saved config", "demo, saved settings off the schema"],
+)
+def test_settings_check_still_applies_around_the_demo_bus(
+    demo, saved, reason, tmp_path, monkeypatch, caplog
+):
+    config_file = tmp_path / "config.json"
+    if saved is not None:
+        config_file.write_text(json.dumps(saved))
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(config_file))
+    monkeypatch.chdir(SCHEMA_PATH.parent)
+    with pytest.raises(SystemExit) as exc:
+        _buses_run_app_mode_opens(monkeypatch, demo=demo)
+    assert exc.value.code == 1
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == [f"Invalid configuration: {reason}"]
+
+
 def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch, caplog):
     """End to end: a doomed ssh bus makes run_app_mode exit(1) with a logged
     reason rather than propagating a raw CanInitializationError traceback."""

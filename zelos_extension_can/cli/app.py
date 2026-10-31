@@ -2,8 +2,11 @@
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import sys
+import tempfile
 from collections.abc import Collection
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,6 +58,23 @@ def _j1939_node(advanced: dict) -> str | dict | None:
     if node:
         raise ValueError("set J1939 Node, or J1939 NAME and J1939 Address, not both")
     return {"name": name, "address": address}
+
+
+#: The bus `--demo` adds to the configured ones.
+DEMO_BUS = {"name": "demo", "interface": "Demo"}
+
+
+def _load_config(demo: bool) -> dict:
+    """`load_config()`; with `demo`, the settings check sees the demo bus among the buses."""
+    if not demo:
+        return load_config()
+    saved_path = Path(os.environ.get("ZELOS_CONFIG_PATH") or "config.json")
+    saved = json.loads(saved_path.read_text()) if saved_path.exists() else {}
+    saved["buses"] = [*(saved.get("buses") or []), DEMO_BUS]
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "config.json"
+        config_path.write_text(json.dumps(saved))
+        return load_config(config_path=config_path)
 
 
 #: `retry_unreachable_at_start` backoff: the ssh supervisor's cadence.
@@ -251,12 +271,12 @@ async def _run_codecs_async(codecs: list[CanCodec], retry_unreachable: bool = Fa
 def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
     """Run CAN extension in app-based configuration mode.
 
-    :param demo: Enable demo mode (adds a demo bus if no buses configured)
+    :param demo: Enable demo mode (adds a demo bus to the configured ones)
     :param file: Optional output file for trace recording
     :param demo_dbc_path: Path to demo DBC file
     """
     try:
-        config = load_config()
+        config = _load_config(demo)
     except ConfigValidationError as e:
         logger.error("Invalid configuration: %s", "; ".join(m.strip(" •") for m in e.errors))
         sys.exit(1)
@@ -274,14 +294,8 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
         logger.warning(f"Invalid log level '{log_level_str}', using INFO")
         logging.getLogger().setLevel(logging.INFO)
 
-    # If demo flag is set and no buses configured, add a demo bus
     if demo:
         logger.info("Demo mode enabled via --demo flag")
-        if not config.get("buses"):
-            config["buses"] = [{"name": "demo", "interface": "Demo"}]
-        else:
-            # Add demo bus to existing buses
-            config["buses"].append({"name": "demo", "interface": "Demo"})
 
     # Determine output file if --file was specified
     output_file = None
