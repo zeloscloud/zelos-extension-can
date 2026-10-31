@@ -33,7 +33,7 @@ dependencies = [
     # demo. Wheels cover all platforms, so there is no sys_platform marker.
     # 0.0.11a13 runs every python-can interface on the Rust codec (J1939, CANopen,
     # ARXML on all of them). Floor (not exact) pin.
-    "zelos-can[python-can]>=0.0.11a13",
+    "zelos-can[python-can]>=0.0.11a14",
 ]
 
 [project.scripts]
