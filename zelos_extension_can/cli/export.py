@@ -103,7 +103,7 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
     containing the required CAN frame fields (arbitration_id, dlc, data).
 
     :param input_file: Source TRZ trace file
-    :param output_file: Destination .log file
+    :param output_file: Destination .log file, written only when the trace holds frames
     :return: Statistics dict with frame_count, sources_found, etc.
     """
     stats = {
@@ -135,7 +135,6 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
         for segment_id, source_name, event_name in raw_sources:
             source_path = f"{source_name}/{event_name}"
             logger.info(f"Reading from: {source_path}")
-            stats["sources_exported"].append(source_path)
 
             # Derive channel name from source naming convention
             chan = _derive_channel_name(source_name, event_name)
@@ -154,10 +153,10 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
                 end=time_range.end,
             )
 
-            # Convert to PyArrow table
-            table = pa.ipc.open_stream(result.to_arrow()).read_all()
-
-            if table.num_rows == 0:
+            # A query with no rows answers with no bytes, not an empty stream.
+            arrow_data = result.to_arrow()
+            table = pa.ipc.open_stream(arrow_data).read_all() if arrow_data else None
+            if table is None or table.num_rows == 0:
                 logger.info(f"  No frames in {source_path}")
                 continue
 
@@ -200,7 +199,11 @@ def export_to_candump(input_file: Path, output_file: Path) -> dict:
 
                 all_frames.append((ts_ns, chan, arb_id, data_bytes))
 
+            stats["sources_exported"].append(source_path)
             logger.info(f"  Read {len(arb_ids)} frames from {source_path}")
+
+        if not all_frames:
+            return stats
 
         # Sort all frames by timestamp
         all_frames.sort(key=lambda x: x[0])
@@ -319,7 +322,7 @@ def export(
         else:
             click.echo("\n✗ No raw CAN frames found in trace", err=True)
             click.echo(
-                "  Ensure 'Log Raw CAN Frames' was enabled when recording the trace",
+                "  Either every bus was quiet, or 'Log Raw CAN Frames' was off when recording.",
                 err=True,
             )
             sys.exit(1)
