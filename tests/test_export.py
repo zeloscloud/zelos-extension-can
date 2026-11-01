@@ -1,6 +1,7 @@
 """Tests for TRZ to candump log export functionality."""
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -112,6 +113,10 @@ class TestChannelNameDerivation:
         """Test passthrough for arbitrary source names."""
         assert _derive_channel_name("vehicle_bus", "frames") == "vehicle_bus"
         assert _derive_channel_name("obd", "messages") == "obd"
+
+
+#: Why a trace has no raw frames to export, in Export Trace to Log's error and `main.py export`'s.
+NO_FRAMES = "Either every bus was quiet, or 'Log Raw CAN Frames' was off when recording."
 
 
 class TestExportIntegration:
@@ -345,6 +350,87 @@ class TestExportIntegration:
         assert "can1 456#" in lines[1]
         assert "can0 124#" in lines[2]
         assert "can1 457#" in lines[3]
+
+    def test_export_skips_a_bus_with_no_frames(self, tmp_path):
+        """A bus with no frames is an empty table, which the reader answers with no bytes."""
+        trz_file = tmp_path / "quiet_bus.trz"
+        log_file = tmp_path / "quiet_bus.log"
+
+        namespace = zelos_sdk.TraceNamespace("test_quiet_bus")
+        fields = [
+            zelos_sdk.TraceEventFieldMetadata(
+                name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
+            ),
+            zelos_sdk.TraceEventFieldMetadata(
+                name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
+            ),
+            zelos_sdk.TraceEventFieldMetadata(
+                name="data", data_type=zelos_sdk.DataType.Binary, unit=None
+            ),
+        ]
+
+        with zelos_sdk.TraceWriter(str(trz_file), namespace=namespace):
+            source = zelos_sdk.TraceSource("CAN", namespace=namespace)
+            bus1 = source.add_event("bus1/Frame", fields)
+            source.add_event("bus2/Frame", fields)
+            bus1.log_at(1704067200000000000, arbitration_id=0x100, dlc=2, data=b"\x01\x02")
+            bus1.log_at(1704067200001000000, arbitration_id=0x200, dlc=1, data=b"\xff")
+
+            import time
+
+            time.sleep(0.1)
+
+        stats = export_to_candump(trz_file, log_file)
+
+        assert stats["frame_count"] == 2
+        assert stats["sources_exported"] == ["CAN/bus1/Frame"]
+        assert log_file.read_text().splitlines() == [
+            "(1704067200.000000) bus1 100#0102",
+            "(1704067200.001000) bus1 200#FF",
+        ]
+
+    @pytest.mark.parametrize("frames", [True, False], ids=["every-bus-quiet", "raw-frames-off"])
+    def test_a_trace_without_frames_names_both_causes(self, tmp_path, frames):
+        """Every bus quiet, or no `Frame` event at all: both exports fail, say why, write no log."""
+        trz_file = tmp_path / "no_frames.trz"
+        log_file = tmp_path / "no_frames.log"
+
+        namespace = zelos_sdk.TraceNamespace(f"test_no_frames_{frames}")
+        fields = [
+            zelos_sdk.TraceEventFieldMetadata(
+                name="arbitration_id", data_type=zelos_sdk.DataType.UInt32, unit=None
+            ),
+            zelos_sdk.TraceEventFieldMetadata(
+                name="dlc", data_type=zelos_sdk.DataType.UInt8, unit=None
+            ),
+            zelos_sdk.TraceEventFieldMetadata(
+                name="data", data_type=zelos_sdk.DataType.Binary, unit=None
+            ),
+        ]
+        speed = [
+            zelos_sdk.TraceEventFieldMetadata(
+                name="speed", data_type=zelos_sdk.DataType.Float32, unit="km/h"
+            )
+        ]
+
+        with zelos_sdk.TraceWriter(str(trz_file), namespace=namespace):
+            source = zelos_sdk.TraceSource("CAN", namespace=namespace)
+            if frames:
+                source.add_event("bus1/Frame", fields)
+                source.add_event("bus2/Frame", fields)
+            source.add_event("bus1/VehicleSpeed", speed).log_at(1704067200000000000, speed=50.0)
+            time.sleep(0.1)
+
+        params = {"input_path": str(trz_file), "output_path": str(log_file)}
+        with pytest.raises(RuntimeError, match=re.escape(NO_FRAMES)):
+            zelos_sdk.actions_registry.execute(actions.export_trace_to_log.__name__, params)
+        assert not log_file.exists()
+
+        cmd = [sys.executable, str(ROOT / "main.py"), "export", str(trz_file), "-o", str(log_file)]
+        run = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=60)
+        assert run.returncode == 1, run.stdout + run.stderr
+        assert NO_FRAMES in run.stderr
+        assert not log_file.exists()
 
 
 class TestRoundtrip:

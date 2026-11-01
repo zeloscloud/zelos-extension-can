@@ -784,7 +784,7 @@ def export_trace_to_log(
             raise ValueError(
                 "No raw CAN frames found in trace "
                 f"(sources found: {stats['sources_found']}). "
-                "Ensure 'Log Raw CAN Frames' was enabled when recording."
+                "Either every bus was quiet, or 'Log Raw CAN Frames' was off when recording."
             )
         return {
             "status": "success",
