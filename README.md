@@ -48,6 +48,12 @@ zelos extensions reinstall zeloscloud.zelos-extension-can --no-extras       # re
 
 Stop the extension before `zelos extensions reinstall`: the agent refuses to reinstall a running extension. With Zelos 26.0.10 or later, a reinstall or update keeps the extras you installed.
 
+## How-to
+
+| Guide | Covers |
+|---|---|
+| [Install the PCAN driver](docs/howto/pcan-driver.md) | PEAK PCAN adapters on Windows (PCAN-Basic) and macOS (PCBUSB): install, check, Gatekeeper "Open Anyway", uninstall |
+
 ## Bus Monitor panel
 
 The extension adds a panel to the Zelos App: the **CAN Bus Monitor** (Zelos 26.0.10 or later).
