@@ -74,7 +74,7 @@ RestartSec=100ms
 # FDMode=yes
 ```
 
-`/etc/systemd/network/80-can0.link`
+`/etc/systemd/network/70-can0.link`
 
 ```ini
 [Match]
@@ -84,11 +84,17 @@ OriginalName=can0
 TransmitQueueLength=1000
 ```
 
+Only the first `.link` file that matches a device applies, in name order. Ubuntu's
+`73-usb-net-by-mac.link` matches USB adapters, so this one must sort before it (`70-`).
+
 ```bash
 sudo systemctl enable --now systemd-networkd
+sudo networkctl reload
 ```
 
-Replug the adapter (or reboot), then check with `ip -details link show can0`.
+The `.network` file applies on reload; `.link` only when the adapter appears, so replug
+it (or reboot). Check with `ip -details link show can0` and
+`networkctl status can0`, which names the `.network` and `.link` files in use.
 
 ## No hardware: virtual CAN
 
@@ -97,9 +103,10 @@ Replug the adapter (or reboot), then check with `ip -details link show can0`.
 ```bash
 sudo modprobe vcan
 sudo ip link add dev vcan0 type vcan
-sudo ip link set vcan0 mtu 72     # optional: allow CAN FD frames
 sudo ip link set vcan0 up
 ```
+
+It carries CAN FD frames too (`mtu 72`).
 
 ## Use it
 
