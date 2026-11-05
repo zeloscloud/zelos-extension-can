@@ -14,8 +14,8 @@ kernel driver exposes the adapter as SocketCAN (`can0`, see [SocketCAN](socketca
 1. Download PEAK's **Device Driver Setup** from <https://www.peak-system.com/quick/DrvSetup>
    (listed under <https://www.peak-system.com/support/downloads/drivers/>).
 2. Extract the zip and run the setup as Administrator.
-3. In the component list, keep **PCAN-Basic API** selected. It installs `PCANBasic.dll`,
-   which the extension loads.
+3. In the component list, keep **API Libraries > PCAN-Basic API** selected (it is by
+   default). It installs `PCANBasic.dll`, which the extension loads.
 4. Plug in the adapter. Device Manager lists it under **CAN-Hardware**.
 
 Check the DLL is on the search path:
