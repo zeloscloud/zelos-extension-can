@@ -336,7 +336,7 @@ uv run main.py trace zelos-socketcan can0 /path/to/file.dbc
 uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --prefix ''
 
 # Launch trace process and record to .trz file
-uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --file
+uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --file capture.trz
 
 # Convert a CAN log to Zelos trace format (.asc, .blf, .trc, candump .log/.candump, .csv, .mf4; MF4 needs no asammdf)
 # A .csv needs python-can's header: timestamp,arbitration_id,extended,remote,error,dlc,data
