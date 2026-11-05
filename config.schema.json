@@ -659,7 +659,7 @@
         "timestamp_mode": {
           "type": "string",
           "title": "Timestamp Mode",
-          "description": "How to treat the timestamp the interface reports: 'auto' trusts it when it is within ~15s of local time, otherwise maps monotonic stamps onto local wall-clock; 'absolute' uses it as-is; 'ignore' uses the local receive time. For ssh-socketcan the stamp comes from the REMOTE clock, so a skewed edge NTP/RTC will shift trace timestamps.",
+          "description": "How to treat the timestamp the interface reports: 'auto' trusts it when it is within ~15s of local time, otherwise maps monotonic stamps onto local wall-clock, and uses the local receive time for gs_usb and Kvaser, whose adapter clocks wrap; 'absolute' uses it as-is; 'ignore' uses the local receive time. For ssh-socketcan the stamp comes from the REMOTE clock, so a skewed edge NTP/RTC will shift trace timestamps.",
           "enum": [
             "auto",
             "absolute",
