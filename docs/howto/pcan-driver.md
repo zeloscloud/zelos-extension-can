@@ -27,6 +27,10 @@ where PCANBasic.dll
 
 ## macOS
 
+The library is `macOS_Library_for_PCANUSB_v0.13.tar.gz` from the
+[PCBUSB releases](https://github.com/mac-can/PCBUSB-Library/releases/tag/v0.13).
+Download and install it from a terminal:
+
 ```bash
 curl -LO https://github.com/mac-can/PCBUSB-Library/releases/download/v0.13/macOS_Library_for_PCANUSB_v0.13.tar.gz
 tar -xzf macOS_Library_for_PCANUSB_v0.13.tar.gz
@@ -41,8 +45,8 @@ sudo ./install.sh
 ls -l /usr/local/lib/libPCBUSB*
 ```
 
-Download with `curl` as above. A browser download marks the files as quarantined, and
-because the library is not notarized, macOS then refuses to load it (see
+Download with `curl` as above. A browser download marks the files as quarantined;
+the library is not notarized, so macOS blocks it the first time it loads (see
 [Troubleshooting](#macos-blocks-libpcbusb)).
 
 PCBUSB drives the **PCAN-USB** and **PCAN-USB FD**, up to 8 at once. On a **PCAN-USB
@@ -79,11 +83,20 @@ extension). On macOS, also check the quarantine below.
 
 ### macOS blocks libPCBUSB
 
-macOS says `libPCBUSB.0.13.dylib` "Not Opened" or cannot be verified. Allow it once:
-**System Settings > Privacy & Security**, scroll to the message about
-`libPCBUSB.0.13.dylib`, press **Open Anyway**, then restart the extension.
+The library was downloaded in a browser. The first time the extension loads it, macOS
+shows **"libPCBUSB.0.13.dylib" Not Opened**, and the load waits until it is answered:
+Auto-configure adds a Demo bus, and starting a PCAN bus stalls.
 
-Or clear the quarantine flag from a terminal:
+![libPCBUSB.0.13.dylib Not Opened](../../assets/howto/pcan-driver/macos-not-opened.png)
+
+1. Press **Done** (not **Move to Trash**, which deletes the library).
+2. Open **System Settings > Privacy & Security** and scroll to
+   **"libPCBUSB.0.13.dylib" was blocked to protect your Mac**.
+3. Press **Allow Anyway**, then restart the extension and press Auto-configure again.
+
+![Allow Anyway in Privacy & Security](../../assets/howto/pcan-driver/macos-allow-anyway.png)
+
+Or clear the quarantine flag from a terminal before the first load:
 
 ```bash
 sudo xattr -d com.apple.quarantine /usr/local/lib/libPCBUSB.0.13.dylib
