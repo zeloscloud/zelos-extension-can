@@ -2,7 +2,7 @@
 
 A PEAK PCAN adapter needs PEAK's driver library on the machine running the agent:
 `PCANBasic.dll` on Windows, `libPCBUSB.dylib` on macOS. Linux needs nothing; the
-kernel driver exposes the adapter as SocketCAN (`can0`).
+kernel driver exposes the adapter as SocketCAN (`can0`, see [SocketCAN](socketcan.md)).
 
 | OS | Library | From |
 |---|---|---|
@@ -58,7 +58,8 @@ sudo rm /usr/local/lib/libPCBUSB.dylib /usr/local/lib/libPCBUSB.0.13.dylib /usr/
 
 Plug in the adapter, open the extension's config form, and press **Auto-configure**.
 It adds one `pcan` bus per channel the driver finds (`PCAN_USBBUS1`, `PCAN_USBBUS2`, ...)
-at 500 kbit/s. Set **Bitrate** to match your bus, save, and start.
+at 500 kbit/s. Set **Bitrate** to match your bus, save, and start. For CAN FD on a
+PCAN-USB FD or Pro FD, turn on **CAN-FD Mode** and pick the **CAN-FD Data Bitrate**.
 
 From the CLI:
 
