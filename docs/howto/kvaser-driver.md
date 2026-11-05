@@ -8,7 +8,7 @@ kernel driver instead ([SocketCAN](socketcan.md)). Kvaser ships no macOS driver.
 
 1. Download **Kvaser Drivers for Windows** from <https://kvaser.com/download/>.
 2. Run the installer as Administrator and accept the defaults.
-3. Plug in the adapter. Device Manager lists it under **CAN Devices**.
+3. Plug in the adapter. Device Manager lists it under **CAN Hardware (Kvaser)**.
 
 Check the DLL is on the search path:
 
