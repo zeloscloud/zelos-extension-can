@@ -13,7 +13,7 @@ dependencies = [
     "rich-click>=1.8.0",
     "pyarrow>=14.0.0",
     # 0.0.11a15 takes message_id_in_name; 0.0.11a16 runs SocketCAN over SSH under a Windows agent.
-    "zelos-can[python-can]>=0.0.11a17",
+    "zelos-can[python-can]>=0.0.11a18",
 ]
 
 [project.urls]
