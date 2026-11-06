@@ -200,11 +200,12 @@ def _transient_start_error(error: BaseException) -> bool:
     )
 
 
-async def _run_codecs_async(codecs: list[CanCodec], retry_unreachable: bool = False) -> None:
+async def _run_codecs_async(codecs: list[CanCodec], retry_unreachable: bool = False) -> bool:
     """Run multiple codecs concurrently.
 
     :param codecs: List of CanCodec instances to run
     :param retry_unreachable: Retry a bus that cannot start instead of stopping
+    :return: True when every bus ended on its own; a stop exits or cancels instead
     """
     # Inside the try: a started bus's non-daemon ssh threads would otherwise hang the process.
     started: list[CanCodec] = []
@@ -254,8 +255,10 @@ async def _run_codecs_async(codecs: list[CanCodec], retry_unreachable: bool = Fa
 
         # Run all codecs concurrently using their async run method
         await asyncio.gather(*[codec._run_async() for codec in started], *retries)
+        return True
     except asyncio.CancelledError:
         logger.info("Codec tasks cancelled")
+        return False
     finally:
         # A retry whose timer already expired must not start a bus after this.
         for task in retries:
@@ -348,7 +351,11 @@ def run_app_mode(demo: bool, file: Path | None, demo_dbc_path: Path) -> None:
 
         # A bus that cannot start exits with a one-line reason; every started bus is stopped.
         try:
-            asyncio.run(_run_codecs_async(codecs, advanced["retry_unreachable_at_start"]))
+            ended = asyncio.run(_run_codecs_async(codecs, advanced["retry_unreachable_at_start"]))
         except (can.exceptions.CanError, ValueError, FileNotFoundError, RuntimeError) as e:
             logger.error("CAN bus failed: %s", e)
+            sys.exit(1)
+        # A stop raises SystemExit(0) and never gets here.
+        if ended:
+            logger.error("Every CAN bus stopped unexpectedly; see errors above")
             sys.exit(1)

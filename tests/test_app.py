@@ -501,7 +501,11 @@ def _buses_run_app_mode_opens(monkeypatch, demo):
         buses.extend(config["buses"])
         return []
 
+    async def stopped(*_):
+        return False
+
     monkeypatch.setattr(app_mod, "_create_codecs", capture_create)
+    monkeypatch.setattr(app_mod, "_run_codecs_async", stopped)
     monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
     monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
     monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
@@ -621,3 +625,29 @@ def test_run_app_mode_exits_cleanly_on_startup_failure(monkeypatch, caplog):
         for c in created:
             with contextlib.suppress(Exception):
                 c.stop()
+
+
+@pytest.mark.parametrize(
+    ("run", "code"),
+    [(None, 1), (SystemExit(0), 0)],
+    ids=["every bus ended on its own", "stop requested"],
+)
+def test_run_app_mode_exit_code_when_the_buses_end(run, code, monkeypatch, caplog):
+    """A live run that ends on its own exits 1; a stop (the SIGTERM/SIGINT
+    handler's SystemExit(0)) still exits 0. Every bus is stopped either way."""
+    codec = create_autospec(CanCodec, instance=True, bus_name="vcan0")
+    codec._run_async.side_effect = run
+    monkeypatch.setattr(app_mod, "load_config", lambda: {"buses": []})
+    monkeypatch.setattr(app_mod, "_create_codecs", lambda *a: [(codec, "vcan0")])
+    monkeypatch.setattr(app_mod.can_actions, "register_actions", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod, "setup_shutdown_handler", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init", lambda *a, **k: None)
+    monkeypatch.setattr(app_mod.zelos_sdk, "init_global_source", app_mod.zelos_sdk.TraceSource)
+    monkeypatch.setattr(app_mod, "TraceLoggingHandler", lambda *a, **k: logging.NullHandler())
+
+    with pytest.raises(SystemExit) as exc:
+        run_app_mode(demo=False, file=None, demo_dbc_path=TEST_DBC)
+    assert exc.value.code == code
+    codec.stop.assert_called_once()
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == (["Every CAN bus stopped unexpectedly; see errors above"] if code else [])
