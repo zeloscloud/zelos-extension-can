@@ -609,6 +609,16 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
     description="Required when the ARXML describes several CAN clusters. Empty: the codec's",
 )
 @action.text(
+    "bus",
+    required=False,
+    default="",
+    title="Bus Name",
+    description=(
+        "Bus name the events nest under, for a file recording one bus. "
+        "Empty: each recorded bus's own (CAN1, can0), else the input file's name"
+    ),
+)
+@action.text(
     "output_path",
     required=False,
     default="",
@@ -664,6 +674,7 @@ def convert_trace_file(
     canopen: bool = False,
     cluster: str = "",
     message_id_in_name: bool = False,
+    bus: str = "",
 ) -> dict[str, Any]:
     from zelos_can.converter import convert_can_trace
 
@@ -714,6 +725,7 @@ def convert_trace_file(
             canopen="on" if canopen else "auto",
             cluster=cluster,
             message_id_in_name=message_id_in_name,
+            bus=bus.strip() or None,
         )
         return {
             "status": "success",
@@ -1261,6 +1273,16 @@ def _open_in_app(path: Path) -> None:
     default="",
 )
 @action.text(
+    "bus",
+    required=False,
+    default="",
+    title="Bus Name",
+    description=(
+        "Bus name the events nest under, for a file recording one bus. "
+        "Empty: each recorded bus's own (CAN1, can0), else the input file's name"
+    ),
+)
+@action.text(
     "output_file",
     title="Output (.trz)",
     description="Defaults to the input file with a .trz suffix",
@@ -1313,6 +1335,7 @@ def convert(
     canopen: bool = False,
     cluster: str = "",
     message_id_in_name: bool = False,
+    bus: str = "",
 ) -> dict[str, Any]:
     """Convert a CAN log to .trz. Shares `convert_can_trace` with the `convert`
     CLI command, so the two surfaces cannot diverge."""
@@ -1343,6 +1366,7 @@ def convert(
         canopen="on" if canopen else "auto",
         cluster=cluster,
         message_id_in_name=message_id_in_name,
+        bus=bus.strip() or None,
     )
 
     # The conversion succeeded, so a failure to open the trace is reported in-band, not raised.

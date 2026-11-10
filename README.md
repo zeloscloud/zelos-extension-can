@@ -338,13 +338,19 @@ uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --prefix ''
 # Launch trace process and record to .trz file
 uv run main.py trace zelos-socketcan can0 /path/to/file.dbc --file capture.trz
 
-# Convert a CAN log to Zelos trace format (.asc, .blf, .trc, candump .log/.candump, .csv, .mf4; MF4 needs no asammdf)
+# Convert a CAN log to Zelos trace format (.asc, .blf, .trc, candump .log/.candump, .csv, .mf4/.mdf/.dat; MDF needs no asammdf)
 # A .csv needs python-can's header: timestamp,arbitration_id,extended,remote,error,dlc,data
 uv run main.py convert capture.log vehicle.dbc
 
 # Convert against several DBCs, or none at all (raw frames only)
 uv run main.py convert capture.log base.dbc overlay.dbc
 uv run main.py convert capture.log
+
+# An MDF signal recording (no CAN bus logging) writes one event per channel group, physical values
+uv run main.py convert recording.mf4
+
+# Name the bus segment of a single-bus file (default: the recorded CAN1 / can0, else the file name)
+uv run main.py convert capture.asc vehicle.dbc --bus vehicle
 
 # Name the trace source after the input file instead of the prefix
 uv run main.py convert capture.log vehicle.dbc --prefix ''
