@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
     help="The ARXML CAN cluster to decode; required when the ARXML has several",
 )
 @click.option(
+    "--bus",
+    help="Bus name the events nest under, for a file recording one bus "
+    "(default: each recorded bus's own, CAN1 or can0, else the input file's name)",
+)
+@click.option(
     "--j1939",
     is_flag=True,
     help="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
@@ -59,6 +64,7 @@ def convert(
     cluster: str | None,
     output: Path | None,
     prefix: str,
+    bus: str | None,
     j1939: bool,
     message_id_in_name: bool,
     canopen: bool,
@@ -68,7 +74,7 @@ def convert(
 ) -> None:
     """Convert CAN log files to Zelos trace format.
 
-    Supported formats: .asc, .blf, .trc, .log / .candump, .csv, .mf4
+    Supported formats: .asc, .blf, .trc, .log / .candump, .csv, .mf4 / .mdf / .dat
 
     Databases are applied in order; a later file wins a message id defined
     differently by an earlier one. With none, only raw frames are written.
@@ -148,6 +154,7 @@ def convert(
             canopen_nodes,
             cluster=cluster,
             message_id_in_name=message_id_in_name,
+            bus=bus,
         )
     except Exception as e:
         logger.error(f"Conversion failed: {e}")
