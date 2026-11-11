@@ -34,7 +34,7 @@ from zelos_can.params import NMT_COMMANDS, SDO_DATA_TYPES
 from zelos_can.utils.file_utils import resolve_database_file
 from zelos_sdk.actions import ActionsRegistry, action
 
-from . import INTERFACES, gs_usb
+from . import INTERFACES, cansub, gs_usb
 
 if TYPE_CHECKING:
     from zelos_can.codec import CanCodec
@@ -976,7 +976,7 @@ def _slcan_adapters() -> list[dict[str, str]]:
     "SocketCAN interfaces on the machine running the agent, as choices for a "
     "bus's Channel field, which also accepts a name typed by hand. Empty on "
     "macOS/Windows, which have no SocketCAN; Auto-configure finds PCAN, Kvaser, "
-    "Vector and slcan adapters there.",
+    "Vector, slcan and CANsub adapters there.",
     # Reading sysfs opens no socket and needs no privileges, and the config form
     # wants the list before the extension has ever run.
     standalone=True,
@@ -996,6 +996,13 @@ def _form_key(bus: Any) -> tuple[str, str] | None:
     if not isinstance(bus, dict) or not isinstance(bus.get("interface"), str):
         return None
     channel = bus.get("channel")
+    if bus["interface"] == _LABELS[cansub.INTERFACE]:
+        # Many devices share channel 1; hostnames are case-insensitive.
+        address = bus.get("address")
+        channel = 1 if channel is None else channel
+        if not isinstance(address, str) or type(channel) is not int:
+            return None
+        channel = f"{address.lower().rstrip('.')}@{channel}"
     if bus["interface"] == _LABELS[gs_usb.INTERFACE]:
         if bus.get("usb_bus") is not None or bus.get("usb_address") is not None:
             return None
@@ -1037,15 +1044,16 @@ def _apply_form(
         if bus["interface"] == "SocketCAN" and bus["channel"] in swap:
             out.append(dict(swap[bus["channel"]]))
         else:
-            out.append(dict(form.get((bus["interface"], str(bus["channel"])), bus)))
+            out.append(dict(form.get(_form_key(bus), bus)))
     return out
 
 
 @action(
     "Auto-configure",
     "One bus per CAN adapter on the machine running the agent: SocketCAN "
-    "interfaces on Linux, PCAN, Kvaser, Vector and slcan adapters on any OS, and "
-    "gs_usb adapters the kernel does not hold when the gs_usb extra is installed. "
+    "interfaces on Linux, PCAN, Kvaser, Vector and slcan adapters on any OS, "
+    "gs_usb adapters the kernel does not hold when the gs_usb extra is installed, and "
+    "CANsub channels found over mDNS when the cansub extra is installed. "
     "A demo bus where there is none. A bus the form already has for a found "
     "adapter keeps its settings. For the config form's Auto-configure button. "
     "Review it, then save and start.",
@@ -1079,6 +1087,9 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     adapters += [
         {"interface": gs_usb.INTERFACE, "channel": a["index"], "name": a["name"]} for a in gs_found
     ]
+    # mDNS listens ~2 s, so only with the extra.
+    cs_found, cs_note = cansub.discover() if cansub.extra_installed() else ([], None)
+    adapters += [{**a, "channel": f"{a['address']}@{a['channel']}"} for a in cs_found]
     # A channel this extension holds can drop out of detection (PCAN on macOS lists free
     # channels only), and a running bus keeps the bitrate it runs at.
     running = _running_adapter_bitrates()
@@ -1096,12 +1107,13 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         message = (
             "No CAN adapter found on this machine, so a demo bus was added. Plug in "
             "the adapter and install its driver, or set its interface by hand: "
-            "PCAN, Kvaser, Vector or slcan, or SocketCAN over SSH for a remote device."
+            "PCAN, Kvaser, Vector, slcan or CANsub, or SocketCAN over SSH for a remote device."
         )
+        notes = " ".join(n for n in (gs_note, cs_note) if n)
         return {
             "status": "success",
             "config": {"buses": [{"name": "demo", "interface": "Demo"}]},
-            "message": f"{message} {gs_note}" if gs_note else message,
+            "message": f"{message} {notes}" if notes else message,
         }
     # The Rust bus, not python-can's: the native local path. Buses carry the
     # interface label the form shows.
@@ -1112,7 +1124,7 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         {"interface": "SocketCAN", "channel": iface["name"], "database_files": []}
         for iface in interfaces
     ]
-    buses += [
+    adapter_buses: list[dict[str, Any]] = [
         {
             "interface": _LABELS[adapter["interface"]],
             "channel": adapter["channel"],
@@ -1120,7 +1132,19 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
             "database_files": [],
         }
         for adapter in adapters
+        if adapter["interface"] != cansub.INTERFACE
     ]
+    adapter_buses += [
+        {
+            "interface": _LABELS[cansub.INTERFACE],
+            "address": a["address"],
+            "channel": a["channel"],
+            "bitrate": _ADAPTER_BITRATE,
+            "database_files": [],
+        }
+        for a in cs_found
+    ]
+    buses += adapter_buses
     form = _form_buses(config)
     if form:
         buses = _apply_form(buses, form, gs_held)
@@ -1129,7 +1153,7 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         found = ", ".join(f"{a['name']} on {_where(a)}" for a in adapters)
         rate = f"{_ADAPTER_BITRATE // 1000} kbit/s"
         kept = []
-        if {(_LABELS[a["interface"]], str(a["channel"])) for a in adapters} & form.keys():
+        if {_form_key(bus) for bus in adapter_buses} & form.keys():
             kept.append("buses already in the form keep their settings")
         if running:
             kept.append("running buses keep their bitrate")
@@ -1150,8 +1174,9 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
             result["message"] += (
                 f" On macOS only the first channel of a {' or '.join(limited)} is available."
             )
-    if gs_note:
-        result["message"] = f"{result.get('message', '')} {gs_note}".strip()
+    for note in (gs_note, cs_note):
+        if note:
+            result["message"] = f"{result.get('message', '')} {note}".strip()
     return result
 
 
@@ -1159,6 +1184,8 @@ def _where(adapter: dict[str, Any]) -> str:
     """Where a found adapter is, for the message."""
     if adapter["interface"] == gs_usb.INTERFACE:
         return f"gs_usb index {adapter['channel']}"
+    if adapter["interface"] == cansub.INTERFACE:
+        return f"CANsub {adapter['channel']}"
     return str(adapter["channel"])
 
 

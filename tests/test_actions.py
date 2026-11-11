@@ -440,10 +440,11 @@ class TestConfigFormHooks:
 
     @pytest.fixture(autouse=True)
     def _no_adapters(self, monkeypatch):
-        """Hide this machine's adapters, serial ports and gs_usb devices; a test adds its own."""
+        """Hide this machine's adapters, serial ports, gs_usb and CANsub; a test adds its own."""
         monkeypatch.setattr(actions, "_vendor_adapters", list)
         monkeypatch.setattr(actions, "_slcan_adapters", list)
         monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {}, ""))
+        monkeypatch.setattr(actions.cansub, "discover", lambda: ([], None))
 
     def test_list_interfaces_offers_can_devices_only_hardware_first(self, monkeypatch, tmp_path):
         monkeypatch.setattr(actions.sys, "platform", "linux")
@@ -617,6 +618,14 @@ class TestConfigFormHooks:
             "_slcan_adapters",
             lambda: [{"interface": "slcan", "channel": "COM3", "name": "CANable"}],
         )
+        cansub = {
+            "interface": "cansub",
+            "address": "aabbccdd-usb.local",
+            "channel": 2,
+            "name": "CANsub aabbccdd ch2",
+        }
+        monkeypatch.setattr(actions.cansub, "extra_installed", lambda: True)
+        monkeypatch.setattr(actions.cansub, "discover", lambda: ([cansub], None))
         schema = json.loads((Path(__file__).parents[1] / "config.schema.json").read_text())
 
         jsonschema.Draft7Validator(schema).validate(actions.auto_config()["config"])
@@ -798,8 +807,9 @@ class TestAdapterDetection:
 
     @pytest.fixture(autouse=True)
     def _no_gs_usb(self, monkeypatch):
-        """Hide this machine's gs_usb devices; they would join every message."""
+        """Hide this machine's gs_usb and CANsub devices; they would join every message."""
         monkeypatch.setattr(actions.gs_usb, "discover", lambda: ([], {}, ""))
+        monkeypatch.setattr(actions.cansub, "discover", lambda: ([], None))
 
     def test_vendor_adapters_list_each_channel_as_the_interface_enum_names_it(self, monkeypatch):
         answers = {

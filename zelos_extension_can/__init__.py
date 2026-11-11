@@ -18,6 +18,7 @@ INTERFACES = {
     "Vector": "vector",
     "slcan (serial)": "slcan",
     "gs_usb (USB)": "gs_usb",
+    "CANsub": "cansub",
     "Other (python-can)": "other",
     "Demo": "demo",
 }

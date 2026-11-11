@@ -37,6 +37,7 @@ Optional dependencies, installed only when you choose them:
 | Extra | Adds | For |
 |---|---|---|
 | `gs_usb` | `gs-usb`, `libusb-package` | the gs_usb (USB) interface |
+| `cansub` | `python-can-cansub` | the CANsub interface |
 
 In the Zelos App (26.0.10 or later), the arrow on **Install** offers **Choose what to install…**, where you tick the extras you need. On an installed extension, **Change what's installed…** adds or removes them. From the CLI:
 
@@ -77,7 +78,7 @@ before the extension has ever started.
 
 | Hook | What it does |
 |---|---|
-| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one SocketCAN bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one PCAN, Kvaser or Vector bus per channel whose vendor driver finds it. On any OS, one slcan bus per CANable or CANUSB serial port. With the `gs_usb` extra, one gs_usb bus per candleLight or CANable gs_usb adapter, by Device Index; on Linux only those the kernel `gs_usb` driver does not hold (it lists those as SocketCAN). A found adapter the form already has keeps its bus as the form has it, interface included; form buses not found are dropped. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one Demo bus. Review it, save, then start. Advanced settings are left as they are. |
+| **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one SocketCAN bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one PCAN, Kvaser or Vector bus per channel whose vendor driver finds it. On any OS, one slcan bus per CANable or CANUSB serial port. With the `gs_usb` extra, one gs_usb bus per candleLight or CANable gs_usb adapter, by Device Index; on Linux only those the kernel `gs_usb` driver does not hold (it lists those as SocketCAN). With the `cansub` extra, one CANsub bus per channel of each CANsub found over mDNS (about 2 s). A found adapter the form already has keeps its bus as the form has it, interface included; form buses not found are dropped. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one Demo bus. Review it, save, then start. Advanced settings are left as they are. |
 | **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail (`can0` / `up, gs_usb`, `vcan0` / `virtual`), for a SocketCAN bus. You can still type a name. |
 
 ### Required Settings
@@ -90,6 +91,7 @@ before the extension has ever started.
   | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
   | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
   | gs_usb (USB) | `gs_usb` | candleLight and CANable (gs_usb firmware) over libusb; classic CAN; needs the `gs_usb` extra |
+  | CANsub | `cansub` | CSS Electronics CANsub.2 and CANsub.4 over USB or Ethernet; CAN FD; needs the `cansub` extra |
   | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface. `{"interface": "zelos-virtual", "channel": ...}` is zelos-can's in-memory bus; it decodes the frames it sends only with **Receive Own Messages** |
   | Demo | | Built-in EV simulator |
 
@@ -98,6 +100,12 @@ before the extension has ever started.
   - Linux: the kernel `gs_usb` driver claims the adapter as a SocketCAN interface; use SocketCAN. This interface needs that driver unbound and USB access (root or a udev rule).
   - Windows: candleLight firmware binds WinUSB on its own; older or clone firmware may need [Zadig](https://zadig.akeo.ie/).
   - macOS: works with the bundled libusb.
+- **CANsub**: set **Address** to the hostname on the device label (`<id>-usb.local` or `<id>-eth.local`) or its IP, and **Channel** (1-4). The default name is the same over USB and Ethernet.
+  - USB shows up as a network adapter; no driver. Linux needs mDNS (nss-mdns/avahi) to resolve `.local`; use the IP otherwise.
+  - Auto-configure listens for mDNS: the firewall must allow inbound UDP 5353.
+  - One client per channel: the device's webCAN page or another agent holding a channel blocks it.
+  - "API version not supported": the firmware and `python-can-cansub` disagree; update the extension or the device firmware.
+  - **Device Clock Is PTP-Synced** off: a device clock more than 1 s off is set to this host's time on open, which turns off PTP until a power cycle. Turn it on for a PTP-synced device.
 
 ### Per-Bus Settings
 | Setting | What it does |
