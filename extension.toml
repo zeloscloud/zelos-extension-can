@@ -1,6 +1,6 @@
 name = "CAN"
 version = "0.4.0"
-description = "Capture, decode (DBC, AUTOSAR ARXML) and send CAN frames over SocketCAN (local or over SSH), PCAN, Kvaser, Vector, slcan, gs_usb or any python-can interface (CAN-FD on SocketCAN, PCAN, Kvaser and Vector), with J1939 and CANopen. Convert .asc, .blf, .trc, python-can .csv, candump and .mf4 logs to .trz."
+description = "Capture, decode (DBC, AUTOSAR ARXML) and send CAN frames over SocketCAN (local or over SSH), PCAN, Kvaser, Vector, slcan, gs_usb, CANsub or any python-can interface (CAN-FD on SocketCAN, PCAN, Kvaser, Vector and CANsub), with J1939 and CANopen. Convert .asc, .blf, .trc, python-can .csv, candump and .mf4 logs to .trz."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-can"
 # At most 20 keywords and 10 categories. Marketplace search matches both, the name, description,
@@ -19,11 +19,15 @@ schema = "config.schema.json"
 [agent]
 runtime = "python"
 entry = "main.py"
-python_version = "3.11"
+python_version = "3.12"
 
 [extras.gs_usb]
 description = "The gs_usb (USB) interface"
 packages = ["gs-usb>=0.3.1", "libusb-package>=1.0.26"]
+
+[extras.cansub]
+description = "The CANsub interface"
+packages = ["python-can-cansub>=2026.9.28"]
 
 [[app.panels]]
 id = "bus-monitor"

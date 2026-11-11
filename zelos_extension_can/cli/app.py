@@ -21,7 +21,7 @@ from zelos_can.ssh_socketcan import SshPermanentError
 from zelos_sdk.extensions import ConfigValidationError, load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
-from .. import ACTION_PREFIX, INTERFACES, gs_usb
+from .. import ACTION_PREFIX, INTERFACES, cansub, gs_usb
 from .. import actions as can_actions
 from .utils import setup_shutdown_handler
 
@@ -145,6 +145,9 @@ def _create_codecs(
         if bus["interface"] == gs_usb.INTERFACE:
             gs_usb.require_extra()
             bus = gs_usb.bus_config(bus)
+        elif bus["interface"] == cansub.INTERFACE:
+            cansub.require_extra()
+            bus = cansub.bus_config(bus)
         prepared_configs.append(_prepare_bus_config(bus, demo_dbc_path, advanced))
     # Also covers gs_usb through "Other (python-can)".
     if any(p["interface"] == gs_usb.INTERFACE for p in prepared_configs):

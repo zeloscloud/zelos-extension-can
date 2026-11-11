@@ -18,7 +18,7 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN, Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. gs_usb is a candleLight or CANable (gs_usb firmware) adapter opened over libusb, for macOS and Windows; on Linux the kernel driver makes it a SocketCAN interface, so use SocketCAN there. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN, Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. gs_usb is a candleLight or CANable (gs_usb firmware) adapter opened over libusb, for macOS and Windows; on Linux the kernel driver makes it a SocketCAN interface, so use SocketCAN there. CANsub is a CSS Electronics CANsub.2/CANsub.4 over USB or Ethernet; needs the cansub extra. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
               "SocketCAN",
               "SocketCAN over SSH",
@@ -27,6 +27,7 @@
               "Vector",
               "slcan (serial)",
               "gs_usb (USB)",
+              "CANsub",
               "Other (python-can)",
               "Demo"
             ]
@@ -596,6 +597,111 @@
                     }
                   }
                 }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "CANsub"
+                    ]
+                  },
+                  "address": {
+                    "type": "string",
+                    "title": "Address",
+                    "description": "Device hostname from its label (e.g. aabbccdd-usb.local over USB, aabbccdd-eth.local over Ethernet) or its IP address. Linux hosts need mDNS (nss-mdns/avahi) to resolve .local names; use the IP otherwise."
+                  },
+                  "channel": {
+                    "type": "integer",
+                    "title": "Channel",
+                    "description": "CANsub channel (1-based)",
+                    "minimum": 1,
+                    "maximum": 4,
+                    "default": 1
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "CAN bus bitrate",
+                    "enum": [
+                      125000,
+                      250000,
+                      500000,
+                      1000000
+                    ],
+                    "default": 500000
+                  },
+                  "fd_mode": {
+                    "type": "boolean",
+                    "title": "CAN-FD Mode",
+                    "description": "Enable CAN-FD for higher data rates and larger payloads",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "listen_only": {
+                    "type": "boolean",
+                    "title": "Listen Only",
+                    "description": "Monitor without transmitting or acknowledging frames.",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "ptp_synced": {
+                    "type": "boolean",
+                    "title": "Device Clock Is PTP-Synced",
+                    "description": "Leave the device clock alone. Off: the extension sets the device clock to this host's time on open when they differ by more than 1 s, which turns off PTP on the device until it is power cycled.",
+                    "default": false,
+                    "ui:widget": "toggle"
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can cansub Bus() kwargs as JSON object, e.g. {\"client_cert\": [\"client.crt\", \"client.key\"]} for mutual TLS"
+                  }
+                },
+                "required": [
+                  "address",
+                  "channel",
+                  "bitrate"
+                ],
+                "dependencies": {
+                  "fd_mode": {
+                    "oneOf": [
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              false
+                            ]
+                          }
+                        }
+                      },
+                      {
+                        "properties": {
+                          "fd_mode": {
+                            "enum": [
+                              true
+                            ]
+                          },
+                          "data_bitrate": {
+                            "type": "integer",
+                            "title": "CAN-FD Data Bitrate (bps)",
+                            "description": "CAN-FD data phase bitrate",
+                            "enum": [
+                              500000,
+                              1000000,
+                              2000000,
+                              4000000,
+                              8000000
+                            ],
+                            "default": 2000000
+                          }
+                        },
+                        "required": [
+                          "data_bitrate"
+                        ]
+                      }
+                    ]
+                  }
+                }
               }
             ]
           }
@@ -604,6 +710,7 @@
           "interface",
           "remote_host",
           "ssh_user",
+          "address",
           "channel",
           "remote_channel",
           "name",

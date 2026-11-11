@@ -30,6 +30,7 @@ buses, the codec, DBC and ARXML decode and the log converter; this package confi
 | `cli/trace.py`, `cli/convert.py`, `cli/export.py` | The `trace`, `convert` and `export` commands |
 | `actions.py` | The actions the app and Zelos AI call, and the settings form's auto-configure |
 | `gs_usb.py` | The optional gs_usb interface |
+| `cansub.py` | The optional CANsub interface |
 | `examples/` | Two scripts that trace a real bus to a `.trz` file |
 
 The Bus Monitor panel is `web/src/panels/bus-monitor/`, a React app on

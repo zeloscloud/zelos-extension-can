@@ -1,10 +1,10 @@
 [project]
 name = "zelos-extension-can"
 version = "0.4.0"
-description = "Capture, decode (DBC, AUTOSAR ARXML) and send CAN frames over SocketCAN (local or over SSH), PCAN, Kvaser, Vector, slcan, gs_usb or any python-can interface (CAN-FD on SocketCAN, PCAN, Kvaser and Vector), with J1939 and CANopen. Convert .asc, .blf, .trc, python-can .csv, candump and .mf4 logs to .trz."
+description = "Capture, decode (DBC, AUTOSAR ARXML) and send CAN frames over SocketCAN (local or over SSH), PCAN, Kvaser, Vector, slcan, gs_usb, CANsub or any python-can interface (CAN-FD on SocketCAN, PCAN, Kvaser, Vector and CANsub), with J1939 and CANopen. Convert .asc, .blf, .trc, python-can .csv, candump and .mf4 logs to .trz."
 authors = [{ name = "Zelos", email = "support@zeloscloud.io" }]
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 keywords = ["zelos", "extension"]
 dependencies = [
     "zelos-sdk>=0.0.13",
@@ -28,6 +28,7 @@ gs_usb = [
     "gs-usb>=0.3.1",
     "libusb-package>=1.0.26",
 ]
+cansub = ["python-can-cansub>=2026.9.28"]
 
 [dependency-groups]
 dev = [
@@ -52,7 +53,7 @@ testpaths = ["tests"]
 addopts = "--log-cli-level=INFO"
 
 [tool.ruff]
-target-version = 'py311'
+target-version = 'py312'
 line-length = 100
 
 [tool.ruff.lint]
