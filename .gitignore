@@ -24,3 +24,8 @@ actions.json
 
 # Zelos
 config.json
+.last_config
+*.log
+
+# Agent worktrees
+.claude/worktrees/
