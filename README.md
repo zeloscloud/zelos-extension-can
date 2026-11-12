@@ -216,17 +216,17 @@ One value each, applied to every bus.
 ### Trace layout
 
 With the default prefix, one source carries every bus. Every interface names
-events the same way; a conversion uses the input file's stem as its segment.
+events the same way, and so does a conversion: events nest under the recorded
+bus (`can0`, `CAN1`), or the bus `--bus` names.
 
 | What | Prefix `CAN` | Prefix cleared |
 |---|---|---|
 | Decoded signals | `CAN/can0/DUT_Status` | `can0/DUT_Status` |
 | Undecoded frames | `CAN/can0/Frame` | `can0/Frame` |
 | Extension logs | `CAN/log` | `can_log/log` |
-| Converted `capture.log` | `CAN/capture/DUT_Status` | `capture/DUT_Status` |
 
 Clear **Prefix** in Advanced settings to keep the previous layout: one source
-per bus (or per converted file) with events unprefixed.
+per bus with events unprefixed.
 
 ## Remote CAN over SSH
 
@@ -311,7 +311,7 @@ as handed to the adapter, and `tx_errors` counts the ones the adapter refused.
 
 ## Development
 
-Want to contribute or modify this extension? See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete developer guide.
+Want to contribute or modify this extension? See [CONTRIBUTING.md](https://github.com/zeloscloud/zelos-extension-can/blob/main/CONTRIBUTING.md) for the complete developer guide.
 
 The extension has two halves: the Python agent at the root, and the Bus Monitor panel, a Vite + React project under `web/` that builds into `dist/panels/`. `just check`, `just test` and `just package` cover both.
 
@@ -352,7 +352,7 @@ uv run main.py convert recording.mf4
 # Name the bus segment of a single-bus file (default: the recorded CAN1 / can0, else the file name)
 uv run main.py convert capture.asc vehicle.dbc --bus vehicle
 
-# Name the trace source after the input file instead of the prefix
+# Name the trace source after the bus instead of the prefix
 uv run main.py convert capture.log vehicle.dbc --prefix ''
 
 # Every 29-bit message is a J1939 parameter group, for a DBC that does not mark them

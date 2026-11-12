@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 @click.option(
     "--prefix",
     default=DEFAULT_PREFIX,
-    help="Leading trace-source name; pass '' to name the source after the input file",
+    help="Leading trace-source name; pass '' to name the source after the bus",
 )
 @click.option(
     "--cluster",

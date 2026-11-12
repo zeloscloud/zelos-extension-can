@@ -40,4 +40,4 @@ options_schema = "dist/panels/bus-monitor.options.json"
 ai_guidance = "A bus monitor: one latched row per arbitration id or decoded message, each updated in place as it recurs."
 
 [package]
-paths = ["LICENSE", "main.py", "zelos_extension_can", "dist", "assets"]
+paths = ["LICENSE", "main.py", "zelos_extension_can", "dist", "assets", "docs"]
