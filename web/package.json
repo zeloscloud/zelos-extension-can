@@ -1,7 +1,7 @@
 {
   "name": "zelos-extension-can",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "Capture, decode (DBC, AUTOSAR ARXML) and send CAN frames over SocketCAN (local or over SSH), PCAN, Kvaser, Vector, slcan, gs_usb or any python-can interface (CAN-FD on SocketCAN, PCAN, Kvaser and Vector), with J1939 and CANopen. Convert .asc, .blf, .trc, python-can .csv, candump and .mf4 logs to .trz.",
   "author": "Zelos",

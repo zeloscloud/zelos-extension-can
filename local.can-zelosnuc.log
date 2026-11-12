@@ -1,0 +1,142 @@
+2026-09-23T20:02:57.883Z  INFO zelos_extension_can.cli.app: Log level set to: INFO
+2026-09-23T20:02:57.883Z  INFO zelos_extension_can.actions: Registered 15 CAN actions
+2026-09-23T20:02:57.884Z  INFO zelos_extension_can.cli.app: Trace prefix: CAN
+2026-09-23T20:02:57.926Z  INFO zelos_extension_can.codec: DBC merge: 0 files, 0 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:02:57.926Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:02:57.926Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can0/Frame'
+2026-09-23T20:02:57.926Z  INFO zelos_extension_can.cli.app: Created bus codec: can0 (socketcan:can0)
+2026-09-23T20:02:57.926Z  INFO zelos_extension_can.codec: Loading CAN database file: /home/zelos/tkeairns/blue_marlin_full.dbc
+2026-09-23T20:03:03.118Z  INFO zelos_extension_can.codec: DBC merge: 1 files, 289 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:03:03.131Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:03:03.131Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can1/Frame'
+2026-09-23T20:03:03.131Z  INFO zelos_extension_can.cli.app: Created bus codec: can1 (socketcan:can1)
+2026-09-23T20:03:03.131Z  INFO zelos_extension_can.cli.app: Starting CAN extension with 2 buses
+2026-09-23T20:03:03.132Z  INFO zelos_extension_can.codec: [can0] Starting CAN bus: interface=socketcan, channel=can0
+2026-09-23T20:03:03.133Z  INFO zelos_extension_can.codec: native socketcan codec started on can0
+2026-09-23T20:03:03.133Z  INFO zelos_extension_can.codec: [can1] Starting CAN bus: interface=socketcan, channel=can1
+2026-09-23T20:03:03.426Z  INFO zelos_extension_can.codec: native socketcan codec started on can1
+2026-09-23T20:03:03.426Z  INFO zelos_extension_can.codec: [can0] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:03:03.426Z  INFO zelos_extension_can.codec: [can1] Starting CAN rx (native socketcan pipeline)
+[2m2026-09-23T20:03:50.407112Z[0m [33m WARN[0m [2mzelos_can::can::socketcan[0m[2m:[0m Bus error detected: Network is down (os error 100)
+[2m2026-09-23T20:03:50.407141Z[0m [33m WARN[0m [2mzelos_can::can::socketcan[0m[2m:[0m Reconnecting to SocketCAN interface 'can0'...
+2026-09-23T20:05:13.245Z  INFO zelos_extension_can.cli.utils: Shutting down CAN extension...
+2026-09-23T20:05:13.245Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:05:13.246Z  INFO zelos_extension_can.codec: [can0] CAN reader cancelled
+2026-09-23T20:05:13.246Z  INFO zelos_extension_can.codec: [can1] CAN reader cancelled
+2026-09-23T20:05:13.246Z  INFO zelos_extension_can.cli.app: Codec tasks cancelled
+2026-09-23T20:05:13.246Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:05:13.246Z  INFO zelos_extension_can.codec: [can0] Stopping CAN codec
+2026-09-23T20:05:14.601Z  INFO zelos_extension_can.cli.app: Log level set to: INFO
+2026-09-23T20:05:14.601Z  INFO zelos_extension_can.actions: Registered 15 CAN actions
+2026-09-23T20:05:14.602Z  INFO zelos_extension_can.cli.app: Trace prefix: CAN
+2026-09-23T20:05:14.645Z  INFO zelos_extension_can.codec: DBC merge: 0 files, 0 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:05:14.645Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:05:14.645Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can0/Frame'
+2026-09-23T20:05:14.645Z  INFO zelos_extension_can.cli.app: Created bus codec: can0 (socketcan:can0)
+2026-09-23T20:05:14.645Z  INFO zelos_extension_can.codec: Loading CAN database file: /home/zelos/tkeairns/blue_marlin_full.dbc
+2026-09-23T20:05:19.887Z  INFO zelos_extension_can.codec: DBC merge: 1 files, 289 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:05:19.901Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:05:19.901Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can1/Frame'
+2026-09-23T20:05:19.901Z  INFO zelos_extension_can.cli.app: Created bus codec: can1 (socketcan:can1)
+2026-09-23T20:05:19.901Z  INFO zelos_extension_can.cli.app: Starting CAN extension with 2 buses
+2026-09-23T20:05:19.901Z  INFO zelos_extension_can.codec: [can0] Starting CAN bus: interface=socketcan, channel=can0
+2026-09-23T20:05:19.903Z  INFO zelos_extension_can.codec: native socketcan codec started on can0
+2026-09-23T20:05:19.903Z  INFO zelos_extension_can.codec: [can1] Starting CAN bus: interface=socketcan, channel=can1
+2026-09-23T20:05:20.179Z  INFO zelos_extension_can.codec: native socketcan codec started on can1
+2026-09-23T20:05:20.179Z  INFO zelos_extension_can.codec: [can0] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:05:20.179Z  INFO zelos_extension_can.codec: [can1] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:05:30.994Z  INFO zelos_extension_can.cli.utils: Shutting down CAN extension...
+2026-09-23T20:05:30.994Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:05:30.995Z  INFO zelos_extension_can.codec: [can0] CAN reader cancelled
+2026-09-23T20:05:30.995Z  INFO zelos_extension_can.codec: [can1] CAN reader cancelled
+2026-09-23T20:05:30.995Z  INFO zelos_extension_can.cli.app: Codec tasks cancelled
+2026-09-23T20:05:30.995Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:05:30.995Z  INFO zelos_extension_can.codec: [can0] Stopping CAN codec
+2026-09-23T20:05:59.551Z  INFO zelos_extension_can.cli.app: Log level set to: INFO
+2026-09-23T20:05:59.551Z  INFO zelos_extension_can.actions: Registered 15 CAN actions
+2026-09-23T20:05:59.552Z  INFO zelos_extension_can.cli.app: Trace prefix: CAN
+2026-09-23T20:05:59.595Z  INFO zelos_extension_can.codec: DBC merge: 0 files, 0 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:05:59.595Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:05:59.595Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can0/Frame'
+2026-09-23T20:05:59.595Z  INFO zelos_extension_can.cli.app: Created bus codec: can0 (socketcan:can0)
+2026-09-23T20:05:59.596Z  INFO zelos_extension_can.codec: Loading CAN database file: /home/zelos/tkeairns/blue_marlin_full.dbc
+2026-09-23T20:06:05.042Z  INFO zelos_extension_can.codec: DBC merge: 1 files, 289 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:06:05.058Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:06:05.058Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can1/Frame'
+2026-09-23T20:06:05.058Z  INFO zelos_extension_can.cli.app: Created bus codec: can1 (socketcan:can1)
+2026-09-23T20:06:05.058Z  INFO zelos_extension_can.cli.app: Starting CAN extension with 2 buses
+2026-09-23T20:06:05.058Z  INFO zelos_extension_can.codec: [can0] Starting CAN bus: interface=socketcan, channel=can0
+2026-09-23T20:06:05.060Z  INFO zelos_extension_can.codec: native socketcan codec started on can0
+2026-09-23T20:06:05.060Z  INFO zelos_extension_can.codec: [can1] Starting CAN bus: interface=socketcan, channel=can1
+2026-09-23T20:06:05.334Z  INFO zelos_extension_can.codec: native socketcan codec started on can1
+2026-09-23T20:06:05.334Z  INFO zelos_extension_can.codec: [can0] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:06:05.334Z  INFO zelos_extension_can.codec: [can1] Starting CAN rx (native socketcan pipeline)
+[2m2026-09-23T20:12:18.739797Z[0m [33m WARN[0m [2mzelos_can::can::socketcan[0m[2m:[0m Bus error detected: Network is down (os error 100)
+[2m2026-09-23T20:12:18.739839Z[0m [33m WARN[0m [2mzelos_can::can::socketcan[0m[2m:[0m Reconnecting to SocketCAN interface 'can0'...
+2026-09-23T20:12:59.567Z  INFO zelos_extension_can.cli.utils: Shutting down CAN extension...
+2026-09-23T20:12:59.567Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:12:59.568Z  INFO zelos_extension_can.codec: [can0] CAN reader cancelled
+2026-09-23T20:12:59.568Z  INFO zelos_extension_can.codec: [can1] CAN reader cancelled
+2026-09-23T20:12:59.568Z  INFO zelos_extension_can.cli.app: Codec tasks cancelled
+2026-09-23T20:12:59.568Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:12:59.568Z  INFO zelos_extension_can.codec: [can0] Stopping CAN codec
+2026-09-23T20:13:00.525Z  INFO zelos_extension_can.cli.app: Log level set to: INFO
+2026-09-23T20:13:00.525Z  INFO zelos_extension_can.actions: Registered 15 CAN actions
+2026-09-23T20:13:00.526Z  INFO zelos_extension_can.cli.app: Trace prefix: CAN
+2026-09-23T20:13:00.569Z  INFO zelos_extension_can.codec: Loading CAN database file: /home/zelos/tkeairns/blue_marlin_full.dbc
+2026-09-23T20:13:06.275Z  INFO zelos_extension_can.codec: DBC merge: 1 files, 289 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:13:06.291Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:13:06.292Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can0/Frame'
+2026-09-23T20:13:06.292Z  INFO zelos_extension_can.cli.app: Created bus codec: can0 (socketcan:can0)
+2026-09-23T20:13:06.292Z  INFO zelos_extension_can.codec: Loading CAN database file: /home/zelos/tkeairns/blue_marlin_full.dbc
+2026-09-23T20:13:12.172Z  INFO zelos_extension_can.codec: DBC merge: 1 files, 289 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:13:12.188Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:13:12.188Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can1/Frame'
+2026-09-23T20:13:12.189Z  INFO zelos_extension_can.cli.app: Created bus codec: can1 (socketcan:can1)
+2026-09-23T20:13:12.189Z  INFO zelos_extension_can.cli.app: Starting CAN extension with 2 buses
+2026-09-23T20:13:12.189Z  INFO zelos_extension_can.codec: [can0] Starting CAN bus: interface=socketcan, channel=can0
+2026-09-23T20:13:12.497Z  INFO zelos_extension_can.codec: native socketcan codec started on can0
+2026-09-23T20:13:12.497Z  INFO zelos_extension_can.codec: [can1] Starting CAN bus: interface=socketcan, channel=can1
+2026-09-23T20:13:12.774Z  INFO zelos_extension_can.codec: native socketcan codec started on can1
+2026-09-23T20:13:12.775Z  INFO zelos_extension_can.codec: [can0] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:13:12.775Z  INFO zelos_extension_can.codec: [can1] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:16:50.922Z  INFO zelos_extension_can.cli.utils: Shutting down CAN extension...
+2026-09-23T20:16:50.923Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:16:50.930Z  INFO zelos_extension_can.codec: [can0] CAN reader cancelled
+2026-09-23T20:16:50.930Z  INFO zelos_extension_can.codec: [can1] CAN reader cancelled
+2026-09-23T20:16:50.930Z  INFO zelos_extension_can.cli.app: Codec tasks cancelled
+2026-09-23T20:16:50.930Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:16:50.930Z  INFO zelos_extension_can.codec: [can0] Stopping CAN codec
+2026-09-23T20:17:00.426Z  INFO zelos_extension_can.cli.app: Log level set to: INFO
+2026-09-23T20:17:00.426Z  INFO zelos_extension_can.actions: Registered 15 CAN actions
+2026-09-23T20:17:00.427Z  INFO zelos_extension_can.cli.app: Trace prefix: CAN
+2026-09-23T20:17:00.469Z  INFO zelos_extension_can.codec: Loading CAN database file: /home/zelos/tkeairns/blue_marlin_full.dbc
+2026-09-23T20:17:05.850Z  INFO zelos_extension_can.codec: DBC merge: 1 files, 289 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:17:05.862Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:17:05.862Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can0/Frame'
+2026-09-23T20:17:05.862Z  INFO zelos_extension_can.cli.app: Created bus codec: can0 (socketcan:can0)
+2026-09-23T20:17:05.862Z  INFO zelos_extension_can.codec: Loading CAN database file: /home/zelos/tkeairns/blue_marlin_full.dbc
+2026-09-23T20:17:11.858Z  INFO zelos_extension_can.codec: DBC merge: 1 files, 289 messages, 0 identical duplicates deduped, 0 conflicts, 0 overlaps
+2026-09-23T20:17:11.878Z  INFO zelos_extension_can.codec: Schema generation deferred - will emit schemas as messages are encountered
+2026-09-23T20:17:11.878Z  INFO zelos_extension_can.codec: Raw CAN frame logging is ENABLED - logging to 'can1/Frame'
+2026-09-23T20:17:11.878Z  INFO zelos_extension_can.cli.app: Created bus codec: can1 (socketcan:can1)
+2026-09-23T20:17:11.878Z  INFO zelos_extension_can.cli.app: Starting CAN extension with 2 buses
+2026-09-23T20:17:11.878Z  INFO zelos_extension_can.codec: [can0] Starting CAN bus: interface=socketcan, channel=can0
+2026-09-23T20:17:12.216Z  INFO zelos_extension_can.codec: native socketcan codec started on can0
+2026-09-23T20:17:12.216Z  INFO zelos_extension_can.codec: [can1] Starting CAN bus: interface=socketcan, channel=can1
+2026-09-23T20:17:12.566Z  INFO zelos_extension_can.codec: native socketcan codec started on can1
+2026-09-23T20:17:12.566Z  INFO zelos_extension_can.codec: [can0] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:17:12.566Z  INFO zelos_extension_can.codec: [can1] Starting CAN rx (native socketcan pipeline)
+2026-09-23T20:19:00.727Z  INFO zelos_extension_can.cli.utils: Shutting down CAN extension...
+2026-09-23T20:19:00.728Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:19:00.736Z  INFO zelos_extension_can.codec: [can0] CAN reader cancelled
+2026-09-23T20:19:00.736Z  INFO zelos_extension_can.codec: [can1] CAN reader cancelled
+2026-09-23T20:19:00.736Z  INFO zelos_extension_can.cli.app: Codec tasks cancelled
+2026-09-23T20:19:00.736Z  INFO zelos_extension_can.codec: [can1] Stopping CAN codec
+2026-09-23T20:19:00.736Z  INFO zelos_extension_can.codec: [can0] Stopping CAN codec
+2026-09-23T20:34:13.499Z  INFO zelos_extension_can.cli.app: Log level set to: INFO
+2026-09-23T20:34:13.500Z  INFO zelos_extension_can.actions: Registered 15 CAN actions
+2026-09-23T20:34:13.500Z  INFO zelos_extension_can.cli.app: Trace prefix: CAN
+2026-09-23T20:34:13.542Z  INFO zelos_extension_can.cli.app: [bus] ssh-socketcan channel: zelos@zelosnuc:can0
+2026-09-23T20:34:13.542Z  INFO zelos_extension_can.cli.app: [bus] ssh-socketcan channel: zelos@zelosnuc:can1
+2026-09-23T20:34:13.542Z ERROR zelos_extension_can.cli.app: CAN bus configuration is invalid: CAN database file not found: /home/zelos/zelos/artifacts/BlueMarlinFull.dbc (/home/zelos/zelos/artifacts does not exist)

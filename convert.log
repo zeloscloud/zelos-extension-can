@@ -1,0 +1,9 @@
+
+✓ Conversion complete!
+  Input:     /Users/tkeairns/Downloads/candump_test.log
+  Output:    /Users/tkeairns/Downloads/candump_test.trz
+  DBC:       /Users/tkeairns/Downloads/blue_marlin_09_30.dbc
+
+  Messages:  647,138 converted
+             4,728 skipped
+             15,876 errors
