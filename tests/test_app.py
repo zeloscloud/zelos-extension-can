@@ -158,8 +158,8 @@ def test_schema_ssh_branch_structure():
     # Default "auto": a reimaged edge reconnects with no manual host-key step.
     assert props["ssh_host_key_policy"]["enum"] == ["auto", "strict"]
     assert props["ssh_host_key_policy"]["default"] == "auto"
-    # Hardware timestamps by default; the edge's candump decides whether it can.
-    assert props["ssh_hw_timestamps"]["default"] is True
+    # Edge kernel time by default: the adapter's clock free-runs.
+    assert props["ssh_hw_timestamps"]["default"] is False
     # The remote kernel loopback always echoes TX; there is no receive_own_messages.
     assert "receive_own_messages" not in props
 
