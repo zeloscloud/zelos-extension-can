@@ -195,8 +195,8 @@
                   "ssh_hw_timestamps": {
                     "type": "boolean",
                     "title": "Hardware timestamps",
-                    "description": "Uses the adapter's hardware clock when the edge's candump supports -H; interfaces without one (vcan, some slcan) fall back to the extension's wall clock. Turn off to use the edge kernel's receive time.",
-                    "default": true,
+                    "description": "Off: frames carry the edge kernel's receive time, which follows the edge's system clock. On: the adapter's hardware clock, where the edge's candump supports -H. Frame spacing is tighter, but that clock runs free of the system clock and drifts from wall time over a long capture; interfaces without one (vcan, some slcan) fall back to the extension's wall clock.",
+                    "default": false,
                     "ui:widget": "toggle"
                   },
                   "fd_mode": {

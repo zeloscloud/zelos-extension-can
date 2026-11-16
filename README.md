@@ -263,10 +263,12 @@ loopback, so every transmit is traced exactly once.
 - **SSH Extra Options**: extra `ssh` flags, e.g. a `-J bastion` jump host.
   Placed before the options above; `ssh` honors the first `-o` it sees, so
   these win over the settings above.
-- **Hardware timestamps** (default on): uses the adapter's hardware clock where
-  the edge's `candump` supports `-H`. An interface without one (`vcan`, some
-  `slcan`) falls back to this machine's wall clock; turn it off to use the edge
-  kernel's receive time.
+- **Hardware timestamps** (default off): off, frames carry the edge kernel's
+  receive time, which follows the edge's system clock. On, they carry the
+  adapter's hardware clock where the edge's `candump` supports `-H`: frame
+  spacing is tighter, but that clock runs free of the system clock and drifts
+  from wall time over a long capture. An interface without one (`vcan`, some
+  `slcan`) falls back to this machine's wall clock.
 - Plus the shared **Database Files** setting and the global **Advanced** ones.
 
 ### Notes
