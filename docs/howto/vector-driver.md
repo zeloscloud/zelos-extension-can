@@ -2,9 +2,8 @@
 
 A Vector adapter needs two free Vector packages on the Windows machine running the
 agent: the **Vector Driver Setup** (device drivers) and the **XL Driver Library**
-(`vxlapi64.dll`, the API the extension opens channels through). Vector ships neither
-for macOS or Linux; from those, use [SocketCAN over SSH](../../README.md#remote-can-over-ssh)
-to a Linux device instead.
+(`vxlapi64.dll`, the API the extension opens channels through). The XL Driver Library
+is Windows only.
 
 ## Install
 
