@@ -30,6 +30,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import zelos_sdk
 from zelos_can.converter import SUPPORTED_FORMATS
 from zelos_can.params import NMT_COMMANDS, SDO_DATA_TYPES
 from zelos_can.utils.file_utils import resolve_database_file
@@ -1004,8 +1005,8 @@ def _slcan_adapters() -> list[dict[str, str]]:
     "List CAN Interfaces",
     "SocketCAN interfaces on the machine running the agent, as choices for a "
     "bus's Channel field, which also accepts a name typed by hand. Empty on "
-    "macOS/Windows, which have no SocketCAN; Auto-configure finds PCAN, Kvaser, "
-    "Vector and slcan adapters there.",
+    "macOS/Windows, which have no SocketCAN; Auto-configure finds vendor and "
+    "slcan adapters there.",
     # Reading sysfs opens no socket and needs no privileges, and the config form
     # wants the list before the extension has ever run.
     standalone=True,
@@ -1073,7 +1074,8 @@ def _apply_form(
 @action(
     "Auto-configure",
     "One bus per CAN adapter on the machine running the agent: SocketCAN "
-    "interfaces on Linux, PCAN, Kvaser, Vector and slcan adapters on any OS, and "
+    "interfaces on Linux, PCAN adapters on macOS and Windows, Kvaser and Vector "
+    "adapters on Windows, slcan adapters on any OS, and "
     "gs_usb adapters the kernel does not hold when the gs_usb extra is installed. "
     "A demo bus where there is none. A bus the form already has for a found "
     "adapter keeps its settings. For the config form's Auto-configure button. "
@@ -1197,6 +1199,8 @@ def _vector_bus_fields(adapter: dict[str, Any], repeated: Counter[str]) -> dict[
     name = adapter["name"].replace(" ", "_")
     if repeated[adapter["name"]] > 1:
         name = f"{name}_{serial}"
+    # A Name is used as given, so it must already be a legal trace name.
+    name = zelos_sdk.sanitize_name(name, kind="source")
     return {"name": name, **({"serial": serial} if serial is not None else {})}
 
 
