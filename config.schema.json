@@ -18,7 +18,7 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN, Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. gs_usb is a candleLight or CANable (gs_usb firmware) adapter opened over libusb, for macOS and Windows; on Linux the kernel driver makes it a SocketCAN interface, so use SocketCAN there. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN. Windows: Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. gs_usb is a candleLight or CANable (gs_usb firmware) adapter opened over libusb, for macOS and Windows; on Linux the kernel driver makes it a SocketCAN interface, so use SocketCAN there. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
               "SocketCAN",
               "SocketCAN over SSH",
@@ -388,8 +388,13 @@
                   "channel": {
                     "type": "string",
                     "title": "Channel",
-                    "description": "CAN channel identifier",
+                    "description": "With a Serial Number, the channel on that device: 0 is its Channel 1. Without one, an application channel assigned in Vector Hardware Manager to python-can's default app_name. Auto-configure sets both.",
                     "default": "0"
+                  },
+                  "serial": {
+                    "type": "integer",
+                    "title": "Serial Number",
+                    "description": "Serial number of the Vector device, as Vector Hardware Manager shows it. Auto-configure sets it."
                   },
                   "bitrate": {
                     "type": "integer",

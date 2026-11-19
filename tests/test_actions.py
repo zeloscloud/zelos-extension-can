@@ -820,6 +820,44 @@ class TestAdapterDetection:
             {"interface": "kvaser", "channel": "0", "name": "kvaser"},
         ]
 
+    def test_vector_channels_are_their_device_serial_and_channel(self, monkeypatch, tmp_path):
+        """Every Vector device numbers its channels from 0, so the serial tells them apart.
+
+        python-can reports the channel on the device as `channel`; the global index it
+        also reports shifts as devices come and go, so it is not kept.
+        """
+
+        def vector(serial, hw_channel, index, name):
+            return {
+                "interface": "vector",
+                "channel": hw_channel,
+                "serial": serial,
+                "channel_index": index,
+                "vector_channel_config": SimpleNamespace(name=name),
+            }
+
+        found = [
+            vector(0, 0, 0, "Virtual Channel 1"),  # the virtual device's serial on some drivers
+            vector(1234, 0, 1, "VN1640A Channel 1"),
+            vector(5678, 0, 2, "VN1640A Channel 1"),
+        ]
+        monkeypatch.setattr(actions.sys, "platform", "win32")
+        monkeypatch.setattr(actions, "_SYS_CLASS_NET", tmp_path / "empty")
+        monkeypatch.setattr(actions, "_slcan_adapters", list)
+        mine = {"interface": "Vector", "channel": "0", "serial": 5678, "name": "chassis"}
+        with patch(
+            "can.detect_available_configs",
+            side_effect=lambda interfaces: found if interfaces == ["vector"] else [],
+        ):
+            buses = actions.auto_config({"buses": [mine]})["config"]["buses"]
+
+        assert [(b.get("name"), b.get("serial")) for b in buses] == [
+            ("Virtual_Channel_1", 0),
+            ("VN1640A_Channel_1_1234", 1234),
+            ("chassis", 5678),  # the form's bus for that device, as the form has it
+        ]
+        assert {b["channel"] for b in buses} == {"0"}
+
     def test_a_pcan_channel_without_a_device_name_is_named_by_the_driver(self, monkeypatch):
         """python-can's macOS detection returns no device name; the driver still knows it."""
         monkeypatch.setattr(actions.sys, "platform", "darwin")
