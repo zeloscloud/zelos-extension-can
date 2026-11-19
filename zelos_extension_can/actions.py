@@ -26,6 +26,7 @@ import logging
 import os
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -881,7 +882,8 @@ def _local_can_interfaces() -> list[dict[str, str]]:
 
 
 #: Vendor backends that list their own adapters, named as the Interface enum names them.
-#: Linux is left out: there the kernel drivers present these adapters as SocketCAN.
+#: Linux is left out: there the kernel presents PCAN and Kvaser adapters as SocketCAN,
+#: and Vector's driver library is Windows only.
 _VENDOR_INTERFACES = ("pcan", "kvaser", "vector")
 
 #: USB IDs of serial adapters that speak slcan: the CANable's slcan firmware and the LAWICEL CANUSB.
@@ -916,11 +918,14 @@ def _vendor_adapters() -> list[dict[str, str]]:
             except Exception:  # a broken vendor driver hides its adapters, not the others
                 logger.debug("Adapter detection failed for %s", interface, exc_info=True)
                 continue
+            # A Vector channel is its device's serial plus the channel on it (hw_channel):
+            # the global index python-can also reports shifts as devices come and go.
             found += [
                 {
                     "interface": interface,
                     "channel": str(config["channel"]),
                     "name": _adapter_name(interface, config),
+                    **({"serial": config["serial"]} if interface == "vector" else {}),
                 }
                 for config in configs
             ]
@@ -935,7 +940,19 @@ def _adapter_name(interface: str, config: dict[str, Any]) -> str:
     name = config.get("device_name")
     if not name and interface == "pcan":
         name = _pcan_hardware_name(str(config["channel"]))
+    if not name and interface == "vector" and config.get("vector_channel_config"):
+        name = config["vector_channel_config"].name  # e.g. "VN1640A Channel 1"
     return str(name or interface)
+
+
+def _serial(value: Any) -> int | None:
+    """A bus's Vector device serial; 0 is a real one (the virtual device's, on some drivers)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _device_key(interface: str, bus: dict[str, Any]) -> tuple[str, str, int | None]:
+    """Which device channel a bus or found adapter is: interface, channel and Vector serial."""
+    return (interface, str(bus["channel"]), _serial(bus.get("serial")))
 
 
 def _pcan_hardware_name(channel: str) -> str | None:
@@ -959,8 +976,8 @@ def _pcan_hardware_name(channel: str) -> str | None:
 _LABELS = {name: label for label, name in INTERFACES.items()}
 
 
-def _running_adapter_bitrates() -> dict[tuple[str, str], int]:
-    """The adapter buses this extension is running, by (interface, channel), with their bitrate.
+def _running_adapter_bitrates() -> dict[tuple[str, str, int | None], int]:
+    """The adapter buses this extension is running, by `_device_key`, with their bitrate.
 
     Empty in a standalone run, where the extension is stopped and holds no channel.
     """
@@ -968,7 +985,7 @@ def _running_adapter_bitrates() -> dict[tuple[str, str], int]:
     for codec in CAN_CODECS.values():
         interface = codec.config.get("interface")
         if interface in (*_VENDOR_INTERFACES, "slcan") and "bitrate" in codec.config:
-            running[(interface, str(codec.config["channel"]))] = int(codec.config["bitrate"])
+            running[_device_key(interface, codec.config)] = int(codec.config["bitrate"])
     return running
 
 
@@ -1003,8 +1020,8 @@ def list_interfaces() -> dict[str, Any]:
     }
 
 
-def _form_key(bus: Any) -> tuple[str, str] | None:
-    """A form bus's (interface label, channel), or None when it names no device to match."""
+def _form_key(bus: Any) -> tuple[str, str, int | None] | None:
+    """A form bus's `_device_key` by interface label, or None when it names no device to match."""
     if not isinstance(bus, dict) or not isinstance(bus.get("interface"), str):
         return None
     channel = bus.get("channel")
@@ -1014,13 +1031,13 @@ def _form_key(bus: Any) -> tuple[str, str] | None:
         channel = 0 if channel is None else channel
     if not isinstance(channel, str | int) or isinstance(channel, bool):
         return None
-    return (bus["interface"], str(channel))
+    return _device_key(bus["interface"], {**bus, "channel": channel})
 
 
-def _form_buses(config: Any) -> dict[tuple[str, str], dict[str, Any]]:
+def _form_buses(config: Any) -> dict[tuple[str, str, int | None], dict[str, Any]]:
     """The form's buses by device; anything malformed is ignored. The first of a device wins."""
     buses = config.get("buses") if isinstance(config, dict) else None
-    found: dict[tuple[str, str], dict[str, Any]] = {}
+    found: dict[tuple[str, str, int | None], dict[str, Any]] = {}
     for bus in buses if isinstance(buses, list) else []:
         key = _form_key(bus)
         if key is not None:
@@ -1030,7 +1047,7 @@ def _form_buses(config: Any) -> dict[tuple[str, str], dict[str, Any]]:
 
 def _apply_form(
     buses: list[dict[str, Any]],
-    form: dict[tuple[str, str], dict[str, Any]],
+    form: dict[tuple[str, str, int | None], dict[str, Any]],
     held: dict[int, list[str]],
 ) -> list[dict[str, Any]]:
     """Each detected bus the form already has, as the form has it.
@@ -1040,16 +1057,16 @@ def _apply_form(
     """
     gs_label = _LABELS[gs_usb.INTERFACE]
     swap = {
-        netdevs[0]: form[(gs_label, str(index))]
+        netdevs[0]: form[(gs_label, str(index), None)]
         for index, netdevs in held.items()
-        if len(netdevs) == 1 and (gs_label, str(index)) in form
+        if len(netdevs) == 1 and (gs_label, str(index), None) in form
     }
     out = []
     for bus in buses:
         if bus["interface"] == "SocketCAN" and bus["channel"] in swap:
             out.append(dict(swap[bus["channel"]]))
         else:
-            out.append(dict(form.get((bus["interface"], str(bus["channel"])), bus)))
+            out.append(dict(form.get(_device_key(bus["interface"], bus), bus)))
     return out
 
 
@@ -1094,15 +1111,16 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     # A channel this extension holds can drop out of detection (PCAN on macOS lists free
     # channels only), and a running bus keeps the bitrate it runs at.
     running = _running_adapter_bitrates()
-    detected = {(a["interface"], a["channel"]) for a in adapters}
+    detected = {_device_key(a["interface"], a) for a in adapters}
     adapters += [
         {
             "interface": interface,
             "channel": channel,
             "name": _adapter_name(interface, {"channel": channel}),
+            **({"serial": serial} if serial is not None else {}),
         }
-        for interface, channel in running
-        if (interface, channel) not in detected
+        for interface, channel, serial in running
+        if (interface, channel, serial) not in detected
     ]
     if not interfaces and not adapters:
         message = (
@@ -1124,12 +1142,16 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         {"interface": "SocketCAN", "channel": iface["name"], "database_files": []}
         for iface in interfaces
     ]
+    # Two Vector devices both have a channel 0, so a Vector bus is named after its
+    # device channel ("VN1640A_Channel_1"), with the serial where that repeats.
+    repeated = Counter(a["name"] for a in adapters if a["interface"] == "vector")
     buses += [
         {
             "interface": _LABELS[adapter["interface"]],
             "channel": adapter["channel"],
-            "bitrate": running.get((adapter["interface"], adapter["channel"]), _ADAPTER_BITRATE),
+            "bitrate": running.get(_device_key(adapter["interface"], adapter), _ADAPTER_BITRATE),
             "database_files": [],
+            **_vector_bus_fields(adapter, repeated),
         }
         for adapter in adapters
     ]
@@ -1141,7 +1163,7 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         found = ", ".join(f"{a['name']} on {_where(a)}" for a in adapters)
         rate = f"{_ADAPTER_BITRATE // 1000} kbit/s"
         kept = []
-        if {(_LABELS[a["interface"]], str(a["channel"])) for a in adapters} & form.keys():
+        if {_device_key(_LABELS[a["interface"]], a) for a in adapters} & form.keys():
             kept.append("buses already in the form keep their settings")
         if running:
             kept.append("running buses keep their bitrate")
@@ -1167,10 +1189,23 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     return result
 
 
+def _vector_bus_fields(adapter: dict[str, Any], repeated: Counter[str]) -> dict[str, Any]:
+    """A found Vector channel's serial and bus name; nothing for another adapter."""
+    if adapter["interface"] != "vector":
+        return {}
+    serial = adapter.get("serial")  # None: a running bus opened without one
+    name = adapter["name"].replace(" ", "_")
+    if repeated[adapter["name"]] > 1:
+        name = f"{name}_{serial}"
+    return {"name": name, **({"serial": serial} if serial is not None else {})}
+
+
 def _where(adapter: dict[str, Any]) -> str:
     """Where a found adapter is, for the message."""
     if adapter["interface"] == gs_usb.INTERFACE:
         return f"gs_usb index {adapter['channel']}"
+    if adapter["interface"] == "vector" and adapter.get("serial") is not None:
+        return f"serial {adapter['serial']} channel {adapter['channel']}"
     return str(adapter["channel"])
 
 

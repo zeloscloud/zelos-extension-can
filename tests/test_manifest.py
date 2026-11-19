@@ -17,5 +17,7 @@ def test_saved_layouts_find_the_bus_monitor() -> None:
 
 def test_readme_links_ship_in_the_package() -> None:
     packaged = tomllib.loads((ROOT / "extension.toml").read_text())["package"]["paths"]
-    links = re.findall(r"\]\((?!https?:|#)([^)#]+)", (ROOT / "README.md").read_text())
+    links = re.findall(
+        r"\]\((?!https?:|#)([^)#]+)", (ROOT / "README.md").read_text(encoding="utf-8")
+    )
     assert [p for p in links if Path(p).parts[0] not in packaged] == []
