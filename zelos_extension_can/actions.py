@@ -887,8 +887,9 @@ def _local_can_interfaces() -> list[dict[str, str]]:
 #: and Vector's driver library is Windows only.
 _VENDOR_INTERFACES = ("pcan", "kvaser", "vector")
 
-#: USB IDs of serial adapters that speak slcan: the CANable's slcan firmware and the LAWICEL CANUSB.
-_SLCAN_USB_IDS = frozenset({(0x16D0, 0x117E), (0x0403, 0xFFA8)})
+#: USB IDs of serial adapters that speak slcan: the CANable 2.0 and CANable (canable.io)
+#: slcan firmwares and the LAWICEL CANUSB.
+_SLCAN_USB_IDS = frozenset({(0x16D0, 0x117E), (0xAD50, 0x60C4), (0x0403, 0xFFA8)})
 
 #: python-can's loggers that warn when a vendor library is absent, which is the usual case.
 #: Only these: in a live extension the running bus logs through its own logger meanwhile.
