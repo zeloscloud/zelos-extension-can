@@ -979,6 +979,7 @@ class TestAdapterDetection:
             _port("COM3", 0x16D0, 0x117E, "CANable"),
             _port("COM4", 0x0403, 0xFFA8, "CANUSB"),
             _port("COM5", 0x0403, 0x6001, "USB Serial Port"),
+            _port("COM6", 0xAD50, 0x60C4, "CANable"),
         ]
         with patch("serial.tools.list_ports.comports", return_value=ports):
             found = actions._slcan_adapters()
@@ -986,4 +987,5 @@ class TestAdapterDetection:
         assert found == [
             {"interface": "slcan", "channel": "COM3", "name": "CANable"},
             {"interface": "slcan", "channel": "COM4", "name": "CANUSB"},
+            {"interface": "slcan", "channel": "COM6", "name": "CANable"},
         ]
