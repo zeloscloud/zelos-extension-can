@@ -13,7 +13,7 @@ def test_convert_mf4(tmp_path):
     dest = tmp_path / "pycan.trz"
     result = actions.convert(
         input_file=str(FILES / "pycan.mf4"),
-        database_file=str(FILES / "test.dbc"),
+        database_files=[str(FILES / "test.dbc")],
         output_file=str(dest),
     )
     assert result["status"] == "success"

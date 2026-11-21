@@ -300,7 +300,7 @@ The extension provides several actions accessible from the Zelos App. The per-bu
 - **CANopen Nodes** / **CANopen Describe**: A bus's CANopen nodes and their state; a configured node's object dictionary entry, or its PDOs, from its EDS/DCF
 - **CANopen SDO Read** / **CANopen SDO Write**: Read or write one object on a node (index in hex, subindex). A write is typed by the node's EDS/DCF entry (a chosen data type must agree); without one the data type is required, `bytes` for raw hex. An abort or no answer is an error
 - **CANopen NMT**: start, stop, pre_operational, reset_node or reset_communication, to one node or all (node 0, entered explicitly)
-- **Convert Trace File** / **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`)
+- **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`). Databases in precedence order; empty uses the first bus's. Runs with the extension stopped too
 - **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
 
 A **Send Raw** or **Send Message** while the adapter is being reopened is refused
