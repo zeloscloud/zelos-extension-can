@@ -139,7 +139,7 @@ class TestUnsetCodec:
     def test_no_action_requires_codec(self):
         schemas = [v._action.to_schema() for v in vars(actions).values() if hasattr(v, "_action")]
         takes_codec = [s for s in schemas if "codec" in s["properties"]]
-        assert len(takes_codec) == 21
+        assert len(takes_codec) == 20
         assert not [s["title"] for s in takes_codec if "codec" in s.get("required", [])]
 
     def test_unset_codec_is_the_only_bus(self):
@@ -159,53 +159,11 @@ class TestUnsetCodec:
             zelos_sdk.actions_registry.execute("get_tx_state", {})
 
 
-class TestConverterDbcResolution:
-    # Failures must *raise* — the actions protocol derives its error verdict
-    # from a raised exception, not from a payload key.
-    def test_no_database_converts_raw_only(self, two_codecs, tmp_path):
-        # No database_path, no codec — raw frames only, like the CLI. Input
-        # doesn't exist, so resolution getting as far as the file check proves
-        # there is no "neither was given" guard left.
-        with pytest.raises(FileNotFoundError, match="Input file not found"):
-            actions.convert_trace_file(
-                input_path=str(tmp_path / "missing.log"),
-                database_path="",
-                codec="",
-            )
-
-    def test_codec_fallback_uses_codecs_dbc(self, two_codecs, tmp_path):
-        # Input doesn't exist — we only care that codec resolution gets past
-        # the "neither was given" guard. The "Input file not found" branch
-        # proves we successfully resolved a database from the codec.
-        with pytest.raises(FileNotFoundError, match="Input file not found"):
-            actions.convert_trace_file(
-                input_path=str(tmp_path / "missing.log"),
-                database_path="",
-                codec="busA",
-            )
-
-    def test_unset_codec_passes_the_field_check(self, two_codecs, tmp_path):
-        # Called as the agent calls it, without codec: getting to the file check
-        # proves the field's default is one the SDK accepts.
-        params = {"input_path": str(tmp_path / "missing.log")}
-        with pytest.raises(RuntimeError, match="Input file not found"):
-            zelos_sdk.actions_registry.execute("convert_trace_file", params)
-
-    def test_unknown_codec_in_fallback_is_explicit_error(self, two_codecs, tmp_path):
-        with pytest.raises(ValueError, match="Unknown CAN codec"):
-            actions.convert_trace_file(
-                input_path=str(tmp_path / "missing.log"),
-                database_path="",
-                codec="nope",
-            )
-
-
 class TestStandaloneConvert:
-    """The at-rest ``convert`` action.
+    """The ``convert`` action.
 
-    Distinct from ``convert_trace_file`` above: this is the one declared
-    ``standalone=True``, so it runs in a one-shot interpreter with no extension
-    process, no bus, and nothing listening for its logs. Raising is the only
+    Declared ``standalone=True``, so it also runs in a one-shot interpreter with
+    no extension process, no bus, and nothing listening for its logs. Raising is the only
     failure signal a caller gets, because a plain return means "no verdict",
     which the wire maps to DONE.
     """
@@ -235,23 +193,44 @@ class TestStandaloneConvert:
     def test_a_multi_cluster_arxml_needs_its_cluster(self, tmp_path):
         src, arxml = self._log(tmp_path), str(DBC_PATH.parent / "two-clusters.arxml")
         with pytest.raises(Exception, match="select one with `cluster`"):
-            actions.convert(input_file=str(src), database_file=arxml)
+            actions.convert(input_file=str(src), database_files=[arxml])
         result = actions.convert(
-            input_file=str(src), database_file=arxml, cluster="CanB", force=True
+            input_file=str(src), database_files=[arxml], cluster="CanB", force=True
         )
         assert Path(result["output_file"]).is_file()
 
     def test_missing_database_raises(self, tmp_path):
         src = self._log(tmp_path)
         with pytest.raises(FileNotFoundError, match="CAN database file not found"):
-            actions.convert(input_file=str(src), database_file=str(tmp_path / "nope.dbc"))
+            actions.convert(input_file=str(src), database_files=[str(tmp_path / "nope.dbc")])
+
+    def test_every_database_decodes(self, tmp_path):
+        # 0x64 is test.dbc's; 0x100 only the second file's.
+        src = tmp_path / "capture.log"
+        src.write_text("(0.0) can0 064#0000000000000000\n(0.1) can0 100#00\n")
+        extra = tmp_path / "extra.dbc"
+        extra.write_text(
+            'VERSION ""\nBU_: A\nBO_ 256 Extra: 1 A\n SG_ x : 0|8@1+ (1,0) [0|0] "" A\n'
+        )
+        params = {"input_file": str(src), "database_files": [str(DBC_PATH), str(extra)]}
+        result = zelos_sdk.actions_registry.execute("convert", params).value
+        assert result["database_files"] == [str(DBC_PATH), str(extra)]
+        assert (result["frames_decoded"], result["frames_undefined"]) == (2, 0)
+
+    def test_output_onto_input_refused(self, tmp_path):
+        src = self._log(tmp_path)
+        with pytest.raises(ValueError, match="same as input"):
+            actions.convert(input_file=str(src), output_file=str(src), force=True)
+        assert src.is_file()
 
     def test_existing_output_without_force_raises(self, tmp_path):
         src = self._log(tmp_path)
         dest = tmp_path / "capture.trz"
         dest.write_text("occupied")
         with pytest.raises(FileExistsError, match="Output exists"):
-            actions.convert(input_file=str(src), database_file=str(DBC_PATH), output_file=str(dest))
+            actions.convert(
+                input_file=str(src), database_files=[str(DBC_PATH)], output_file=str(dest)
+            )
 
 
 class TestCsvHeader:
@@ -275,7 +254,7 @@ class TestCsvHeader:
     def test_action_rejects_a_foreign_header(self, tmp_path):
         src = self._foreign_csv(tmp_path)
         with pytest.raises(ValueError) as err:
-            actions.convert(input_file=str(src), database_file=str(DBC_PATH))
+            actions.convert(input_file=str(src), database_files=[str(DBC_PATH)])
         self._assert_names_both_layouts(err)
         assert not src.with_suffix(".trz").exists()
 
@@ -304,7 +283,7 @@ class TestCsvHeader:
                     )
                 )
 
-        result = actions.convert(input_file=str(src), database_file=str(DBC_PATH))
+        result = actions.convert(input_file=str(src), database_files=[str(DBC_PATH)])
 
         assert (result["frames"], result["frames_decoded"], result["frames_undefined"]) == (3, 3, 0)
         assert Path(result["output_file"]).is_file()
@@ -375,7 +354,7 @@ class TestOpenInApp:
         ):
             result = actions.convert(
                 input_file=str(src),
-                database_file=str(DBC_PATH),
+                database_files=[str(DBC_PATH)],
                 output_file=str(dest),
                 open_on_complete=True,
             )
@@ -779,7 +758,6 @@ def test_every_action_declares_its_flags():
         "canopen_sdo_write": (False, False),
         "canopen_nmt": (False, False),
         "stop_periodic": (False, False),
-        "convert_trace_file": (False, False),
         "export_trace_to_log": (False, False),
         "list_interfaces": (True, True),
         "auto_config": (True, True),

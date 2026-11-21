@@ -77,12 +77,6 @@ def _codec_field(func: Any) -> Any:
     return action.select("codec", title="CAN bus", choices=_available_codecs, required=False)(call)
 
 
-def _as_paths(value: str | list[str]) -> list[Path]:
-    """Normalize a DBC action parameter: one path or a list, empties dropped."""
-    values = [value] if isinstance(value, str) else list(value)
-    return [Path(v) for v in values if v]
-
-
 def _clear_destination(destination: Path, overwrite: bool) -> None:
     """Make `destination` writable, or refuse.
 
@@ -568,184 +562,6 @@ def stop_periodic(codec: str, task_id: str) -> dict[str, Any]:
 
 
 # ─── Bus-agnostic file utilities ────────────────────────────────────────────
-
-
-@action(
-    "Convert Trace File",
-    f"Convert a CAN log ({_LOG_FORMATS}) to Zelos trace "
-    "format (.trz). Provide `database_path` (one path or several) OR a `codec` "
-    "whose loaded DBCs will be used; with neither, only raw frames are written.",
-)
-@action.text(
-    "input_path",
-    title="Input File Path",
-    description=f"Path to CAN log file ({_LOG_FORMATS})",
-    widget="file-picker",
-)
-@action.text(
-    "database_path",
-    required=False,
-    default="",
-    title="CAN Database File (.dbc, .arxml)",
-    description=(
-        "Database file, or a list of them in precedence order. If empty, `codec` "
-        "lends its list; with neither, only raw frames are written."
-    ),
-    placeholder="/path/to/file.dbc",
-    widget="file-picker",
-)
-@action.select(
-    "codec",
-    required=False,
-    title="Codec (fallback DBC source)",
-    description=(
-        "Used only when `database_path` is empty — the named codec's DBCs drive the conversion."
-    ),
-    choices=_available_codecs,
-)
-@action.text(
-    "cluster",
-    required=False,
-    default="",
-    title="ARXML CAN Cluster",
-    description="Required when the ARXML describes several CAN clusters. Empty: the codec's",
-)
-@action.text(
-    "bus",
-    required=False,
-    default="",
-    title="Bus Name",
-    description=(
-        "Bus name the events nest under, for a file recording one bus. "
-        "Empty: each recorded bus's own (CAN1, can0), else the input file's name"
-    ),
-)
-@action.text(
-    "output_path",
-    required=False,
-    default="",
-    title="Output File Path",
-    description="Output .trz file path (optional, defaults to input name with .trz)",
-    placeholder="e.g., /path/to/output.trz",
-)
-@action.boolean(
-    "overwrite", required=False, default=False, title="Overwrite if exists", widget="toggle"
-)
-@action.boolean(
-    "emit_all_schemas",
-    required=False,
-    default=True,
-    title="Emit all schemas",
-    description=(
-        "Emit all schemas before processing. Disable for faster startup with large databases."
-    ),
-    widget="toggle",
-)
-@action.boolean(
-    "j1939",
-    required=False,
-    default=False,
-    title="J1939",
-    description="Every 29-bit message is a J1939 parameter group, not only those the DBC marks",
-    widget="toggle",
-)
-@action.boolean(
-    "canopen",
-    required=False,
-    default=False,
-    title="CANopen",
-    description="Decode CANopen (NMT, heartbeat, EMCY, SDO) for every node-id",
-    widget="toggle",
-)
-@action.boolean(
-    "message_id_in_name",
-    required=False,
-    default=False,
-    title="Message ID in Event Names",
-    description="Name decoded events after their frame ID too: '0064_DUT_Status', not 'DUT_Status'",
-    widget="toggle",
-)
-def convert_trace_file(
-    input_path: str,
-    database_path: str | list[str] = "",
-    codec: str = "",
-    output_path: str = "",
-    overwrite: bool = False,
-    emit_all_schemas: bool = True,
-    j1939: bool = False,
-    canopen: bool = False,
-    cluster: str = "",
-    message_id_in_name: bool = False,
-    bus: str = "",
-) -> dict[str, Any]:
-    from zelos_can.converter import convert_can_trace
-
-    try:
-        # Validate arguments before touching the filesystem so callers get a
-        # clear "you need to pass X" error rather than a misleading
-        # "input file not found" when the real problem is missing config.
-        supplied = _as_paths(database_path)
-        cluster = cluster.strip() or None
-        if supplied:
-            database_files = [resolve_database_file(p).resolve() for p in supplied]
-            logger.info("Using user-specified databases: %s", database_files)
-        elif codec:
-            # _get_codec raises ValueError on unknown codec — propagated
-            # verbatim by the pass-through handler below.
-            catalog = _get_codec(codec).catalog
-            database_files = list(catalog.database_files)
-            cluster = cluster or catalog.cluster
-            logger.info("Using codec '%s' databases: %s", codec, database_files)
-        else:
-            database_files = []
-            logger.info("No database given: writing raw frames only")
-
-        input_file = Path(input_path).expanduser().resolve()
-        if not input_file.exists():
-            raise FileNotFoundError(f"Input file not found: {input_file}")
-
-        if not output_path:
-            output_path = str(input_file.with_suffix(".trz"))
-        output_file = Path(output_path).expanduser().resolve()
-        if output_file.suffix.lower() != ".trz":
-            output_file = output_file.with_suffix(".trz")
-
-        if output_file == input_file:
-            raise ValueError(f"Output file cannot be the same as input file: {input_file}")
-
-        _clear_destination(output_file, overwrite)
-
-        logger.info(
-            "Converting %s -> %s using databases: %s", input_file, output_file, database_files
-        )
-        stats = convert_can_trace(
-            input_file,
-            database_files,
-            output_file,
-            emit_schemas_on_init=emit_all_schemas,
-            j1939=j1939,
-            canopen="on" if canopen else "auto",
-            cluster=cluster,
-            message_id_in_name=message_id_in_name,
-            bus=bus.strip() or None,
-        )
-        return {
-            "status": "success",
-            "input_file": str(input_file),
-            "database_file": str(database_files[0]) if database_files else None,
-            "database_files": [str(p) for p in database_files],
-            "output_file": str(output_file),
-            **stats.to_dict(),
-        }
-    except (FileNotFoundError, FileExistsError, ValueError):
-        # Already self-describing (validation above, plus convert_can_trace's
-        # own path/format errors) — propagate verbatim.
-        raise
-    except ImportError as e:
-        raise ImportError(f"Missing dependency: {e}") from e
-    except Exception as e:
-        logger.exception("Conversion failed")
-        raise RuntimeError(f"Conversion failed: {e}") from e
 
 
 @action("Export Trace to Log", "Export raw CAN frames from TRZ to candump log format")
@@ -1281,8 +1097,8 @@ def _open_in_app(path: Path) -> None:
 
 @action(
     "Convert CAN Log",
-    "Convert a CAN log file to a Zelos trace (.trz). Runs without the extension "
-    "running — no bus, no live connection.",
+    "Convert a CAN log file to a Zelos trace (.trz), whether or not the extension "
+    "is running. Without databases given, uses the first configured bus's.",
     # A ceiling for multi-GB logs; the action returns as soon as the file is written.
     timeout=1800.0,
     standalone=True,
@@ -1293,17 +1109,24 @@ def _open_in_app(path: Path) -> None:
     description=f"Source {_LOG_FORMATS}",
     widget="file_path_picker",
 )
-@action.text(
-    "database_file",
-    title="Database (.dbc, .arxml)",
+@action.array(
+    "database_files",
+    # A blank row is skipped, not an error.
+    item={
+        "type": "text",
+        "title": "Database",
+        "widget": "file_path_picker",
+        "required": False,
+        "default": "",
+    },
+    title="Databases (.dbc, .arxml)",
     description=(
-        "One path or several, in precedence order. Defaults to the databases "
-        "configured for this extension's first bus; with none, only raw frames "
-        "are written."
+        "In precedence order: a later file wins a message an earlier one defines "
+        "differently. Empty: the databases configured for this extension's first "
+        "bus; with none, only raw frames are written."
     ),
     required=False,
-    default="",
-    widget="file_path_picker",
+    default=[],
 )
 @action.text(
     "cluster",
@@ -1332,6 +1155,16 @@ def _open_in_app(path: Path) -> None:
 )
 @action.boolean(
     "force", title="Overwrite existing output", required=False, default=False, widget="toggle"
+)
+@action.boolean(
+    "emit_all_schemas",
+    required=False,
+    default=True,
+    title="Emit all schemas",
+    description=(
+        "Emit all schemas before processing. Disable for faster startup with large databases."
+    ),
+    widget="toggle",
 )
 @action.boolean(
     "open_on_complete",
@@ -1367,9 +1200,10 @@ def _open_in_app(path: Path) -> None:
 )
 def convert(
     input_file: str,
-    database_file: str | list[str] = "",
+    database_files: list[str] | None = None,
     output_file: str = "",
     force: bool = False,
+    emit_all_schemas: bool = True,
     open_on_complete: bool = False,
     j1939: bool = False,
     canopen: bool = False,
@@ -1387,7 +1221,7 @@ def convert(
     if source.suffix.lower() not in SUPPORTED_FORMATS:
         raise ValueError(f"Unsupported format: {source.suffix}. Supported: {_LOG_FORMATS}")
 
-    supplied = _as_paths(database_file)
+    supplied = [Path(p) for p in database_files or [] if p]
     configured, configured_cluster = ([], None) if supplied else _configured_databases()
     database_paths = [resolve_database_file(p) for p in supplied or configured]
     cluster = cluster.strip() or configured_cluster
@@ -1396,12 +1230,15 @@ def convert(
     destination = (
         Path(output_file).expanduser().resolve() if output_file else source.with_suffix(".trz")
     )
+    if destination.resolve() == source.resolve():
+        raise ValueError(f"Output file cannot be the same as input file: {source}")
     _clear_destination(destination, force)
 
     stats = convert_can_trace(
         source,
         database_paths,
         destination,
+        emit_schemas_on_init=emit_all_schemas,
         j1939=j1939,
         canopen="on" if canopen else "auto",
         cluster=cluster,
