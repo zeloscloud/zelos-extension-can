@@ -139,7 +139,7 @@ class TestUnsetCodec:
     def test_no_action_requires_codec(self):
         schemas = [v._action.to_schema() for v in vars(actions).values() if hasattr(v, "_action")]
         takes_codec = [s for s in schemas if "codec" in s["properties"]]
-        assert len(takes_codec) == 24
+        assert len(takes_codec) == 27
         assert not [s["title"] for s in takes_codec if "codec" in s.get("required", [])]
 
     def test_unset_codec_is_the_only_bus(self):
@@ -756,6 +756,9 @@ def test_every_action_declares_its_flags():
         "j1939_clear_faults": (False, False),
         "j1939_clear_fault": (False, False),
         "j1939_command_test": (False, False),
+        "j1939_broadcast": (False, False),
+        "j1939_memory_request": (False, False),
+        "j1939_memory_data": (False, False),
         "canopen_nodes": (True, True),
         "canopen_describe": (True, True),
         "canopen_sdo_read": (True, False),
@@ -770,7 +773,7 @@ def test_every_action_declares_its_flags():
 
 
 def test_j1939_diagnostics_sit_in_a_folder_and_send_the_dm():
-    """`CAN/J1939/<action>`: a Request for the DM's PGN, or the DM7 / DM22 command to one node."""
+    """`CAN/J1939/<action>`: a Request for the DM's PGN, or the command DM itself."""
     sent = []
     codec = SimpleNamespace(
         j1939_request=lambda *a: sent.append(("request", *a)) or {},
@@ -783,6 +786,20 @@ def test_j1939_diagnostics_sit_in_a_folder_and_send_the_dm():
         execute("J1939/clear_faults", {"faults": "Active faults (DM11)", "destination_address": 0})
         execute("J1939/clear_fault", {"spn": 1234, "fmi": 31, "destination_address": 0})
         execute("J1939/command_test", {"spn": 110, "fmi": 31, "destination_address": 0})
+        execute(
+            "J1939/memory_request",
+            {
+                "command": "Read",
+                "length": 1,
+                "pointer": "3",
+                "pointer_extension": 0x92,
+                "key": "7",
+                "pointer_type": 1,
+                "destination_address": 0,
+            },
+        )
+        execute("J1939/memory_data", {"data": "44 33 22 11", "destination_address": 0})
+        execute("J1939/broadcast", {"command": "Stop", "destination_address": 255})
     finally:
         actions.CAN_CODECS.pop("busA", None)
     assert sent == [
@@ -790,6 +807,9 @@ def test_j1939_diagnostics_sit_in_a_folder_and_send_the_dm():
         ("request", "FED3", 0, 6),
         ("raw", "C300", "11ffffffffd2041f", 0, 6, False),
         ("raw", "E300", "f76e001fffffffff", 0, 6, False),
+        ("raw", "D900", "0113030000920700", 0, 6, False),
+        ("raw", "D700", "0444332211", 0, 6, False),
+        ("raw", "DF00", "fcffffffffffffff", 255, 6, False),
     ]
 
 

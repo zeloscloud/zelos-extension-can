@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 import zelos_sdk
 from zelos_can import j1939 as zj
 from zelos_can.converter import SUPPORTED_FORMATS
-from zelos_can.params import NMT_COMMANDS, SDO_DATA_TYPES
+from zelos_can.params import NMT_COMMANDS, SDO_DATA_TYPES, parse_data_hex
 from zelos_can.utils.file_utils import resolve_database_file
 from zelos_sdk.actions import ActionsRegistry, action
 
@@ -483,6 +483,13 @@ def _under(path: str):
     return rename
 
 
+def _hex(text: str, what: str) -> int:
+    try:
+        return int(text.strip(), 16)
+    except ValueError:
+        raise ValueError(f"{what} {text!r} is not hex") from None
+
+
 def _j1939_node_address(fn):
     return action.integer(
         "destination_address", title="Destination address", minimum=0, maximum=253
@@ -587,6 +594,109 @@ def j1939_command_test(
     data = zj.dm7(test_id, spn, fmi)
     return _get_codec(codec).j1939_send_raw(
         f"{zj.PGN_DM7:X}", data.hex(), destination_address, 6, False
+    )
+
+
+@action(
+    "Broadcast",
+    "Ask a node, or every node, to stop or start its normal broadcasts on the primary "
+    "J1939 network (DM13). Stop to address 255 silences every node that honours it: "
+    "use it on a bus you control. Sent once, with no answer; a node may resume by itself "
+    "within seconds unless Stop is sent again, and one that does not support it ignores it.",
+)
+@_codec_field
+@action.select("command", title="Command", choices=["Stop", "Start"])
+@action.integer(
+    "destination_address",
+    title="Destination address",
+    description="One node, or 255 for every node on the bus",
+    minimum=0,
+    maximum=255,
+)
+@_under("J1939/broadcast")
+def j1939_broadcast(codec: str, command: str, destination_address: int) -> dict[str, Any]:
+    data = zj.dm13(start=command == "Start")
+    return _get_codec(codec).j1939_send_raw(
+        f"{zj.PGN_DM13:X}", data.hex(), destination_address, 6, False
+    )
+
+
+_J1939_MEMORY = {
+    "Read": "read",
+    "Write": "write",
+    "Operation completed": "operation_completed",
+}
+
+
+@action(
+    "Memory Request",
+    "Send one memory access request to a node (DM14). The node answers with DM15: "
+    "proceed, with a seed when it wants a key; busy; completed; or failed with an error. "
+    "After a proceed for a read the node sends the bytes in DM16; for a write, send them "
+    "with Memory Data. Close with Operation completed. This sends exactly what is "
+    "entered: what the length, pointer type and pointer extension mean, and how a key "
+    "follows from a seed, is the node's.",
+)
+@_codec_field
+@action.select("command", title="Command", choices=list(_J1939_MEMORY))
+@action.integer("length", title="Length", minimum=0, maximum=0x7FF)
+@action.text("pointer", title="Pointer (hex, 24 bits)", placeholder="000000")
+@action.integer(
+    "pointer_extension",
+    title="Pointer extension",
+    minimum=0,
+    maximum=255,
+    default=0,
+    required=False,
+)
+@action.text(
+    "key",
+    title="Key or user level (hex, 16 bits)",
+    description="FFFF: no key",
+    required=False,
+    default="FFFF",
+)
+@action.integer(
+    "pointer_type", title="Pointer type (0 or 1)", minimum=0, maximum=1, default=0, required=False
+)
+@_j1939_node_address
+@_under("J1939/memory_request")
+def j1939_memory_request(
+    codec: str,
+    command: str,
+    length: int,
+    pointer: str,
+    destination_address: int,
+    pointer_extension: int = 0,
+    key: str = "FFFF",
+    pointer_type: int = 0,
+) -> dict[str, Any]:
+    data = zj.dm14(
+        zj.DM14_COMMANDS[_J1939_MEMORY[command]],
+        length,
+        _hex(pointer, "pointer"),
+        pointer_extension,
+        _hex(key, "key"),
+        pointer_type,
+    )
+    return _get_codec(codec).j1939_send_raw(
+        f"{zj.PGN_DM14:X}", data.hex(), destination_address, 6, False
+    )
+
+
+@action(
+    "Memory Data",
+    "Send up to 7 bytes of a memory write to a node (DM16), after its DM15 allowed the "
+    "write. The node answers with DM15: completed or failed.",
+)
+@_codec_field
+@action.text("data", title="Data (hex bytes, 1-7)", placeholder="01 02 03 04")
+@_j1939_node_address
+@_under("J1939/memory_data")
+def j1939_memory_data(codec: str, data: str, destination_address: int) -> dict[str, Any]:
+    payload = zj.dm16(parse_data_hex(data))
+    return _get_codec(codec).j1939_send_raw(
+        f"{zj.PGN_DM16:X}", payload.hex(), destination_address, 6, False
     )
 
 
