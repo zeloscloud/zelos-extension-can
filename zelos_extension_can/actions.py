@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import zelos_sdk
+from zelos_can import j1939 as zj
 from zelos_can.converter import SUPPORTED_FORMATS
 from zelos_can.params import NMT_COMMANDS, SDO_DATA_TYPES
 from zelos_can.utils.file_utils import resolve_database_file
@@ -442,6 +443,151 @@ def j1939_request(
     codec: str, pgn: str, destination_address: int = 255, priority: int = 6
 ) -> dict[str, Any]:
     return _get_codec(codec).j1939_request(pgn, destination_address, priority)
+
+
+# Diagnostics (J1939-73), under the J1939 folder. Each sends from the claimed
+# address; the answer decodes like any other frame.
+
+_J1939_DIAGNOSTICS = {
+    "DM1 active faults": 1,
+    "DM2 previously active faults": 2,
+    "DM5 readiness": 5,
+    "DM6 pending emission faults": 6,
+    "DM12 active emission faults": 12,
+    "DM19 calibration information": 19,
+    "DM20 monitor ratios": 20,
+    "DM21 readiness, distance and time": 21,
+    "DM23 previously active emission faults": 23,
+    "DM24 supported SPNs": 24,
+    "DM25 freeze frames": 25,
+    "DM26 readiness this trip": 26,
+    "DM27 all pending faults": 27,
+    "DM28 permanent faults": 28,
+    "DM29 fault counts": 29,
+    "DM31 fault lamps": 31,
+    "DM33 AECD active time": 33,
+    "DM34 NTE status": 34,
+    "DM56 model year and engine family": 56,
+}
+_J1939_CLEARS = {"Active faults (DM11)": 11, "Previously active faults (DM3)": 3}
+
+
+def _under(path: str):
+    """Name the action `path`, folders included: `@action` registers a function
+    by its `__name__`. Innermost, so every decorator above sees the name."""
+
+    def rename(fn):
+        fn.__name__ = path
+        return fn
+
+    return rename
+
+
+def _j1939_node_address(fn):
+    return action.integer(
+        "destination_address", title="Destination address", minimum=0, maximum=253
+    )(fn)
+
+
+def _j1939_spn_fmi(fn):
+    for decorate in (
+        action.integer("fmi", title="FMI (0-31)", minimum=0, maximum=31),
+        action.integer("spn", title="SPN", minimum=0, maximum=0x7FFFF),
+    ):
+        fn = decorate(fn)
+    return fn
+
+
+@action(
+    "Request Diagnostic",
+    "Ask a node, or everyone, for a J1939-73 diagnostic message. The answer lands in "
+    "its own table (DM1_<sa>, DM1_DTC_<sa>, ...) with the J1939 mode on.",
+)
+@_codec_field
+@action.select("message", title="Diagnostic message", choices=list(_J1939_DIAGNOSTICS))
+@action.integer(
+    "destination_address",
+    title="Destination address",
+    description="255 is everyone",
+    minimum=0,
+    maximum=255,
+    required=False,
+    default=255,
+)
+@_under("J1939/request_diagnostic")
+def j1939_request_diagnostic(
+    codec: str, message: str, destination_address: int = 255
+) -> dict[str, Any]:
+    pgn = zj.DM_PGN[_J1939_DIAGNOSTICS[message]]
+    return _get_codec(codec).j1939_request(f"{pgn:X}", destination_address, 6)
+
+
+@action(
+    "Clear Faults",
+    "Ask a node, or everyone, to clear its active (DM11) or previously active (DM3) "
+    "faults. A node asked by address answers with an Acknowledgment. A fault whose "
+    "cause remains sets again.",
+)
+@_codec_field
+@action.select("faults", title="Faults", choices=list(_J1939_CLEARS))
+@action.integer(
+    "destination_address",
+    title="Destination address",
+    description="One node, or 255 for every node on the bus",
+    minimum=0,
+    maximum=255,
+)
+@_under("J1939/clear_faults")
+def j1939_clear_faults(codec: str, faults: str, destination_address: int) -> dict[str, Any]:
+    pgn = zj.DM_PGN[_J1939_CLEARS[faults]]
+    return _get_codec(codec).j1939_request(f"{pgn:X}", destination_address, 6)
+
+
+@action(
+    "Clear Fault",
+    "Ask one node to clear a single fault by SPN and FMI (DM22). The node answers with "
+    "DM22: acknowledged, or refused with a reason.",
+)
+@_codec_field
+@_j1939_spn_fmi
+@action.boolean(
+    "active",
+    title="Active fault",
+    description="Off: a previously active fault",
+    required=False,
+    default=True,
+    widget="toggle",
+)
+@_j1939_node_address
+@_under("J1939/clear_fault")
+def j1939_clear_fault(
+    codec: str, spn: int, fmi: int, destination_address: int, active: bool = True
+) -> dict[str, Any]:
+    data = zj.dm22(spn, fmi, active)
+    return _get_codec(codec).j1939_send_raw(
+        f"{zj.PGN_DM22:X}", data.hex(), destination_address, 6, False
+    )
+
+
+@action(
+    "Command Test",
+    "Ask one node to run a test on an SPN (DM7). The node answers with DM30, its scaled "
+    "test results.",
+)
+@_codec_field
+@action.integer(
+    "test_id", title="Test identifier", minimum=0, maximum=255, required=False, default=247
+)
+@_j1939_spn_fmi
+@_j1939_node_address
+@_under("J1939/command_test")
+def j1939_command_test(
+    codec: str, spn: int, fmi: int, destination_address: int, test_id: int = 247
+) -> dict[str, Any]:
+    data = zj.dm7(test_id, spn, fmi)
+    return _get_codec(codec).j1939_send_raw(
+        f"{zj.PGN_DM7:X}", data.hex(), destination_address, 6, False
+    )
 
 
 # ─── CANopen ────────────────────────────────────────────────────────────────
@@ -1276,7 +1422,8 @@ def convert(
 
 def register_actions(registry: ActionsRegistry) -> list[str]:
     """Register every @action-decorated free function in this module by its
-    bare function name. The leading `CAN/` segment that consumers see comes
+    `__name__`: the function's own, or the path `_under` gave it. The leading
+    `CAN/` segment that consumers see comes
     from `zelos_sdk.init(name=ACTION_PREFIX, actions=True)` — the service-name
     prefix is concatenated at serve time, so registering the raw `__name__`
     here produces the desired `CAN/<func_name>` wire paths.
@@ -1288,7 +1435,7 @@ def register_actions(registry: ActionsRegistry) -> list[str]:
         if name.startswith("_"):
             continue
         if inspect.isfunction(obj) and hasattr(obj, "_action"):
-            registry.register(obj, name=name)
-            registered.append(name)
+            registry.register(obj, name=obj.__name__)
+            registered.append(obj.__name__)
     logger.info("Registered %d CAN actions", len(registered))
     return registered
