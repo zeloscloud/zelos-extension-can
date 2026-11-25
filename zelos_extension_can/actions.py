@@ -451,6 +451,7 @@ def j1939_request(
 _J1939_DIAGNOSTICS = {
     "DM1 active faults": 1,
     "DM2 previously active faults": 2,
+    "DM4 freeze frames": 4,
     "DM5 readiness": 5,
     "DM6 pending emission faults": 6,
     "DM12 active emission faults": 12,
