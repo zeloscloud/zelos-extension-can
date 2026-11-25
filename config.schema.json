@@ -18,13 +18,14 @@
           "interface": {
             "type": "string",
             "title": "Interface",
-            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN. Windows: Kvaser, Vector. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. gs_usb is a candleLight or CANable (gs_usb firmware) adapter opened over libusb, for macOS and Windows; on Linux the kernel driver makes it a SocketCAN interface, so use SocketCAN there. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
+            "description": "CAN interface. SocketCAN is zelos-can's Rust SocketCAN bus (Linux only). macOS/Windows: PCAN. Windows: Kvaser, Vector, and RP1210, the diagnostic adapters of heavy-duty vehicles, through their vendor's driver. slcan is a serial-line (LAWICEL) adapter such as a CANable or CANUSB on any OS. gs_usb is a candleLight or CANable (gs_usb firmware) adapter opened over libusb, for macOS and Windows; on Linux the kernel driver makes it a SocketCAN interface, so use SocketCAN there. SocketCAN over SSH works from any OS, bridging a remote SocketCAN interface over SSH using the edge's own can-utils (candump/cansend); nothing is deployed on the edge and TX is always echoed back by the remote kernel loopback.",
             "enum": [
               "SocketCAN",
               "SocketCAN over SSH",
               "PCAN",
               "Kvaser",
               "Vector",
+              "RP1210",
               "slcan (serial)",
               "gs_usb (USB)",
               "Other (python-can)",
@@ -465,6 +466,51 @@
                     ]
                   }
                 }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "RP1210"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Adapter",
+                    "description": "An RP1210 adapter, as its Windows driver names it: the driver's name, a colon, and its device number. Choose from the drivers installed on the machine running the agent, or type one. Needs the adapter vendor's 64-bit RP1210 driver.",
+                    "ui:widget": "action-choices",
+                    "ui:options": {
+                      "action": "CAN/list_rp1210_adapters"
+                    }
+                  },
+                  "device_channel": {
+                    "type": "integer",
+                    "title": "Device Channel",
+                    "description": "Which CAN channel of a multi-channel adapter, counted from 1. Leave empty for the first.",
+                    "minimum": 1
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "CAN bus bitrate. 250000 is the J1939 default, which every RP1210 driver opens at.",
+                    "enum": [
+                      125000,
+                      250000,
+                      500000,
+                      1000000
+                    ],
+                    "default": 250000
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional bus options as JSON object. {\"protocol\": \"J1939\"} or {\"protocol\": \"CAN\"} overrides the protocol the driver is opened on."
+                  }
+                },
+                "required": [
+                  "channel",
+                  "bitrate"
+                ]
               },
               {
                 "properties": {
