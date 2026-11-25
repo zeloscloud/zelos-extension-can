@@ -437,6 +437,26 @@ class TestConfigFormHooks:
             ],
         }
 
+    def test_list_rp1210_adapters_offers_every_installed_drivers_devices(self, monkeypatch):
+        from zelos_can import rp1210
+
+        usb, wireless = (
+            rp1210.Device(1, "Adapter, USB", ("J1939",)),
+            rp1210.Device(2, "Adapter, Wireless", ()),
+        )
+        driver = rp1210.Driver("VEND32", "Vendor Inc", 1000.0, (usb, wireless))
+        monkeypatch.setattr(rp1210, "installed_drivers", lambda: [driver])
+        assert actions.list_rp1210_adapters() == {
+            "status": "success",
+            "choices": [
+                {"value": "VEND32:1", "detail": "Vendor Inc: Adapter, USB"},
+                {"value": "VEND32:2", "detail": "Vendor Inc: Adapter, Wireless"},
+            ],
+        }
+        monkeypatch.undo()
+        if sys.platform != "win32":
+            assert actions.list_rp1210_adapters() == {"status": "success", "choices": []}
+
     def test_list_interfaces_is_empty_where_there_is_no_socketcan(self, monkeypatch, tmp_path):
         """macOS/Windows: an empty list, not an error — nothing to enumerate."""
         monkeypatch.setattr(actions.sys, "platform", "darwin")
@@ -631,7 +651,11 @@ class TestConfigFormHooks:
             ch["ui:options"]["action"] for ch in channels if "action" in ch.get("ui:options", {})
         }
 
-        assert named == {f"{ACTION_PREFIX}/auto_config", f"{ACTION_PREFIX}/list_interfaces"}
+        assert named == {
+            f"{ACTION_PREFIX}/auto_config",
+            f"{ACTION_PREFIX}/list_interfaces",
+            f"{ACTION_PREFIX}/list_rp1210_adapters",
+        }
         assert {n.split("/", 1)[1] for n in named} <= set(get_standalone_actions())
 
     # ── gs_usb discovery and the form hint ──
@@ -767,6 +791,7 @@ def test_every_action_declares_its_flags():
         "stop_periodic": (False, False),
         "export_trace_to_log": (False, False),
         "list_interfaces": (True, True),
+        "list_rp1210_adapters": (True, True),
         "auto_config": (True, True),
         "convert": (False, False),
     }

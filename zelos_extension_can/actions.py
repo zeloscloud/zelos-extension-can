@@ -1106,6 +1106,34 @@ def list_interfaces() -> dict[str, Any]:
     }
 
 
+@action(
+    "List RP1210 Adapters",
+    "The devices of every RP1210 driver installed on the machine running the "
+    "agent, as choices for an RP1210 bus's Adapter field, which also accepts one "
+    "typed by hand. A driver lists its devices whether or not one is plugged in. "
+    "Empty off Windows.",
+    # Reading the drivers' INI files loads no driver and opens no adapter.
+    standalone=True,
+    read_only=True,
+    hidden=True,
+)
+def list_rp1210_adapters() -> dict[str, Any]:
+    """The app's `action-choices` contract: `<driver>:<device>`, beside what the driver calls it."""
+    from zelos_can import rp1210  # deferred: only this picker needs it
+
+    return {
+        "status": "success",
+        "choices": [
+            {
+                "value": f"{driver.name}:{device.id}",
+                "detail": f"{driver.vendor}: {device.description}",
+            }
+            for driver in rp1210.installed_drivers()
+            for device in driver.devices
+        ],
+    }
+
+
 def _form_key(bus: Any) -> tuple[str, str, int | None] | None:
     """A form bus's `_device_key` by interface label, or None when it names no device to match."""
     if not isinstance(bus, dict) or not isinstance(bus.get("interface"), str):
@@ -1213,7 +1241,7 @@ def auto_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         message = (
             "No CAN adapter found on this machine, so a demo bus was added. Plug in "
             "the adapter and install its driver, or set its interface by hand: "
-            "PCAN, Kvaser, Vector or slcan, or SocketCAN over SSH for a remote device."
+            "PCAN, Kvaser, Vector, RP1210 or slcan, or SocketCAN over SSH for a remote device."
         )
         return {
             "status": "success",

@@ -16,6 +16,7 @@ INTERFACES = {
     "PCAN": "pcan",
     "Kvaser": "kvaser",
     "Vector": "vector",
+    "RP1210": "zelos-rp1210",
     "slcan (serial)": "slcan",
     "gs_usb (USB)": "gs_usb",
     "Other (python-can)": "other",

@@ -4,7 +4,7 @@
 
 - 📊 **Visualizing CAN frames** - Real-time decoding of CAN messages
 - 📤 **Sending CAN frames** - Send CAN messages directly from the Zelos App
-- ⚙️ **Supports any CAN HW/SW stack** - Support for SocketCAN, PCAN, Kvaser, Vector, and virtual interfaces
+- ⚙️ **Supports any CAN HW/SW stack** - Support for SocketCAN, PCAN, Kvaser, Vector, RP1210, and virtual interfaces
 - 📄 **DBC and AUTOSAR ARXML** - Container, multiplexed and secured PDUs, E2E status, CanTp
 - 📡 **All CAN Protocols** - CANopen, J1939, CAN FD, CAN2.0 A/B
 - 📁 **Trace file conversion** - Convert CAN logs to Zelos format for offline analysis
@@ -55,6 +55,7 @@ Stop the extension before `zelos extensions reinstall`: the agent refuses to rei
 | [Install the PCAN driver](docs/howto/pcan-driver.md) | PEAK PCAN adapters on Windows (PCAN-Basic) and macOS (PCBUSB): install, check, Gatekeeper "Allow Anyway", uninstall |
 | [Install the Kvaser driver](docs/howto/kvaser-driver.md) | Kvaser adapters on Windows (CANlib): install, check, virtual channels |
 | [Install the Vector driver](docs/howto/vector-driver.md) | Vector adapters on Windows (XL Driver Library): install, check, channels by serial number, virtual channels |
+| [Use an RP1210 adapter](docs/howto/rp1210-driver.md) | Heavy-duty diagnostic adapters on Windows: the vendor's 64-bit driver, picking the adapter, errors and fixes |
 | [Bring up SocketCAN](docs/howto/socketcan.md) | Linux `can0`: bitrate, `restart-ms`, `txqueuelen`, CAN FD, persist across reboots, `vcan` |
 
 ## Bus Monitor panel
@@ -80,6 +81,7 @@ before the extension has ever started.
 |---|---|
 | **Auto-configure** (button above the form) | One bus per CAN adapter on that machine. On Linux, one SocketCAN bus per SocketCAN interface, hardware before `vcan`, a down interface included as it is. On macOS/Windows, one PCAN, Kvaser or Vector bus per channel whose vendor driver finds it; a Vector bus is set by its device's Serial Number and the channel on that device, and named after that channel (`VN1640A_Channel_1`). On any OS, one slcan bus per CANable or CANUSB serial port. With the `gs_usb` extra, one gs_usb bus per candleLight or CANable gs_usb adapter, by Device Index; on Linux only those the kernel `gs_usb` driver does not hold (it lists those as SocketCAN). A found adapter the form already has keeps its bus as the form has it, interface included; form buses not found are dropped. Adapter buses start at 500 kbit/s, so set Bitrate to match your bus. With no adapter, one Demo bus. Review it, save, then start. Advanced settings are left as they are. |
 | **Choose** (beside a bus's Channel) | Lists that machine's CAN interfaces, each name beside its detail (`can0` / `up, gs_usb`, `vcan0` / `virtual`), for a SocketCAN bus. You can still type a name. |
+| **Choose** (beside a bus's Adapter) | Lists the devices of every RP1210 driver installed on that machine, as `driver:device` beside the driver's description, for an RP1210 bus. |
 
 ### Required Settings
 - **Interface**: the CAN adapter. The config stores the label; the extension opens its python-can interface.
@@ -89,6 +91,7 @@ before the extension has ever started.
   | SocketCAN | `zelos-socketcan` | Local SocketCAN on zelos-can's Rust bus, Linux. The recommended local option |
   | SocketCAN over SSH | `zelos-ssh-socketcan` | A remote device's SocketCAN over SSH, any OS; see [Remote CAN over SSH](#remote-can-over-ssh) |
   | PCAN, Kvaser, Vector | `pcan`, `kvaser`, `vector` | Vendor adapters |
+  | RP1210 | `zelos-rp1210` | The diagnostic adapters of heavy-duty vehicles, through their vendor's RP1210 driver; Windows, classic CAN; see [Use an RP1210 adapter](docs/howto/rp1210-driver.md) |
   | slcan (serial) | `slcan` | CANable, CANUSB and other LAWICEL serial adapters |
   | gs_usb (USB) | `gs_usb` | candleLight and CANable (gs_usb firmware) over libusb; classic CAN; needs the `gs_usb` extra |
   | Other (python-can) | from Advanced Configuration (JSON) | Any python-can interface. `{"interface": "zelos-virtual", "channel": ...}` is zelos-can's in-memory bus; it decodes the frames it sends only with **Receive Own Messages** |
