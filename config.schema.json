@@ -477,7 +477,7 @@
                   "channel": {
                     "type": "string",
                     "title": "Adapter",
-                    "description": "An RP1210 adapter, as its Windows driver names it: the driver's name, a colon, and its device number. Choose from the drivers installed on the machine running the agent, or type one. Needs the adapter vendor's 64-bit RP1210 driver.",
+                    "description": "An RP1210 adapter, as its Windows driver names it: the driver's name, a colon, and its device number. Choose from the drivers installed on the machine running the agent, or type one.",
                     "ui:widget": "action-choices",
                     "ui:options": {
                       "action": "CAN/list_rp1210_adapters"
@@ -500,6 +500,12 @@
                       1000000
                     ],
                     "default": 250000
+                  },
+                  "helper_python": {
+                    "type": "string",
+                    "title": "32-bit Python",
+                    "description": "Path to a 32-bit python.exe, for an adapter whose vendor supplies a 32-bit driver only. The driver then runs in a helper process under it. Leave empty for a 64-bit driver.",
+                    "ui:placeholder": "C:\\Python312-32\\python.exe"
                   },
                   "config_json": {
                     "type": "string",
