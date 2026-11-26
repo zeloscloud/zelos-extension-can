@@ -260,6 +260,17 @@ _J1939_SENT = (
 )
 
 
+def _under(path: str):
+    """Name the action `path`, folders included: `@action` registers a function
+    by its `__name__`. Innermost, so every decorator above sees the name."""
+
+    def rename(fn):
+        fn.__name__ = path
+        return fn
+
+    return rename
+
+
 def _j1939_addressed(fn):
     """The addressing every J1939 send takes; the source is the claimed address."""
     for decorate in (
@@ -302,6 +313,7 @@ def _j1939_addressed(fn):
 @_codec_field
 @action.text("name", title="NAME (hex, 64-bit)", placeholder="0x8000000000001000")
 @action.integer("address", title="Address (0-253)", minimum=0, maximum=253)
+@_under("J1939/claim")
 def j1939_claim(codec: str, name: str, address: int) -> dict[str, Any]:
     return _get_codec(codec).j1939_claim(name, address)
 
@@ -316,6 +328,7 @@ def j1939_claim(codec: str, name: str, address: int) -> dict[str, Any]:
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
 @_j1939_addressed
 @action.text("mux", title="Multiplexer (optional)", required=False, default="")
+@_under("J1939/send")
 def j1939_send(
     codec: str,
     message: str,
@@ -341,6 +354,7 @@ def j1939_send(
 @action.text("signals_json", title="Signals (JSON object)", placeholder='{"EngineSpeed": 1500}')
 @_j1939_addressed
 @action.text("mux", title="Multiplexer (optional)", required=False, default="")
+@_under("J1939/encode_preview")
 def j1939_encode_preview(
     codec: str,
     message: str,
@@ -370,6 +384,7 @@ def j1939_encode_preview(
 )
 @_j1939_addressed
 @action.text("mux", title="Multiplexer (optional)", required=False, default="")
+@_under("J1939/send_periodic")
 def j1939_send_periodic(
     codec: str,
     message: str,
@@ -411,6 +426,7 @@ def j1939_send_periodic(
     default=False,
     widget="toggle",
 )
+@_under("J1939/send_raw")
 def j1939_send_raw(
     codec: str,
     pgn: str,
@@ -439,6 +455,7 @@ def j1939_send_raw(
     default=255,
 )
 @action.integer("priority", title="Priority (0-7)", minimum=0, maximum=7, required=False, default=6)
+@_under("J1939/request")
 def j1939_request(
     codec: str, pgn: str, destination_address: int = 255, priority: int = 6
 ) -> dict[str, Any]:
@@ -471,17 +488,6 @@ _J1939_DIAGNOSTICS = {
     "DM56 model year and engine family": 56,
 }
 _J1939_CLEARS = {"Active faults (DM11)": 11, "Previously active faults (DM3)": 3}
-
-
-def _under(path: str):
-    """Name the action `path`, folders included: `@action` registers a function
-    by its `__name__`. Innermost, so every decorator above sees the name."""
-
-    def rename(fn):
-        fn.__name__ = path
-        return fn
-
-    return rename
 
 
 def _hex(text: str, what: str) -> int:
@@ -736,6 +742,7 @@ def _canopen_sdo(fn):
     hidden=True,
 )
 @_codec_field
+@_under("CANopen/nodes")
 def canopen_nodes(codec: str) -> dict[str, Any]:
     return _get_codec(codec).canopen_nodes_status()
 
@@ -750,6 +757,7 @@ def canopen_nodes(codec: str) -> dict[str, Any]:
 @_codec_field
 @action.integer("node_id", title="Node ID (1-127)", minimum=1, maximum=127)
 @action.text("index", title="Index (hex, optional)", placeholder="1018", required=False, default="")
+@_under("CANopen/describe")
 def canopen_describe(codec: str, node_id: int, index: str = "") -> dict[str, Any]:
     return _get_codec(codec).canopen_describe(node_id, index)
 
@@ -762,6 +770,7 @@ def canopen_describe(codec: str, node_id: int, index: str = "") -> dict[str, Any
 )
 @_codec_field
 @_canopen_sdo
+@_under("CANopen/sdo_read")
 def canopen_sdo_read(
     codec: str, node_id: int, index: str, subindex: int = 0, timeout: float = 1.0
 ) -> dict[str, Any]:
@@ -785,6 +794,7 @@ def canopen_sdo_read(
     choices=list(SDO_DATA_TYPES),
     required=False,
 )
+@_under("CANopen/sdo_write")
 def canopen_sdo_write(
     codec: str,
     node_id: int,
@@ -807,6 +817,7 @@ def canopen_sdo_write(
 @_codec_field
 @action.select("command", title="Command", choices=list(NMT_COMMANDS))
 @action.integer("node_id", title="Node ID (1-127, or 0 for all nodes)", minimum=0, maximum=127)
+@_under("CANopen/nmt")
 def canopen_nmt(codec: str, command: str, node_id: int) -> dict[str, Any]:
     return _get_codec(codec).canopen_nmt(command, node_id)
 

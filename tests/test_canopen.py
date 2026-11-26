@@ -52,6 +52,15 @@ def test_actions_hand_off_to_the_bus(monkeypatch):
     codec.canopen_nmt.assert_called_once_with("reset_node", 5)
 
 
+def test_canopen_actions_sit_in_a_folder():
+    names = {
+        getattr(actions, n).__name__
+        for n in ("canopen_nodes", "canopen_describe", "canopen_sdo_read")
+    }
+    assert names == {"CANopen/nodes", "CANopen/describe", "CANopen/sdo_read"}
+    assert actions.j1939_request.__name__ == "J1939/request"
+
+
 def test_nmt_target_and_sdo_type_have_no_default():
     fields = {
         name: {f.name: f for f in getattr(actions, name)._action.fields}
