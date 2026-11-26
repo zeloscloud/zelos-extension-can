@@ -19,7 +19,6 @@ from unittest.mock import patch
 
 import pytest
 import zelos_sdk
-from zelos_can import j1939 as zj
 from zelos_can.codec import CanCodec
 from zelos_sdk.extensions.actions import get_standalone_actions
 
@@ -773,9 +772,6 @@ def test_every_action_declares_its_flags():
     }
 
 
-@pytest.mark.skipif(
-    not hasattr(zj, "dm14"), reason="needs the zelos-can release with the J1939-73 command builders"
-)
 def test_j1939_diagnostics_sit_in_a_folder_and_send_the_dm():
     """`CAN/J1939/<action>`: a Request for the DM's PGN, or the command DM itself."""
     sent = []
