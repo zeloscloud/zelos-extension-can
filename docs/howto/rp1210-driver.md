@@ -61,4 +61,4 @@ Every refusal is logged with the driver's own text and error code.
 | `The RP1210 driver ... is not available` | Press **Choose** to see the drivers that are installed |
 | The driver refuses the protocol or the bitrate | Set **Bitrate** to 250000 |
 | The device is in use | Close the other program holding the adapter, or match its bitrate |
-| The device is invalid, or hardware is not responding | Plug in the adapter and pick the device that matches how it is connected |
+| The device is invalid, the port did not open, or hardware is not responding | Plug in the adapter and pick the device that matches how it is connected |
