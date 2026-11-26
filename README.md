@@ -137,7 +137,7 @@ and `trace` have `--j1939` for the same.
 | **One message, several definitions** | A sender decodes under its own definition, whatever the destination. A sender the DBC does not name decodes under the first definition when they all share one layout, and is left undecoded when layouts differ. |
 | **Messages over 8 bytes** | Transport protocol transfers (BAM, RTS/CTS) are rebuilt and decoded, stamped with their last packet. |
 | **Not available, error** | A raw value J1939 reserves for these (above `0xFA` at 8 bits, `0xFAFF` at 16, and so on) decodes to empty. It stays a value when the DBC's range for the signal takes it in, or a `VAL_` labels it. |
-| **Address claim** | Off until **Advanced > J1939 Node** names a DBC node, or J1939 NAME and Address are set (see [J1939 node identity](#j1939-node-identity)), or the `J1939 Claim` action runs. The node defends its address against a higher NAME and yields to a lower one; NAME bit 63 (arbitrary address capable) lets it move to a free address in 128..247. Claimed again when the bus reopens. `get_tx_state` shows `j1939.address` (empty while claiming, or lost). |
+| **Address claim** | Off until **Advanced > J1939 Node** names a DBC node, or J1939 NAME and Address are set (see [J1939 node identity](#j1939-node-identity)), or the `J1939/Claim` action runs. The node defends its address against a higher NAME and yields to a lower one; NAME bit 63 (arbitrary address capable) lets it move to a free address in 128..247. Claimed again when the bus reopens. `get_tx_state` shows `j1939.address` (empty while claiming, or lost). |
 | **Transmit** | From the claimed address only. Up to 8 bytes is one frame; longer goes by the transport protocol, BAM to everyone or RTS/CTS to one node. A send waits up to 5 s and returns `completed` / `error`. |
 | **J1939-22 (CAN FD)** | `fd` on a send, with CAN-FD Mode on: a Multi-PG frame up to 60 bytes, FD.TP beyond, every frame with BRS. The claim stays on classic frames. |
 | **Periodic** | A period whose previous transfer is still running, or whose claim is still settling, is skipped and counted (`skipped` on the periodic). A send that fails, busy or aborted included, counts in `failed` / `last_error` on the periodic and in `tx_errors`. |
@@ -159,7 +159,7 @@ The node must be in each bus's DBCs. Without a DBC node, set **J1939 NAME** (64-
 hex) and **J1939 Address** (0..253) instead: every bus claims that identity, whatever
 its DBCs. Set one form, not both. A bad identity (unknown node, no address, a field
 out of range) fails the start with the reason. Empty (the default): no claim until the
-`J1939 Claim` action, and J1939 sends refuse. The J1939 address registry reserves source
+`J1939/Claim` action, and J1939 sends refuse. The J1939 address registry reserves source
 address 249 for Function 129 (off-board diagnostic-service tool) in Industry Group 0,
 instances 0.
 
@@ -176,8 +176,8 @@ toggle, every node-id without files.
 |---|---|
 | **Decoded** | NMT, heartbeat and node guarding, EMCY, SYNC, TIME, LSS and SDO transfers, by the predefined connection set. With an EDS or DCF, the node's PDOs too, under its object names. |
 | **Node** | **Node ID** 1-127, empty for a DCF that sets `NodeID`. **EDS or DCF file** optional. **Name** names the node's events (default `node<id hex>`); same characters as a bus name. A DBC message on a configured node's COB-ID or PDO is an error, except on its SYNC or TIME COB-ID: there the DBC wins, with a warning. |
-| **Status** | `CANopen Nodes`: per node, `configured`, NMT `state`, `last_heartbeat_ns`, `heartbeat_period_ms`, `heartbeat_lost`, `emcy_count`, `last_emcy_code`, `sdo_count`. `Get TX State` carries the `canopen_*` counters: frames, SDO completed / aborted / resync / CRC error, short frames, heartbeat late / lost, unknown nodes, PDO short / remapped / reverted / unlearned, client SDO / timeout / stale. |
-| **Transmit** | `CANopen SDO Read` / `SDO Write` / `NMT` [actions](#actions), on a running bus with CANopen decode on (nodes listed or the Advanced toggle): the SDO client matches answers through the decoder. The extension is the SDO client and NMT master, never a node. SDO Write and NMT change device state with no confirmation, like `Send Raw`. |
+| **Status** | `CANopen/Nodes`: per node, `configured`, NMT `state`, `last_heartbeat_ns`, `heartbeat_period_ms`, `heartbeat_lost`, `emcy_count`, `last_emcy_code`, `sdo_count`. `Get TX State` carries the `canopen_*` counters: frames, SDO completed / aborted / resync / CRC error, short frames, heartbeat late / lost, unknown nodes, PDO short / remapped / reverted / unlearned, client SDO / timeout / stale. |
+| **Transmit** | `CANopen/SDO Read` / `SDO Write` / `NMT` [actions](#actions), on a running bus with CANopen decode on (nodes listed or the Advanced toggle): the SDO client matches answers through the decoder. The extension is the SDO client and NMT master, never a node. SDO Write and NMT change device state with no confirmation, like `Send Raw`. |
 | **Demo** | **Simulated CANopen node** on a Demo bus adds node `0x20`, a power distribution unit described by the bundled `pdu.eds`. |
 
 ### AUTOSAR ARXML
@@ -294,13 +294,13 @@ The extension provides several actions accessible from the Zelos App. The per-bu
 - **List Messages** / **Describe Message**: Browse the merged DBC message set — one entry per definition, each with a `key`, the name of its trace event (`DUT_Status`, or `0064_DUT_Status` with **Message ID in Event Names**). The transmit actions take a key, or a name only one definition carries.
 - **Send Raw** / **Send Message** / **Encode Preview**: Transmit or preview one frame
 - **Start Periodic Raw** / **Start Periodic Message** / **Stop Periodic**: Armed periodic transmit
-- **J1939 Claim**: Claim an address for a NAME on a bus; the J1939 sends go from it
-- **J1939 Send** / **J1939 Encode Preview** / **J1939 Start Periodic**: A DBC-encoded parameter group; destination (PDU1) and priority default to the DBC's, `fd` sends J1939-22
-- **J1939 Send Raw**: A PGN and its bytes, any length
-- **J1939 Request**: Ask a node, or everyone, for a PGN (Request, `0xEA00`); the answer decodes like any other frame
-- **CANopen Nodes** / **CANopen Describe**: A bus's CANopen nodes and their state; a configured node's object dictionary entry, or its PDOs, from its EDS/DCF
-- **CANopen SDO Read** / **CANopen SDO Write**: Read or write one object on a node (index in hex, subindex). A write is typed by the node's EDS/DCF entry (a chosen data type must agree); without one the data type is required, `bytes` for raw hex. An abort or no answer is an error
-- **CANopen NMT**: start, stop, pre_operational, reset_node or reset_communication, to one node or all (node 0, entered explicitly)
+- **J1939/Claim**: Claim an address for a NAME on a bus; the J1939 sends go from it
+- **J1939/Send** / **Encode Preview** / **Start Periodic**: A DBC-encoded parameter group; destination (PDU1) and priority default to the DBC's, `fd` sends J1939-22
+- **J1939/Send Raw**: A PGN and its bytes, any length
+- **J1939/Request**: Ask a node, or everyone, for a PGN (Request, `0xEA00`); the answer decodes like any other frame
+- **CANopen/Nodes** / **Describe**: A bus's CANopen nodes and their state; a configured node's object dictionary entry, or its PDOs, from its EDS/DCF
+- **CANopen/SDO Read** / **SDO Write**: Read or write one object on a node (index in hex, subindex). A write is typed by the node's EDS/DCF entry (a chosen data type must agree); without one the data type is required, `bytes` for raw hex. An abort or no answer is an error
+- **CANopen/NMT**: start, stop, pre_operational, reset_node or reset_communication, to one node or all (node 0, entered explicitly)
 - **Convert CAN Log**: Convert a CAN log to a Zelos trace (`.trz`). Databases in precedence order; empty uses the first bus's. Runs with the extension stopped too
 - **Export Trace to Log**: Export raw frames from a `.trz` back to candump format
 

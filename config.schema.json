@@ -696,7 +696,7 @@
         "j1939_node": {
           "type": "string",
           "title": "J1939 Node",
-          "description": "The DBC node (BU_) every bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each bus's DBCs. Or set J1939 NAME and J1939 Address instead. Empty: no claim until the J1939 Claim action, and J1939 sends refuse.",
+          "description": "The DBC node (BU_) every bus acts as on J1939: it claims the node's address (NmStationAddress) for its NAME (the NmJ1939* node attributes) when the bus starts, and the J1939 send actions send from it. The node must be in each bus's DBCs. Or set J1939 NAME and J1939 Address instead. Empty: no claim until the J1939/Claim action, and J1939 sends refuse.",
           "default": "",
           "ui:placeholder": "Tester"
         },
