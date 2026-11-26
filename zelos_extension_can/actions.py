@@ -304,7 +304,7 @@ def _j1939_addressed(fn):
 
 
 @action(
-    "J1939 Claim",
+    "Claim",
     "Start the bus's J1939 node: claim `address` for the 64-bit NAME (J1939-81). "
     "The address is usable 250 ms later unless a lower NAME contests it; NAME bit 63 "
     "(arbitrary address capable) lets the node move to a free address in 128..247 when it "
@@ -319,7 +319,7 @@ def j1939_claim(codec: str, name: str, address: int) -> dict[str, Any]:
 
 
 @action(
-    "J1939 Send",
+    "Send",
     "Send a DBC-encoded J1939 parameter group once from the claimed address. "
     "`message` is a key from list_messages, or a name only one definition carries. " + _J1939_SENT,
 )
@@ -344,7 +344,7 @@ def j1939_send(
 
 
 @action(
-    "J1939 Encode Preview",
+    "Encode Preview",
     "Encode a J1939 parameter group without sending it: its PGN, addressing and bytes.",
     read_only=True,
     hidden=True,
@@ -370,7 +370,7 @@ def j1939_encode_preview(
 
 
 @action(
-    "J1939 Start Periodic",
+    "Start Periodic",
     "Send a DBC-encoded J1939 parameter group periodically from the claimed address, "
     "the first now. A period whose previous transfer is still running is skipped and "
     "counted (`skipped` in the periodic). Returns {task_id, replaced}; stop it with "
@@ -401,7 +401,7 @@ def j1939_send_periodic(
 
 
 @action(
-    "J1939 Send Raw",
+    "Send Raw",
     "Send a parameter group's bytes once from the claimed address. " + _J1939_SENT,
 )
 @_codec_field
@@ -439,7 +439,7 @@ def j1939_send_raw(
 
 
 @action(
-    "J1939 Request",
+    "Request",
     "Ask a node, or everyone, to send a parameter group (Request, PGN 0xEA00) from the "
     "claimed address. The answer decodes like any other frame, transport protocol included.",
 )
@@ -735,7 +735,7 @@ def _canopen_sdo(fn):
 
 
 @action(
-    "CANopen Nodes",
+    "Nodes",
     "The CANopen nodes a bus has configured or seen: NMT state, heartbeat, EMCY and "
     "SDO counts. `warnings` are the decoder's.",
     read_only=True,
@@ -748,7 +748,7 @@ def canopen_nodes(codec: str) -> dict[str, Any]:
 
 
 @action(
-    "CANopen Describe",
+    "Describe",
     "A configured node's object dictionary entry at `index`, from its EDS/DCF; "
     "without an index, its PDOs and communication objects.",
     read_only=True,
@@ -763,7 +763,7 @@ def canopen_describe(codec: str, node_id: int, index: str = "") -> dict[str, Any
 
 
 @action(
-    "CANopen SDO Read",
+    "SDO Read",
     "Read one object from a node (SDO upload). Transmits on the bus. An abort, or no "
     "answer in time, is an error.",
     read_only=True,
@@ -778,7 +778,7 @@ def canopen_sdo_read(
 
 
 @action(
-    "CANopen SDO Write",
+    "SDO Write",
     "Write one object on a node (SDO download). Transmits on the bus and changes the "
     "device's state; no confirmation. The type is the node's dictionary entry when its "
     "EDS/DCF is configured (a chosen data type must agree), else the chosen data type: "
@@ -810,7 +810,7 @@ def canopen_sdo_write(
 
 
 @action(
-    "CANopen NMT",
+    "NMT",
     "Send an NMT command. Transmits on the bus and changes the state of the addressed "
     "node, or of every node on the bus with node 0; no confirmation.",
 )
