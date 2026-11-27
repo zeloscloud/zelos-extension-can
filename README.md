@@ -55,7 +55,7 @@ Stop the extension before `zelos extensions reinstall`: the agent refuses to rei
 | [Install the PCAN driver](docs/howto/pcan-driver.md) | PEAK PCAN adapters on Windows (PCAN-Basic) and macOS (PCBUSB): install, check, Gatekeeper "Allow Anyway", uninstall |
 | [Install the Kvaser driver](docs/howto/kvaser-driver.md) | Kvaser adapters on Windows (CANlib): install, check, virtual channels |
 | [Install the Vector driver](docs/howto/vector-driver.md) | Vector adapters on Windows (XL Driver Library): install, check, channels by serial number, virtual channels |
-| [Use an RP1210 adapter](docs/howto/rp1210-driver.md) | Heavy-duty diagnostic adapters on Windows: the vendor's 64-bit driver, picking the adapter, errors and fixes |
+| [Use an RP1210 adapter](docs/howto/rp1210-driver.md) | Heavy-duty diagnostic adapters on Windows: the vendor's driver, picking the adapter, a 32-bit driver, errors and fixes |
 | [Bring up SocketCAN](docs/howto/socketcan.md) | Linux `can0`: bitrate, `restart-ms`, `txqueuelen`, CAN FD, persist across reboots, `vcan` |
 
 ## Bus Monitor panel
